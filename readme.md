@@ -4,18 +4,18 @@ Thrust Disassembly
 Thrust
 By Jeremey C. Smith
 
-Source disassembly & documentation by Kieran HJ Connell, February 2016
-Initial disassembly created using BeebDis by Phill Harvey-Smith
-Verified to compile using BeebAsm by Rich Talbot-Watkins
-With thanks to jms2 for his original Thrust disassembly notes and
+* Source disassembly & documentation by Kieran HJ Connell, February 2016
+* Initial disassembly created using BeebDis by Phill Harvey-Smith
+* Verified to compile using BeebAsm by Rich Talbot-Watkins
+* With thanks to jms2 for his original Thrust disassembly notes and
 Matt Godbolt for his encouragement for me to get this released!
 
 Notes
 =
-Original $.THRUST3 executable had to first be decrypted
-Relocated from load address $1A00 to executation address $A60
-Relocation code modified slightly as no longer encrypted
-Source documented and annotated for first release
+* Original $.THRUST3 executable had to first be decrypted
+* Relocated from load address $1A00 to executation address $A60
+* Relocation code modified slightly as no longer encrypted
+* Source documented and annotated for first release
 
 Build
 =
