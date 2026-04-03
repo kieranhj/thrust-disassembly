@@ -749,7 +749,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: landscape_draw
-\ * Description: <> 
+\ * Description: Draws the landscape terrain walls to screen, clipped to viewport 
 \ ******************************************************************************
 
 .landscape_draw
@@ -906,7 +906,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: initialise_landscape
-\ * Description: <> 
+\ * Description: Initialises landscape wall state and processes terrain to current Y position 
 \ ******************************************************************************
         
 .initialise_landscape
@@ -1132,7 +1132,7 @@ ORG     NATIVE_ADDR
 \ * Functions: terrain_accumulate_xpos_fn, terrain_subtract_xpos_fn
 \ * Params: X = counter, Y = index into terrain data, A = accumulated x position
 \ * Returns: X = updated counter, A = accumulated x position
-\ * Description: <> 
+\ * Description: Accumulates/subtracts terrain X offset using counted run-length data 
 \ ******************************************************************************
         
 .terrain_accumulate_xpos_fn
@@ -1174,7 +1174,7 @@ ORG     NATIVE_ADDR
 \ * Function: draw_terrain
 \ * Params: Y = start column, X = width to draw in columns
 \ * Returns: none
-\ * Description: <> 
+\ * Description: Draws a horizontal terrain line across columns using EOR plotting 
 \ ******************************************************************************
 
 .draw_terrain
@@ -1314,7 +1314,7 @@ ORG     NATIVE_ADDR
 \ * Function: write_countdown_timer
 \ * Params: A = ASCII of number to plot
 \ * Returns: none
-\ * Description: <>
+\ * Description: Writes a countdown timer digit to two screen locations
 \ ******************************************************************************
 
 .write_countdown_timer
@@ -1336,7 +1336,7 @@ ORG     NATIVE_ADDR
 \ * Function: accumulate_score_A
 \ * Params: A = score value
 \ * Returns: A = accumulated score
-\ * Description: <>
+\ * Description: Adds score value in A to the running score accumulator
 \ ******************************************************************************
 
 .accumulate_score_A
@@ -1825,7 +1825,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: object_visibility_test
-\ * Description: <>
+\ * Description: Checks if object is within visible screen area and culls if off-screen
 \ ******************************************************************************
 
 .object_visibility_test
@@ -1893,7 +1893,7 @@ ORG     NATIVE_ADDR
 \ * Function: calculate_object_plot_addr
 \ * Params: current_object
 \ * Returns: none
-\ * Description: <>
+\ * Description: Calculates screen memory address for plotting an object sprite
 \ ******************************************************************************
 
 .calculate_object_plot_addr
@@ -1975,7 +1975,7 @@ ORG     NATIVE_ADDR
 \ * Function: plot_static_sprite
 \ * Params: L0070, L0071 contain screen address to plot sprite at
 \ * Returns: none
-\ * Description: <>
+\ * Description: Plots a static sprite to screen using XOR drawing with row wrapping
 \ ******************************************************************************
         
 .plot_static_sprite
@@ -2245,7 +2245,7 @@ ORG     NATIVE_ADDR
         
 \ ******************************************************************************
 \ * Function: char_write_ptr_next_column
-\ * Description: <>
+\ * Description: Advances the character write pointer to the next screen column (+8 bytes)
 \ ******************************************************************************
 
 .char_write_ptr_next_column
@@ -2263,7 +2263,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: char_clear_cursor_backspace
-\ * Description: <>
+\ * Description: Clears cursor pixels at current position and moves back one char
 \ ******************************************************************************
 
 .char_clear_cursor_backspace
@@ -2286,7 +2286,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: char_plot_cursor
-\ * Description: <>
+\ * Description: Draws a blinking text cursor at the current write position
 \ ******************************************************************************
 
 .char_plot_cursor
@@ -2314,7 +2314,7 @@ ORG     NATIVE_ADDR
 \ * Function: plot_char_A
 \ * Params: A = ASCII character to plot
 \ * Returns: none
-\ * Description: <>
+\ * Description: Dispatches ASCII char in A to appropriate plot routine by type
 \ ******************************************************************************
 
 .plot_char_A
@@ -2366,7 +2366,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: char_erase
-\ * Description: <>
+\ * Description: Erases a character cell by zeroing two columns of 5 pixel rows
 \ ******************************************************************************
 
 .char_erase
@@ -2391,7 +2391,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: plot_char_delete
-\ * Description: <>
+\ * Description: Handles delete key: backspace, erase char, backspace, show cursor
 \ ******************************************************************************
 
 .plot_char_delete
@@ -2406,7 +2406,7 @@ ORG     NATIVE_ADDR
 \ * Function: plot_ascii_lower_case_letter
 \ * Params: A = ASCII character to plot (A-Z)
 \ * Returns: none
-\ * Description: <>
+\ * Description: Converts ASCII lowercase letter (a-z) to font index and plots it
 \ ******************************************************************************
 
 .plot_ascii_lower_case_letter
@@ -2420,7 +2420,7 @@ ORG     NATIVE_ADDR
 \ * Function: plot_ascii_number
 \ * Params: A = ASCII character to plot (0-9)
 \ * Returns: none
-\ * Description: <>
+\ * Description: Converts ASCII digit (0-9) to font index and plots it
 \ ******************************************************************************
 
 .plot_ascii_number
@@ -2434,7 +2434,7 @@ ORG     NATIVE_ADDR
 \ * Function: plot_font_A
 \ * Params: A = font character to plot
 \ * Returns: none
-\ * Description: <>
+\ * Description: Plots a font character from 5-line font data as two nibble columns
 \ ******************************************************************************
 
 .plot_font_A
@@ -2492,7 +2492,7 @@ ORG     NATIVE_ADDR
 \ * Functions: plot_font_top_nibble, plot_font_bottom_nibble
 \ * Params: A = font character to plot
 \ * Returns: none
-\ * Description: <>
+\ * Description: Splits font byte into top/bottom nibbles for screen pixel output
 \ ******************************************************************************
 
 .plot_font_top_nibble
@@ -2540,7 +2540,7 @@ ORG     NATIVE_ADDR
 \ * Function: attach_pod_calculate_UNKNOWN
 \ * Params: A = <unknown input>
 \ * Returns: none
-\ * Description: <>
+\ * Description: Multiplies two signed 8-bit values into a 16-bit result
 \ ******************************************************************************
 
 .attach_pod_calculate_UNKNOWN
@@ -2595,7 +2595,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: update_window_and_terrain_tables
-\ * Description: <>
+\ * Description: Updates window X/Y position and rebuilds terrain tables after scroll
 \ ******************************************************************************
 
 .update_window_and_terrain_tables
@@ -2886,7 +2886,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: tick_door_logic
-\ * Description: <>
+\ * Description: Decrements door switch counter and dispatches door logic by level
 \ ******************************************************************************
 
 .tick_door_logic
@@ -2922,7 +2922,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: level_3_door_logic
-\ * Description: <>
+\ * Description: Calculates door position and opens/closes level 3 door in terrain
 \ ******************************************************************************
 
 .level_3_door_logic
@@ -2980,7 +2980,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: do_level_4_door_logic
-\ * Description: <>
+\ * Description: Calculates door position and opens/closes level 4 door in terrain
 \ ******************************************************************************
 
 .do_level_4_door_logic
@@ -3042,7 +3042,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: do_level_5_door_logic
-\ * Description: <>
+\ * Description: Calculates door position and draws level 5 diamond-shaped door
 \ ******************************************************************************
 
 .do_level_5_door_logic
@@ -3118,7 +3118,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: lose_a_life
-\ * Description: <>
+\ * Description: Decrements lives using BCD and returns $FF in X if none left
 \ ******************************************************************************
 
 .lose_a_life
@@ -3137,7 +3137,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: extra_life
-\ * Description: <>
+\ * Description: Increments the player's life count by one using BCD
 \ ******************************************************************************
 
 .extra_life
@@ -3152,7 +3152,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: write_num_lives
-\ * Description: <>
+\ * Description: Displays the current number of lives on screen
 \ ******************************************************************************
 
 .write_num_lives
@@ -3173,7 +3173,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: zero_lives
-\ * Description: <>
+\ * Description: Displays '0' for lives when player has zero lives remaining
 \ ******************************************************************************
 
 .zero_lives
@@ -3194,7 +3194,7 @@ ORG     NATIVE_ADDR
 \ * Function: add_A_to_score
 \ * Params: A = value to add to player score
 \ * Returns: none
-\ * Description: <>
+\ * Description: Adds A to 3-byte BCD score, awards extra life every 1000 pts
 \ ******************************************************************************
 
 .add_A_to_score
@@ -3241,7 +3241,7 @@ ORG     NATIVE_ADDR
 \ * Function: plot_three_byte_BCD_number
 \ * Params: screen address in X,Y address of BCD number in L0080, A is pixel mask
 \ * Returns: none
-\ * Description: <>
+\ * Description: Plots a 3-byte BCD number to screen at given address
 \ ******************************************************************************
 
 .plot_three_byte_BCD_number            ; 
@@ -3279,7 +3279,7 @@ ORG     NATIVE_ADDR
 \ * Function: plot_char_set_scr_addr_XY
 \ * Params: screen address in X,Y
 \ * Returns: none
-\ * Description: <>
+\ * Description: Sets the character write pointer to screen address X,Y
 \ ******************************************************************************
 
 .plot_char_set_scr_addr_XY
@@ -3293,7 +3293,7 @@ ORG     NATIVE_ADDR
 \ * Function: plot_number_zero_space
 \ * Params: A = number to plot (0-9)
 \ * Returns: none
-\ * Description: <>
+\ * Description: Plots digit A as a character, or a space if leading zero
 \ ******************************************************************************
 
 .plot_number_zero_space
@@ -3315,7 +3315,7 @@ ORG     NATIVE_ADDR
         
 \ ******************************************************************************
 \ * Function: add_fuel
-\ * Description: <>
+\ * Description: Adds $11 to fuel (skipped in demo mode)
 \ ******************************************************************************
 
 .add_fuel
@@ -3330,7 +3330,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: use_fuel
-\ * Description: <>
+\ * Description: Checks if fuel remains; if empty sets flag, else subtracts
 \ ******************************************************************************
 
 .use_fuel
@@ -3349,7 +3349,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: fuel_is_empty
-\ * Description: <>
+\ * Description: Sets fuel empty flag and displays '0' for fuel on screen
 \ ******************************************************************************
 
 .fuel_is_empty
@@ -3369,7 +3369,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: subtract_from_fuel
-\ * Description: <>
+\ * Description: Subtracts 1 from fuel by adding $99,$99 in BCD (decimal -1)
 \ ******************************************************************************
 
 .subtract_from_fuel
@@ -3383,7 +3383,7 @@ ORG     NATIVE_ADDR
 \ * Function: add_A_X_to_fuel
 \ * Params: add A to fuel_A, add X to fuel_B & fuel_C
 \ * Returns: none
-\ * Description: <>
+\ * Description: Adds A to fuel_A and X to fuel_B/C using BCD arithmetic
 \ ******************************************************************************
 
 .add_A_X_to_fuel                        ; 
@@ -3415,7 +3415,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: plot_fuel_value
-\ * Description: <>
+\ * Description: Plots the current fuel value to screen as a BCD number
 \ ******************************************************************************
 
 .plot_fuel_value
@@ -3439,7 +3439,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: plot_high_score_table
-\ * Description: <>
+\ * Description: Plots the high score table with ranks, scores and names
 \ ******************************************************************************
 
 .plot_high_score_table
@@ -3522,7 +3522,7 @@ ORG     NATIVE_ADDR
 \ ******************************************************************************
 \ * Functions: write_game_over, write_top_8_thrusters, write_congratulations,
 \ * write_enter_name, write_press_spacebar, write_out_of_fuel
-\ * Description: <>
+\ * Description: Loads string address and writes one of several game messages
 \ ******************************************************************************
 
 .write_game_over
@@ -3549,7 +3549,7 @@ ORG     NATIVE_ADDR
 \ * Function: write_message, write_message_ext
 \ * Params: X = LO byte of ptr to string, Y = HI byte of ptr to string
 \ * Returns: none
-\ * Description: <>
+\ * Description: Reads screen pos and mask from string, then plots characters
 \ ******************************************************************************
 
 .write_message
@@ -3587,7 +3587,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Functions: write_in, write_complete, write_failed
-\ * Description: <>
+\ * Description: Loads string address for end-of-level messages and plots them
 \ ******************************************************************************
 
 .write_in
@@ -3607,7 +3607,7 @@ ORG     NATIVE_ADDR
 \ ******************************************************************************
 \ * Functions: write_mission, write_bonus, write_no_bonus,
 \ * write_planet_destroyed, write_reverse_gravity, write_invisible_landscape
-\ * Description: <>
+\ * Description: Loads string address for mission status messages and plots them
 \ ******************************************************************************
 
 .write_mission
@@ -3637,7 +3637,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: ship_input_thrust_calculate_force
-\ * Description: <>
+\ * Description: Zeroes or applies gravity to ship force vector based on state
 \ ******************************************************************************
 
 .ship_input_thrust_calculate_force
@@ -3955,7 +3955,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: test_for_pause
-\ * Description: <>
+\ * Description: Check for pause/unpause via Copy key, and Q/S for mute/sound toggle
 \ ******************************************************************************
 
 .test_for_pause
@@ -4018,7 +4018,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: update_shield_tractor_draw_ship_and_pod
-\ * Description: <>
+\ * Description: Handle shield/tractor input, erase old ship sprite, draw new ship and pod
 \ ******************************************************************************
 
 .update_shield_tractor_draw_ship_and_pod
@@ -4231,7 +4231,7 @@ ORG     NATIVE_ADDR
 \ * Function: plot_ship_or_sheild
 \ * Params: plot_ship_at_ptr = screen address to plot sprite,
 \ * plot_ship_pixel_column, plot_ship_sprite_number = ?
-\ * Description: <>
+\ * Description: Plot ship or shield sprite at screen address using self-modifying code
 \ ******************************************************************************
 
 .plot_ship_or_sheild
@@ -4287,7 +4287,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: plot_ship_loop
-\ * Description: <>
+\ * Description: Inner loop to plot ship sprite pixels to screen with collision detection
 \ ******************************************************************************
 
 .plot_ship_loop
@@ -4382,7 +4382,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: calculate_attached_pod_vector
-\ * Description: <>
+\ * Description: Calculate pod position vector relative to ship using tether angle
 \ ******************************************************************************
 
 .calculate_attached_pod_vector
@@ -4457,7 +4457,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: update_pod_tractor_beam
-\ * Description: <>
+\ * Description: Check if tractor beam should activate based on pod and button state
 \ ******************************************************************************
 
 .update_pod_tractor_beam
@@ -4485,7 +4485,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: do_pod_tractor_beam
-\ * Description: <>
+\ * Description: Activate tractor beam, check distance to pod, attach pod if close enough
 \ ******************************************************************************
 
 .do_pod_tractor_beam
@@ -4732,7 +4732,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: generate_stars_to_start
-\ * Description: <>
+\ * Description: Draw ship sprite and animate star particles until counter wraps to zero
 \ ******************************************************************************
 
 .generate_stars_to_start
@@ -4775,7 +4775,7 @@ ORG     NATIVE_ADDR
 \ * Function: plot_pod_sprite
 \ * Params: plot_pod_xpos_FRAC = ?,plot_pod_xpos_INT = ?,
 \ * plot_pod_ypos_INT = ?
-\ * Description: <>
+\ * Description: Calculate screen address from pod position and plot pod sprite
 \ ******************************************************************************
 
 .plot_pod_sprite
@@ -4921,7 +4921,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: set_plot_pod_sprite_mask_addr
-\ * Description: <>
+\ * Description: Set pod sprite pixel mask address from lookup table based on X index
 \ ******************************************************************************
 
 .set_plot_pod_sprite_mask_addr
@@ -4945,7 +4945,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: draw_pod_and_collision_test
-\ * Description: <>
+\ * Description: Erase old pod sprite, redraw at new position, detect ship-pod collision
 \ ******************************************************************************
 
 .draw_pod_and_collision_test
@@ -5054,7 +5054,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: irq1_handler
-\ * Description: <>
+\ * Description: IRQ handler for vsync and Timer1; sets up video timing and palette
 \ ******************************************************************************
 
 .irq1_handler
@@ -5147,7 +5147,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: ship_input_rotate
-\ * Description: <>
+\ * Description: Read capslock/ctrl keys to rotate ship angle left or right
 \ ******************************************************************************
 
 .ship_input_rotate
@@ -5180,7 +5180,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: midpoint_add_force_vector
-\ * Description: <>
+\ * Description: Add force vector to midpoint position and update tether swing angle
 \ ******************************************************************************
 
 .midpoint_add_force_vector
@@ -5243,7 +5243,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: calculate_player_position_from_midpoint
-\ * Description: <>
+\ * Description: Derive ship and pod positions from midpoint plus/minus delta vector
 \ ******************************************************************************
 
 .calculate_player_position_from_midpoint
@@ -5337,7 +5337,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: create_explosion
-\ * Description: <>
+\ * Description: Create explosion particles at given position with sound effect
 \ ******************************************************************************
 
 .create_explosion
@@ -5488,7 +5488,7 @@ ORG     NATIVE_ADDR
 \ * Function: particle_return_free_slot_in_Y
 \ * Params: none
 \ * Returns: Y = next free slot in particle table
-\ * Description: <>
+\ * Description: Find and return index of first free slot in the particle table
 \ ******************************************************************************
 
 .particle_return_free_slot_in_Y
@@ -5685,7 +5685,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: particles_update_and_draw
-\ * Description: <>
+\ * Description: Erase, move, and redraw all active particles each frame
 \ ******************************************************************************
 
 .particles_update_and_draw
@@ -5918,7 +5918,7 @@ ORG     NATIVE_ADDR
 \ * Function: test_particle_X_close_to_player
 \ * Params: X = index into particle table
 \ * Returns: plot_ship_collision_detected
-\ * Description: <>
+\ * Description: Test if a hostile bullet particle is close enough to hit the player
 \ ******************************************************************************
 
 .test_particle_X_close_to_player
@@ -5983,7 +5983,7 @@ ORG     NATIVE_ADDR
 \ * Function: particle_move_index_X
 \ * Params: X = index into particle table
 \ * Returns: none
-\ * Description: <>
+\ * Description: Move a particle by adding its velocity to its position
 \ ******************************************************************************
 
 .particle_move_index_X
@@ -6026,7 +6026,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: particles_generate_stars
-\ * Description: <>
+\ * Description: Spawn random stationary star particles near top of screen
 \ ******************************************************************************
 
 .particles_generate_stars
@@ -6268,7 +6268,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: initialise_level_pointers
-\ * Description: <>
+\ * Description: Set terrain, gravity, and rendering vars from level number
 \ ******************************************************************************
 
 .initialise_level_pointers
@@ -6548,7 +6548,7 @@ ORG     NATIVE_ADDR
 \ * Function: palette_set_colour_Y_to_A
 \ * Params: Y = actual colour, A = logical colour
 \ * Returns: none
-\ * Description: <>
+\ * Description: Set a logical colour to a physical colour via palette register
 \ ******************************************************************************
 
 .palette_set_colour_Y_to_A
@@ -6632,7 +6632,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: ship_input_fire
-\ * Description: <>
+\ * Description: Handle fire input; block firing while shield/tractor is active
 \ ******************************************************************************
 
 .ship_input_fire
@@ -6652,7 +6652,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: test_fire_key
-\ * Description: <>
+\ * Description: Read fire key and create a new bullet on first press
 \ ******************************************************************************
 
 .test_fire_key
@@ -6686,7 +6686,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: angle_to_bullet_dx_dy
-\ * Description: <>
+\ * Description: Copy angle-based X/Y velocity from lookup tables to particle
 \ ******************************************************************************
 
 .angle_to_bullet_dx_dy
@@ -6704,7 +6704,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: create_new_player_bullet
-\ * Description: <>
+\ * Description: Spawn a player bullet at ship centre with ship-angle velocity
 \ ******************************************************************************
 
 .create_new_player_bullet
@@ -6831,7 +6831,7 @@ ORG     NATIVE_ADDR
 \ * Function: rnd
 \ * Params: none
 \ * Returns: A = random number 0 - 255
-\ * Description: <>
+\ * Description: Generate an 8-bit pseudo-random number using shift and add
 \ ******************************************************************************
 
 .rnd
@@ -6875,7 +6875,7 @@ ORG     NATIVE_ADDR
 \ ******************************************************************************
 \ * Function: get_distance_ship_to_pod_tractor, get_distance_ship_to_pod_tractor_ext
 \ * Returns: A = distance from ship to pod during tractor beam
-\ * Description: <>
+\ * Description: Calculate approximate Manhattan distance from ship to pod
 \ ******************************************************************************
 
 .get_distance_ship_to_pod_tractor
@@ -6963,7 +6963,7 @@ ORG     NATIVE_ADDR
 \ * Function: draw_line
 \ * Params: L008A, L008B, L0088, L0089
 \ * Returns: none
-\ * Description: <>
+\ * Description: Draw a line between two screen coordinates using Bresenham
 \ ******************************************************************************
 
 .draw_line
@@ -7099,7 +7099,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Functions: plot_line_bresenham_2
-\ * Description: <>
+\ * Description: Steps Bresenham error and advances draw address for line plotting
 \ ******************************************************************************
 
 .plot_line_bresenham_2
@@ -7120,7 +7120,7 @@ ORG     NATIVE_ADDR
 \ ******************************************************************************
 \ * Function: calculate_pixels_ptr
 \ * Inputs: draw_line_start_x, draw_line_start_x
-\ * Description: <>
+\ * Description: Converts X,Y coordinates to a screen memory address and pixel column
 \ ******************************************************************************
 
 .calculate_pixels_ptr
@@ -7163,7 +7163,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: plot_teleport_effect_step_horizontal
-\ * Description: <>
+\ * Description: Self-modified jump for horizontal pixel pointer movement
 \ ******************************************************************************
 
 .plot_teleport_effect_step_horizontal
@@ -7173,7 +7173,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: plot_teleport_effect_step_vertical
-\ * Description: <>
+\ * Description: Self-modified jump for vertical pixel pointer movement
 \ ******************************************************************************
 
 .plot_teleport_effect_step_vertical
@@ -7183,7 +7183,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: plot_teleport_effect_3
-\ * Description: <>
+\ * Description: Draws a rectangular ring of teleport effect pixels
 \ ******************************************************************************
 
 .plot_teleport_effect_3
@@ -7246,7 +7246,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: plot_teleport_pixels
-\ * Description: <>
+\ * Description: EORs a pixel at the current screen address using a colour mask
 \ ******************************************************************************
 
 .plot_teleport_pixels
@@ -7262,7 +7262,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: plot_teleport_effect_1
-\ * Description: <>
+\ * Description: Erases old teleport effect then draws new one at current position
 \ ******************************************************************************
 
 .plot_teleport_effect_1
@@ -7295,7 +7295,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: plot_teleport_effect_2
-\ * Description: <>
+\ * Description: Draws all four sides of a teleport ring using self-modifying code
 \ ******************************************************************************
 
 .plot_teleport_effect_2
@@ -7356,7 +7356,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: pixels_ptr_add_7
-\ * Description: <>
+\ * Description: Advances pixel pointer right by one pixel, adding 7 on column wrap
 \ ******************************************************************************
 
 .pixels_ptr_add_7
@@ -7381,7 +7381,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: pixels_ptr_sbc_8
-\ * Description: <>
+\ * Description: Moves pixel pointer left by one pixel, subtracting 8 on column wrap
 \ ******************************************************************************
 
 .pixels_ptr_sbc_8
@@ -7407,7 +7407,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: pixels_ptr_increment
-\ * Description: <>
+\ * Description: Moves pixel pointer down one scanline with character row wrapping
 \ ******************************************************************************
 
 .pixels_ptr_increment
@@ -7432,7 +7432,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: pixels_ptr_decrement
-\ * Description: <>
+\ * Description: Moves pixel pointer up one scanline with character row wrapping
 \ ******************************************************************************
 
 .pixels_ptr_decrement
@@ -7457,7 +7457,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: draw_new_line
-\ * Description: <>
+\ * Description: Draws the tractor beam line between ship and pod if attached
 \ ******************************************************************************
 
 .draw_new_line
@@ -7485,7 +7485,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: calculate_line_coordinates
-\ * Description: <>
+\ * Description: Calculates line start/end coords from ship and pod screen positions
 \ ******************************************************************************
 
 .calculate_line_coordinates
@@ -7522,7 +7522,7 @@ ORG     NATIVE_ADDR
 \ * Function: erase_old_line
 \ * Params: none
 \ * Returns: none
-\ * Description: <>
+\ * Description: Erases previously drawn tractor beam line by redrawing it with XOR
 \ ******************************************************************************
 
 .erase_old_line
@@ -7556,7 +7556,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: tick_fuel_pickup_draw_beams
-\ * Description: <>
+\ * Description: Handles fuel collection: adds fuel, draws/erases refuelling beams
 \ ******************************************************************************
 
 .tick_fuel_pickup_draw_beams
@@ -7631,7 +7631,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: do_teleport_animation
-\ * Description: <>
+\ * Description: Animates expanding then contracting teleport rings around the ship
 \ ******************************************************************************
 
 .do_teleport_animation
@@ -7685,7 +7685,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Functions: player_teleport_appear, player_entered_orbit, player_teleport
-\ * Description: <>
+\ * Description: Handles teleport appear/disappear and orbit entry with animation
 \ ******************************************************************************
 
 .player_teleport_appear
@@ -7765,7 +7765,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: pixels_ptr_offset_diagonal_by_4
-\ * Description: <>
+\ * Description: Offsets pixel pointer diagonally by 4 pixels (right and up)
 \ ******************************************************************************
 
 .pixels_ptr_offset_diagonal_by_4
@@ -7790,7 +7790,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: explosion_sound
-\ * Description: <>
+\ * Description: Plays two explosion sound effects and sets sound timer to 31
 \ ******************************************************************************
 
 .explosion_sound
@@ -7807,7 +7807,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: run_engine
-\ * Description: <>
+\ * Description: Plays engine thrust sound if shield not active and no sound queued
 \ ******************************************************************************
 
 .run_engine
@@ -7833,7 +7833,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: own_gun_sound
-\ * Description: <>
+\ * Description: Plays the player gun firing sound effect
 \ ******************************************************************************
 
 .own_gun_sound
@@ -7844,7 +7844,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: hostile_gun_sound
-\ * Description: <>
+\ * Description: Plays the enemy gun firing sound effect
 \ ******************************************************************************
 
 .hostile_gun_sound
@@ -7855,7 +7855,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: collect_pod_fuel_sound
-\ * Description: <>
+\ * Description: Plays a three-part pod/fuel collection sound effect
 \ ******************************************************************************
 
 .collect_pod_fuel_sound
@@ -7874,7 +7874,7 @@ ORG     NATIVE_ADDR
 \ * Functions: make_sound, make_sound_ext
 \ * Params: X = address of sound params LO byte, Y = address of sound params HI byte
 \ * Returns: none
-\ * Description: <>
+\ * Description: Calls OSWORD 7 to play a sound unless muted or in demo mode
 \ ******************************************************************************
 
 .make_sound
@@ -7894,7 +7894,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: countdown_sound
-\ * Description: <>
+\ * Description: Plays the countdown warning sound using two sound parameters
 \ ******************************************************************************
 
 .countdown_sound
@@ -7908,7 +7908,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: enter_orbit_sound
-\ * Description: <>
+\ * Description: Plays the enter-orbit sound effect
 \ ******************************************************************************
 
 .enter_orbit_sound
@@ -7920,7 +7920,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: update_sound_timer
-\ * Description: <>
+\ * Description: Decrements the sound timer if it is non-zero
 \ ******************************************************************************
 
 .update_sound_timer
@@ -8110,7 +8110,7 @@ ORG     NATIVE_ADDR
 \ ******************************************************************************
 \ ******************************************************************************
 \ * Function: game_start
-\ * Description: <>
+\ * Description: Entry point that jumps to start_new_game
 \ ******************************************************************************
 \ ******************************************************************************
 
@@ -8149,7 +8149,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: player_new_high_score
-\ * Description: <>
+\ * Description: Clears escape condition then prompts player to enter high score name
 \ ******************************************************************************
 
 .player_new_high_score
@@ -8162,7 +8162,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: high_score_start
-\ * Description: <>
+\ * Description: Shows high score table, runs attract loop, starts game or demo
 \ ******************************************************************************
 
 .high_score_start
@@ -8238,7 +8238,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: start_new_game
-\ * Description: <>
+\ * Description: Initialises all game state, score, lives and fuel for a new game
 \ ******************************************************************************
 
 .start_new_game
@@ -8297,7 +8297,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: start_new_level
-\ * Description: <>
+\ * Description: Advances to next level, toggles gravity/invisible modifiers, shows messages
 \ ******************************************************************************
 
 .start_new_level
@@ -8414,7 +8414,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: level_retry
-\ * Description: <>
+\ * Description: Resets the current level state for a retry after death
 \ ******************************************************************************
 
 .level_retry
@@ -8425,7 +8425,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: level_start_demo_entry
-\ * Description: <>
+\ * Description: Sets up randomised demo mode timers, inits level and teleports player in
 \ ******************************************************************************
 
 .level_start_demo_entry
@@ -8477,7 +8477,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: tick_loop
-\ * Description: <>
+\ * Description: Main game tick loop: runs input, physics, drawing and end-of-level logic
 \ ******************************************************************************
 
 .tick_loop
@@ -8652,7 +8652,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: update_player_and_pod_states
-\ * Description: <>
+\ * Description: Updates player/pod state each tick, handles collisions and explosions
 \ ******************************************************************************
 
 .update_player_and_pod_states
@@ -8737,7 +8737,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: set_level_ended
-\ * Description: <>
+\ * Description: Sets level_ended_flag to signal the current level has ended
 \ ******************************************************************************
 
 .set_level_ended
@@ -8749,7 +8749,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: destroy_player_ship
-\ * Description: <>
+\ * Description: Triggers player ship explosion with debris particles at ship position
 \ ******************************************************************************
 
 .destroy_player_ship
@@ -8789,7 +8789,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: destroy_attached_pod
-\ * Description: <>
+\ * Description: Detaches and explodes the pod with debris particles at pod position
 \ ******************************************************************************
 
 .destroy_attached_pod
@@ -8819,7 +8819,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: calculate_pod_pos
-\ * Description: <>
+\ * Description: Calculates pod screen position relative to the midpoint/player
 \ ******************************************************************************
 
 .calculate_pod_pos
@@ -8858,7 +8858,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: hide_landscape
-\ * Description: <>
+\ * Description: Hides landscape by setting its palette colour to black
 \ ******************************************************************************
 
 .hide_landscape
@@ -8888,7 +8888,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: show_landscape
-\ * Description: <>
+\ * Description: Restores the landscape palette colour for the current level
 \ ******************************************************************************
 
 .show_landscape
@@ -8902,7 +8902,7 @@ ORG     NATIVE_ADDR
 \ ******************************************************************************
 \ * Function: test_player_escaped_to_orbit
 \ * Returns: carry clear if player high enough to escape to orbit else carry set
-\ * Description: <>
+\ * Description: Tests if player Y position is high enough to escape to orbit
 \ ******************************************************************************
 
 .test_player_escaped_to_orbit
@@ -8926,7 +8926,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: escape_pressed
-\ * Description: <>
+\ * Description: Handles escape key by jumping to the high score screen
 \ ******************************************************************************
 
 .escape_pressed
@@ -8937,7 +8937,7 @@ ORG     NATIVE_ADDR
 \ ******************************************************************************
 \ * Function: wait_time_out_Y
 \ * Params: Y = length of timeout in centiseconds
-\ * Description: <>
+\ * Description: Waits Y centiseconds polling for keypress, handles escape to abort
 \ ******************************************************************************
 
 .wait_time_out_Y
@@ -8965,7 +8965,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: clear_screen_and_init
-\ * Description: <>
+\ * Description: Clears screen memory, resets terrain tables, objects and particles
 \ ******************************************************************************
 
 .clear_screen_and_init
@@ -9024,7 +9024,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: draw_player_timed_to_vsync
-\ * Description: <>
+\ * Description: Syncs ship drawing to vsync, waits for system clock timing window
 \ ******************************************************************************
 
 .draw_player_timed_to_vsync
@@ -9073,7 +9073,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: reset_system_clock
-\ * Description: <>
+\ * Description: Resets the system clock to zero via OSWORD
 \ ******************************************************************************
 
 .reset_system_clock
@@ -9089,7 +9089,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: draw_ship_line_and_pod
-\ * Description: <>
+\ * Description: Erases old tractor line, redraws ship/pod/shield, draws new line
 \ ******************************************************************************
 
 .draw_ship_line_and_pod
@@ -9120,7 +9120,7 @@ ORG     NATIVE_ADDR
 \ * Function: test_inkey
 \ * Params: X = INKEY value of key to test
 \ * Returns: A = 0 if pressed, <> 0 if not pressed
-\ * Description: <>
+\ * Description: Tests a key via hardware port or delegates to demo fake keypress
 \ ******************************************************************************
 
 .test_inkey
@@ -9166,7 +9166,7 @@ ORG     NATIVE_ADDR
 \ * Function: demo_fake_keypress
 \ * Params: X = <>
 \ * Returns: A = 0 if pressed, <> 0 if not pressed
-\ * Description: <>
+\ * Description: Simulates a keypress for demo mode using bitmask lookup tables
 \ ******************************************************************************
 
 .demo_fake_keypress
@@ -9223,7 +9223,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: demo_mode_tick
-\ * Description: <>
+\ * Description: Decrements demo keypress timer, advances to next keypress when expired
 \ ******************************************************************************
 
 .demo_mode_tick
@@ -9240,7 +9240,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: demo_mode_next_keypress
-\ * Description: <>
+\ * Description: Loads next demo keypress bitmask and timer from data tables
 \ ******************************************************************************
 
 .demo_mode_next_keypress
@@ -9290,7 +9290,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: enter_new_high_score_name
-\ * Description: <>
+\ * Description: Checks if player beat a high score, inserts and prompts for name entry
 \ ******************************************************************************
 
 .enter_new_high_score_name
@@ -9431,7 +9431,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Functions: main_wrchv, jmp_wrchv
-\ * Description: <>
+\ * Description: WRCHV intercept that redirects character output to plot_char_A
 \ ******************************************************************************
 
 .main_wrchv
@@ -9447,7 +9447,7 @@ ORG     NATIVE_ADDR
 \ ******************************************************************************
 \ * Functions: write_decimal_A
 \ * Params: A = BCD value to plot to screen
-\ * Description: <>
+\ * Description: Plots a BCD value as a one or two digit decimal number on screen
 \ ******************************************************************************
 
 .write_decimal_A
@@ -9474,7 +9474,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: mission_complete
-\ * Description: <>
+\ * Description: Shows mission complete screen, calculates and awards bonus score
 \ ******************************************************************************
 
 .mission_complete
@@ -9580,7 +9580,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: main_entry
-\ * Description: <>
+\ * Description: Program entry: inits zero page, builds tables, hooks WRCHV, sets up HW
 \ ******************************************************************************
 
 .main_entry
@@ -10376,7 +10376,7 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: eor_everything
-\ * Description: <>
+\ * Description: Decrypts/decodes game code by EORing memory pages with a key
 \ ******************************************************************************
 
 .eor_everything
