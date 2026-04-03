@@ -95,7 +95,7 @@ PARTICLE_type_hostile_bullet = $03
 \ ******************************************************************************
 \ ******************************************************************************
 
-L0000 = $0000
+zp_base = $0000								; base address for indexed zero-page clearing loops
 window_xpos_INT   = $0000						; x position of window into world coordinates that is drawn on screen
 demo_mode_flag   = $0001						; 0 = real game, non-zero = demo mode
 planet_explode_anim   = $0002					; initialised to $F and decrements to 0
@@ -114,13 +114,13 @@ old_plot_ship_at_ptr   = $000E					; remembers plot_ship_at_ptr
 old_plot_ship_at_ptr_HI   = $000F				; "
 old_plot_ship_pixel_column   = $0010					; remembers plot_ship_pixel_column
 old_plot_ship_sprite_number   = $0011			; remembers plot_ship_sprite_number
-force_vectorx_FRAC_LO   = $0012					; 
-force_vectorx_FRAC   = $0013					; 
-force_vectorx_INT   = $0014						; 
+force_vectorx_FRAC_LO   = $0012					; X force vector, extra low precision byte
+force_vectorx_FRAC   = $0013					; X force vector, fractional part
+force_vectorx_INT   = $0014						; X force vector, integer part
 force_vectory_FRAC   = $0015					; set to gravity_FRAC in ship_input_thrust_calculate_force
 force_vectory_INT   = $0016						; set to gravity_INT in ship_input_thrust_calculate_force
 pod_sprite_plotted_flag   = $0017				; set to 1 as plot_pod_sprite is called
-ship_sprite_plotted_flag   = $0018				; 
+ship_sprite_plotted_flag   = $0018				; set to 1 when ship sprite has been plotted
 level_tick_counter   = $0019					; increments every tick loop
 vsync_count   = $001A							; increments every vsync event
 angle_var_A_accumulate   = $001B				; accumulates angle_var_A
@@ -128,7 +128,7 @@ angle_var_B_accumulate   = $001C				; accumulates angle_var_B
 angle_ship_to_pod   = $001D						; AND #$1F - number of angles in table
 angle_var_A   = $001E							; these all appear to accumulate to calculate accurate angle of midpoint vector
 angle_var_B   = $001F							; essentially the rotational physics simulation
-angle_var_C   = $0020							; 
+angle_var_C   = $0020							; rotational physics accumulator (with A and B)
 pod_attached_flag_1   = $0022					; set to non-zero at top of attach_pod_to_ship function
 midpoint_deltax_FRAC   = $0023					; add midpoint_delta to midpoint to get ship_position
 midpoint_deltax_INT   = $0024					; subtract midpoint_delta from midpoint to get pod_position
@@ -157,9 +157,9 @@ rnd_B   = $003B									; used by rnd function
 collecting_fuel_flag   = $003C					; set to 1 if using tractor beam near fuel object
 generator_recharge_counter   = $003D			; number of ticks to recharge generator
 generator_recharge_increase   = $003E			; increase in time between recharges after each hit
-old_plot_pod_sprite_at_ptr   = $003F			;
-old_plot_pod_sprite_at_ptr_HI   = $0040			;
-old_pod_pixel_column   = $0041					;
+old_plot_pod_sprite_at_ptr   = $003F			; remembers pod screen addr LO for erase
+old_plot_pod_sprite_at_ptr_HI   = $0040			; remembers pod screen addr HI for erase
+old_pod_pixel_column   = $0041					; remembers pod_pixel_column for erase
 player_ship_destroyed_flag   = $0042			; set to $FF during init, 0 or 1 at other times
 level_ended_flag   = $0043						; set to 0 each tick, set to $FF in one place - suspect collision / death?
 pod_destroying_player_timer   = $0044			; set to $FF during init, otherwise counts down during explode?
@@ -212,188 +212,188 @@ door_switch_counter_B   = $006C					; "
 
 boot_read_ptr = $0070							; in bootstrap code
 value_LO = $0070								; in bootstrap code
-temp_midpoint_xpos_FRAC_LO   = $0070
-terrain_y_count_inner   = $0070
-plot_sprite_at_ptr   = $0070
-calc_force_vectory_FRAC   = $0070
-pixels_ptr_pixel_byte	= $0070
+temp_midpoint_xpos_FRAC_LO   = $0070	; saved midpoint X for ship position calc
+terrain_y_count_inner   = $0070		; inner (lo byte) row counter for landscape init
+plot_sprite_at_ptr   = $0070		; screen addr for EOR sprite plotting (16-bit)
+calc_force_vectory_FRAC   = $0070	; fractional Y thrust from angle lookup tables
+pixel_colour_mask	= $0070						; pixel colour/enable mask AND'd with column mask
 plot_pod_xpos_FRAC   = $0070						; pod fractional X position in viewport
 plot_ship_row_counter   = $0070						; rows remaining before character row boundary
 
 value_HI = $0071								; in bootstrap code
-terrain_y_count_outer   = $0071
-calc_force_vectory_INT   = $0071
-plot_ship_at_y_offset   = $0071
-new_ship_xpos_FRAC   = $0071
+terrain_y_count_outer   = $0071		; outer (hi byte) row counter for landscape init
+calc_force_vectory_INT   = $0071	; integer Y thrust; also drag shift temp
+plot_ship_at_y_offset   = $0071		; byte offset into char row for ship pixel write
+new_ship_xpos_FRAC   = $0071		; working fractional X from midpoint + delta
 best_distance   = $0071						; minimum distance found during angle search
-draw_line_L0071	= $0071							; only appears once - is this unused or another variable?
+draw_line_delta_y_unused	= $0071							; written but never read (redundant with draw_line_delta_minor)
 particle_screen_x   = $0071						; particle X position relative to window
 plot_pod_xpos_INT   = $0071						; pod integer X position (character column)
 
 boot_write_ptr   = $0072						; in bootstrap code
-terrain_draw_start_x   = $0072		
-terrain_draw_ptr   = $0072		
-plot_static_sprite_L0072   = $0072
-calc_force_vectorx_FRAC   = $0072
+terrain_draw_start_x   = $0072		; column index where terrain strip begins
+terrain_draw_ptr   = $0072		; screen addr for terrain line EOR drawing (16-bit)
+sprite_rows_to_boundary   = $0072				; pixel rows before next char row boundary
+calc_force_vectorx_FRAC   = $0072	; fractional X thrust; also drag shift temp
 plot_ship_at_ptr   = $0072						; address LO
-new_ship_xpos_INT   = $0072
-plot_pixels_ptr	= $0072
+new_ship_xpos_INT   = $0072		; working integer X from midpoint + delta
+plot_pixels_ptr	= $0072			; screen addr for line-drawing pixel writes (16-bit)
 delta_x_scaled   = $0072						; scaled X displacement (player-to-midpoint) for force calc
 particle_screen_y   = $0072						; particle Y position relative to window
 plot_pod_ypos_INT	= $0072							; pod integer Y position in viewport
 ship_to_pod_dx_FRAC	= $0072						; fractional X delta in ship-to-pod distance calc
 
-calc_force_vectorx_INT   = $0073
-attach_pod_L0073   = $0073	
-plot_pod_sprite_L0073   = $0073
-new_ship_ypos_FRAC   = $0073
+calc_force_vectorx_INT   = $0073	; integer X thrust; also sign extension temp
+attach_pod_delta_y_scaled   = $0073				; scaled Y distance for cross-product force calc
+pod_sprite_data_index   = $0073					; byte index into pod sprite data
+new_ship_ypos_FRAC   = $0073		; working fractional Y from midpoint + delta
 obj_screen_x   = $0073							; object X position relative to window
 
-terrain_draw_wall_index   = $0074
-attach_pod_L0074   = $0074
-pod_sprite_ptr_LO   = $0074
-new_ship_ypos_INT   = $0074
-particle_write_ptr	= $0074
-pixels_ptr_mask_index	= $0074
+terrain_draw_wall_index   = $0074	; index into wall arrays, offset from window Y
+attach_pod_delta_x_frac   = $0074				; fractional X delta, temp during shift-by-2 scaling
+pod_sprite_ptr_LO   = $0074		; lo byte of pod sprite data source address
+new_ship_ypos_INT   = $0074		; working integer Y from midpoint + delta
+particle_write_ptr	= $0074		; screen addr for particle EOR plotting (16-bit)
+pixel_column_index	= $0074						; pixel column (0-3) within screen byte
 obj_screen_y   = $0074							; object Y position relative to window
 
-pod_sprite_ptr_HI   = $0075
+pod_sprite_ptr_HI   = $0075		; hi byte of pod sprite data source address
 plot_ship_pixel_column   = $0075						; sub-character X pixel offset (0-3) in MODE 5
 delta_x_shifted   = $0075						; ship-to-midpoint X delta, shifted left 2 bits
 new_ship_ypos_INT_HI   = $0075				; high byte of newly calculated ship Y position
 draw_line_delta_major	= $0075							; Bresenham major axis delta
 obj_screen_y_hi   = $0075							; high byte of obj Y offset (non-zero = offscreen)
 
-terrain_draw_addr_LO   = $0076
+terrain_draw_addr_LO   = $0076					; screen addr low byte for terrain drawing
 plot_ship_sprite_number		= $0076				; which ship sprite to plot (0 - $10) or shield ($11)
-explosion_dx_FRAC   = $0076
-particle_pixel_byte   = $0076
-rnd_AND_3   = $0076
-score_value	= $0076
+explosion_dx_FRAC   = $0076						; fractional X velocity of explosion particle
+particle_pixel_byte   = $0076					; pixel pattern byte for particle type
+rnd_AND_3   = $0076							; random 0-3 added to bullet angle for spread
+score_value	= $0076							; points awarded for destroying current object
 delta_y_frac   = $0076						; fractional Y displacement intermediate
 draw_line_delta_minor	= $0076							; Bresenham minor axis delta
 obj_scraddr_y_lo   = $0076							; screen addr low byte from Y row calc
 pod_pixel_column   = $0076						; pixel column offset (0-3) within MODE 5 byte
 
 terrain_draw_addr_HI   = $0077					; stores HI byte of address to draw landscape at
-plot_pod_sprite_at_ptr   = $0077
-explosion_dx_INT   = $0077
-calc_ship_window_xpos_INT	= $0077
+plot_pod_sprite_at_ptr   = $0077					; screen addr ptr for pod sprite XOR plotting
+explosion_dx_INT   = $0077						; integer X velocity of explosion particle
+calc_ship_window_xpos_INT	= $0077				; ship X position on screen (integer)
 delta_y_shifted   = $0077						; ship-to-midpoint Y delta, shifted left 1 bit
 obj_scraddr_y_hi   = $0077							; screen addr high byte from Y char row
 particle_temp_clear_77   = $0077						; cleared at particle loop start (shared ZP temp)
 
-terrain_xpos_1_clipped   = $0078
-explosion_dy_FRAC   = $0078
-draw_line_L0078	= $0078
-ship_thrust_x_INT   = $0078
+terrain_xpos_1_clipped   = $0078					; terrain line 1 X pos clamped to screen width
+explosion_dy_FRAC   = $0078						; fractional Y velocity of explosion particle
+bresenham_error	= $0078							; Bresenham error accumulator, init to delta_major/2
+ship_thrust_x_INT   = $0078						; integer X thrust from angle lookup table
 search_inner_count   = $0078						; inner loop counter (4 angle candidates per refinement)
 obj_pixel_row   = $0078							; pixel row within character cell (0-7)
 
-terrain_xpos_2_clipped   = $0079
-ship_window_ypos_FRAC	= $0079
-explosion_dy_INT   = $0079
-pixels_ptr_temp_L0079	= $0079
+terrain_xpos_2_clipped   = $0079					; terrain line 2 X pos clamped to screen width
+ship_window_ypos_FRAC	= $0079					; fractional ship Y position on screen
+explosion_dy_INT   = $0079						; integer Y velocity of explosion particle
+screen_addr_hi_temp	= $0079						; high byte accumulator during screen addr calc
 obj_scraddr_x_hi   = $0079							; screen addr high byte overflow from X column
 particle_temp_clear_79   = $0079						; cleared at particle loop start (shared ZP temp)
 pod_screen_addr_LO	= $0079							; saved screen addr low byte for pod erase
 thrust_sign_extend   = $0079						; sign extension ($00/$FF) for thrust accumulation
 
-plot_ship_index   = $007A
-current_object   = $007A
-ship_thrust_x_FRAC   = $007A
+plot_ship_index   = $007A						; byte offset into ship sprite data during plot
+current_object   = $007A						; index of object being processed in update loop
+ship_thrust_x_FRAC   = $007A					; fractional X thrust from angle lookup table
 angle_step_frac   = $007A						; fractional part of angle search step size
 pod_screen_addr_HI   = $007A						; saved screen addr high byte for pod erase
 pod_angle_sub_frac   = $007A						; sub-angle fraction for pod vector interpolation
 
-terrain_draw_table_index   = $007B
-obj_plot_sprite_at_ptr	= $007B
-prev_angle_var_B	= $007B
-calc_ship_delta_FRAC	= $007B
-particles_flag1   = $007B
+terrain_draw_table_index   = $007B				; index into terrain draw lookup tables
+obj_plot_sprite_at_ptr	= $007B					; screen addr ptr for object sprite plotting
+prev_angle_var_B	= $007B						; saved angle_var_B before thrust accumulation
+calc_ship_delta_FRAC	= $007B					; fractional ship offset from angle (Y halved)
+particle_collision_flag   = $007B				; $FF when particle collides with scenery
 angle_step_int	= $007B						; integer part of angle search step size
 pod_temp   = $007B						; scratch variable (Y-pos carry / sprite column calc)
 teleport_row_count   = $007B						; row loop counter for teleport diamond drawing
 
-prev_angle_var_C	= $007C
-calc_ship_delta_INT	= $007C
-particle_byte_mask	= $007C
-plot_pod_sprite_y_offset	= $007C
+prev_angle_var_C	= $007C						; saved angle_var_C before thrust accumulation
+calc_ship_delta_INT	= $007C					; integer ship offset from angle (Y halved)
+particle_byte_mask	= $007C					; pixel column mask for particle collision test
+plot_pod_sprite_y_offset	= $007C				; byte offset into pod sprite data for Y row
 search_iterations	= $007C						; outer loop counter (7 refinement levels)
 
-prev_angle_var_A	= $007D
-particle_masked_pixels	= $007D
-current_obj_xpos_INT	= $007D
+prev_angle_var_A	= $007D						; saved angle_var_A / best sub-angle in search
+particle_masked_pixels	= $007D				; particle pixels masked for collision detection
+current_obj_xpos_INT	= $007D					; X position of object being processed
 
-temp_angle_ship_to_pod	= $007E
-player_to_particle_deltay_INT	= $007E
-current_obj_ypos_INT	= $007E
+temp_angle_ship_to_pod	= $007E					; best angle found in ship-to-pod search
+player_to_particle_deltay_INT	= $007E			; Y distance from player to particle (integer)
+current_obj_ypos_INT	= $007E					; Y position of object being processed
 thrust_angle_sub_frac	= $007E						; sub-angle fraction for thrust vector interpolation
 
-calc_force_vectorx_FRAC_LO	= $007F
-explosion_particle_count	= $007F
-current_obj_ypos_EXT	= $007F
+calc_force_vectorx_FRAC_LO	= $007F				; low byte of X force vector (extra precision)
+explosion_particle_count	= $007F				; loop counter for particles in explosion
+current_obj_ypos_EXT	= $007F					; Y position high byte of object being processed
 
-old_brkv = $0080
+old_brkv = $0080							; saved BRK vector for restore on exit
 relocate_src_ptr = $0080						; in relocation code
-time_out_vsync_count = $0080
+time_out_vsync_count = $0080					; vsync frames remaining in wait timeout
 high_score_ptr_A   = $0080						; new high score only
-clear_screen_ptr	= $0080
-level_reset_ptr   = $0080							
-plot_string_ptr   = $0080							
+clear_screen_ptr	= $0080					; ptr to screen memory during clear
+level_reset_ptr   = $0080						; ptr to level reset position data
+plot_string_ptr   = $0080						; ptr to string data for text plotting
 window_deltax_INT   = $0080						; calculated in update_window_and_terrain_tables
-add_score_thousands   = $0080
-old_plot_pixels_ptr   = $0080
-update_objects_flag   = $0080
+add_score_thousands   = $0080					; thousands digit count to add to score
+old_plot_pixels_ptr   = $0080					; saved pixel plot ptr for teleport erase
+update_objects_flag   = $0080					; $FF if object unchanged, skip redraw
 
-current_object_width   = $0081
+current_object_width   = $0081					; width of object for bullet collision test
 door_screen_ypos   = $0081						; door Y position in screen coordinates
 
 relocate_dest_ptr = $0082						; in relocation code
 high_score_ptr_B   = $0082						; new high score only
-level_reset_ptr2   = $0082
-current_object_height   = $0082							
-plot_high_score_number   = $0082
+level_reset_ptr2   = $0082						; ptr to secondary level reset data
+current_object_height   = $0082					; height of object for bullet collision test
+plot_high_score_number   = $0082				; ASCII digit for high score entry number
 teleport_screen_addr_LO	= $0082					; saved low byte of screen addr for teleport effect
 
-object_type   = $0083							
-teleport_effect_L0083	= $0083
+object_type   = $0083							; type index of current object being processed
+teleport_screen_addr_HI	= $0083					; saved screen addr high byte for teleport
 
 high_score_counter   = $0084					; new high score only
-level_reset_size   = $0084							
-old_pixels_ptr_mask_index   = $0084
+level_reset_size   = $0084						; number of reset position entries for level
+old_pixel_column_index   = $0084			; saved pixel mask index for teleport erase
 gun_base_angle   = $0084						; gun emplacement base firing angle
 
-current_obj_visible_flag   = $0085
-high_score_ptr_C   = $0085
+current_obj_visible_flag   = $0085			; $01 if object is on screen, $00 otherwise
+high_score_ptr_C   = $0085						; ptr to name entry buffer in high scores
 
 gun_angle_spread_mask   = $0086						; bit mask controlling gun firing spread
 teleport_ring_count   = $0086						; current ring size in teleport diamond animation
 
-score_accumulation   = $0087
+score_accumulation   = $0087					; accumulated score to add after object updates
 teleport_appear_or_disappear   = $0087			; $00 = appear, $FF = disappear
 
-explosion_xpos_FRAC   = $0088
-draw_line_start_x   = $0088
+explosion_xpos_FRAC   = $0088					; fractional X position of explosion origin
+draw_line_start_x   = $0088						; X coord of line start for terrain drawing
 multiply_operand_a   = $0088						; multiplier input for signed 8x8 multiply
 
-draw_line_start_y   = $0089
-explosion_xpos_INT   = $0089
+draw_line_start_y   = $0089						; Y coord of line start for terrain drawing
+explosion_xpos_INT   = $0089					; integer X position of explosion origin
 multiply_result_lo   = $0089						; low byte of 8x8 multiply result
 
-draw_line_end_x   = $008A
-explosion_ypos_INT   = $008A
+draw_line_end_x   = $008A						; X coord of line end for terrain drawing
+explosion_ypos_INT   = $008A					; integer Y position of explosion origin
 multiply_result_hi   = $008A						; high byte of 8x8 multiply result
 
-draw_line_end_y   = $008B
-explosion_ypos_INT_HI  = $008B
+draw_line_end_y   = $008B						; Y coord of line end for terrain drawing
+explosion_ypos_INT_HI  = $008B					; high byte of explosion Y position
 multiply_operand_b   = $008B						; multiplicand input, shifted during multiply
 
-plot_line_pixels_byte   = $008C
-explosion_angle   = $008C
+plot_line_pixels_byte   = $008C				; pixel byte pattern for line drawing
+explosion_angle   = $008C						; current angle for explosion particle spread
 multiply_sign_ext   = $008C						; sign extension of multiplicand (high byte in shift-add)
 
-explosion_particle_type   = $008D
+explosion_particle_type   = $008D				; particle type (1-4) for explosion debris
 cross_product_term_lo   = $008E						; saved low byte of first multiply for cross product
 cross_product_term_hi   = $008F						; saved high byte of first multiply for cross product
 
@@ -1987,8 +1987,8 @@ ORG     NATIVE_ADDR
         LDA     plot_sprite_at_ptr
         AND     #$07
         EOR     #$07
-        STA     plot_static_sprite_L0072
-        INC     plot_static_sprite_L0072
+        STA     sprite_rows_to_boundary
+        INC     sprite_rows_to_boundary
         LDX     #$00
         JMP     L11DB
 
@@ -1997,7 +1997,7 @@ ORG     NATIVE_ADDR
         TYA
         AND     #$7F
         TAY
-        DEC     plot_static_sprite_L0072
+        DEC     sprite_rows_to_boundary
         BNE     L11D3
 
         DEC     plot_sprite_at_ptr
@@ -2008,7 +2008,7 @@ ORG     NATIVE_ADDR
         ADC     #$02
         STA     plot_sprite_at_ptr+1
         LDA     #$08
-        STA     plot_static_sprite_L0072
+        STA     sprite_rows_to_boundary
         TYA
         AND     #$7F
         TAY
@@ -4566,13 +4566,13 @@ ORG     NATIVE_ADDR
         ROR     force_vectorx_FRAC_LO
         LDA     player_xpos_FRAC
         SBC     midpoint_xpos_FRAC
-        STA     attach_pod_L0074
+        STA     attach_pod_delta_x_frac
         LDA     player_xpos_INT
         SBC     midpoint_xpos_INT
         STA     delta_x_shifted
-        ROL     attach_pod_L0074
+        ROL     attach_pod_delta_x_frac
         ROL     delta_x_shifted
-        ROL     attach_pod_L0074
+        ROL     attach_pod_delta_x_frac
         ROL     delta_x_shifted
         LDA     delta_x_shifted
         STA     delta_x_scaled
@@ -4585,7 +4585,7 @@ ORG     NATIVE_ADDR
         ROL     delta_y_frac
         ROL     delta_y_shifted
         LDA     delta_y_shifted
-        STA     attach_pod_L0073
+        STA     attach_pod_delta_y_scaled
         LDA     #$0A
         STA     angle_step_int
         LDA     #$AB
@@ -4686,7 +4686,7 @@ ORG     NATIVE_ADDR
         ROL     multiply_operand_a
         ROL     A
         ROL     multiply_operand_a
-        LDA     attach_pod_L0073
+        LDA     attach_pod_delta_y_scaled
         JSR     attach_pod_calculate_UNKNOWN
 
         LDA     multiply_result_lo
@@ -4834,11 +4834,11 @@ ORG     NATIVE_ADDR
         JMP     L21D7
 
 .plot_pod_loop
-        LDX     plot_pod_sprite_L0073
+        LDX     pod_sprite_data_index
         INX
 
 	.L21D7
-        STX     plot_pod_sprite_L0073
+        STX     pod_sprite_data_index
 
 	.L21D9
         LDA     LFFFF,X					; **SELF-MODIFIED CODE**
@@ -5701,7 +5701,7 @@ ORG     NATIVE_ADDR
 		
 	.particle_update_loop_X
         LDA     #$00
-        STA     particles_flag1
+        STA     particle_collision_flag
         LDA     particles_lifetime,X
         BPL     L28D3
 
@@ -5847,7 +5847,7 @@ ORG     NATIVE_ADDR
         PHA
         STA     particles_pixels_byte,X
         LDY     #$00
-        STY     particles_flag1
+        STY     particle_collision_flag
         EOR     (particle_write_ptr),Y
         STA     (particle_write_ptr),Y
         AND     particle_byte_mask
@@ -5855,7 +5855,7 @@ ORG     NATIVE_ADDR
         BEQ     L29B1
 
         LDA     #$FF
-        STA     particles_flag1
+        STA     particle_collision_flag
 		
 	.L29B1
         INY
@@ -5867,10 +5867,10 @@ ORG     NATIVE_ADDR
         BEQ     L29C1
 
         LDA     #$FF
-        STA     particles_flag1
+        STA     particle_collision_flag
 		
 	.L29C1
-        LDA     particles_flag1
+        LDA     particle_collision_flag
         BEQ     next_X2
 
         LDA     particles_type,X
@@ -6100,7 +6100,7 @@ ORG     NATIVE_ADDR
         LDX     #$9A
 	.clear_zp_game_vars
         LDA     #$00
-        STA     L0000,X						; 
+        STA     zp_base,X						; 
         DEX
         BNE     clear_zp_game_vars
 
@@ -6994,7 +6994,7 @@ ORG     NATIVE_ADDR
         PLA
 		
 	.L2F52
-        STA     pixels_ptr_pixel_byte
+        STA     pixel_colour_mask
         STA     draw_line_delta_major
         LDA     #LO(pixels_ptr_increment)
         STA     old_jmp_fn_LO						; **MODIFIES CODE**
@@ -7027,7 +7027,7 @@ ORG     NATIVE_ADDR
         ADC     #$01
 		
 	.L2F8E
-        STA     draw_line_L0071
+        STA     draw_line_delta_y_unused
         STA     draw_line_delta_minor
         CMP     draw_line_delta_major
         BCC     L2FAD
@@ -7053,7 +7053,7 @@ ORG     NATIVE_ADDR
         LDA     draw_line_delta_major
         CLC
         ROR     A
-        STA     draw_line_L0078
+        STA     bresenham_error
         LDX     draw_line_delta_major
         INX
 		
@@ -7071,7 +7071,7 @@ ORG     NATIVE_ADDR
         plot_line_bresenham_1_addr_LO   = plot_line_bresenham_1+1
         plot_line_bresenham_1_addr_HI   = plot_line_bresenham_1+2
 
-        LDA     draw_line_L0078
+        LDA     bresenham_error
         CLC
         ADC     draw_line_delta_minor
         BCS     plot_line_bresenham_2
@@ -7079,13 +7079,13 @@ ORG     NATIVE_ADDR
         CMP     draw_line_delta_major
         BCS     plot_line_bresenham_2
 
-        STA     draw_line_L0078
+        STA     bresenham_error
 \\ }
 \\ Fall through!
 
 .plot_line_pixels
 {
-        LDY     pixels_ptr_mask_index
+        LDY     pixel_column_index
         LDA     pixel_masks_1,Y
         AND     plot_line_pixels_byte
         LDY     #$00
@@ -7105,7 +7105,7 @@ ORG     NATIVE_ADDR
 .plot_line_bresenham_2
 {
         SBC     draw_line_delta_major
-        STA     draw_line_L0078
+        STA     bresenham_error
 }
 \\ Fall through!!
 		
@@ -7127,7 +7127,7 @@ ORG     NATIVE_ADDR
 {
         LDA     #$00
         STA     plot_pixels_ptr
-        STA     pixels_ptr_temp_L0079
+        STA     screen_addr_hi_temp
         LDA     draw_line_start_y
         CLC
         AND     #$F8
@@ -7145,10 +7145,10 @@ ORG     NATIVE_ADDR
         LDA     draw_line_start_x
         AND     #$FC
         ROL     A
-        ROL     pixels_ptr_temp_L0079
+        ROL     screen_addr_hi_temp
         ADC     plot_pixels_ptr
         STA     plot_pixels_ptr
-        LDA     pixels_ptr_temp_L0079
+        LDA     screen_addr_hi_temp
         ADC     plot_pixels_ptr+1
         STA     plot_pixels_ptr+1
         LDA     draw_line_start_y
@@ -7157,7 +7157,7 @@ ORG     NATIVE_ADDR
         STA     plot_pixels_ptr
         LDA     draw_line_start_x
         AND     #$03
-        STA     pixels_ptr_mask_index
+        STA     pixel_column_index
         RTS
 }
 
@@ -7192,7 +7192,7 @@ ORG     NATIVE_ADDR
         PHA
         LDA     plot_pixels_ptr+1
         PHA
-        LDA     pixels_ptr_mask_index
+        LDA     pixel_column_index
         PHA
         LDX     teleport_ring_count
 		
@@ -7236,7 +7236,7 @@ ORG     NATIVE_ADDR
         BNE     L3047
 
         PLA
-        STA     pixels_ptr_mask_index
+        STA     pixel_column_index
         PLA
         STA     plot_pixels_ptr+1
         PLA
@@ -7251,9 +7251,9 @@ ORG     NATIVE_ADDR
 
 .plot_teleport_pixels
 {
-        LDY     pixels_ptr_mask_index
+        LDY     pixel_column_index
         LDA     pixel_masks_1,Y
-        AND     pixels_ptr_pixel_byte
+        AND     pixel_colour_mask
         LDY     #$00
         EOR     (plot_pixels_ptr),Y
         STA     (plot_pixels_ptr),Y
@@ -7268,25 +7268,25 @@ ORG     NATIVE_ADDR
 .plot_teleport_effect_1
 {
         LDA     #$0F
-        STA     pixels_ptr_pixel_byte
+        STA     pixel_colour_mask
         LDA     old_plot_pixels_ptr
         STA     plot_pixels_ptr
         LDA     old_plot_pixels_ptr+1
         STA     plot_pixels_ptr+1
-        LDA     old_pixels_ptr_mask_index
-        STA     pixels_ptr_mask_index
+        LDA     old_pixel_column_index
+        STA     pixel_column_index
         JSR     plot_teleport_effect_2
 
         LDA     #$FF
-        STA     pixels_ptr_pixel_byte
+        STA     pixel_colour_mask
         LDA     teleport_screen_addr_LO
         STA     plot_pixels_ptr
-        LDA     teleport_effect_L0083
+        LDA     teleport_screen_addr_HI
         STA     plot_pixels_ptr+1
         BEQ     return
 
         LDA     current_obj_visible_flag
-        STA     pixels_ptr_mask_index
+        STA     pixel_column_index
         JSR     plot_teleport_effect_2
 
 	.return
@@ -7361,7 +7361,7 @@ ORG     NATIVE_ADDR
 
 .pixels_ptr_add_7
 {
-        LDY     pixels_ptr_mask_index
+        LDY     pixel_column_index
         INY
         CPY     #$04
         BNE     return
@@ -7375,7 +7375,7 @@ ORG     NATIVE_ADDR
         INC     plot_pixels_ptr+1
 
 	.return
-        STY     pixels_ptr_mask_index
+        STY     pixel_column_index
         RTS
 }
 
@@ -7386,13 +7386,13 @@ ORG     NATIVE_ADDR
 
 .pixels_ptr_sbc_8
 {
-        DEC     pixels_ptr_mask_index
+        DEC     pixel_column_index
         BMI     L3125
         RTS
 
 	.L3125
         LDY     #$03
-        STY     pixels_ptr_mask_index
+        STY     pixel_column_index
         SEC
         LDA     plot_pixels_ptr
         SBC     #$08
@@ -7728,8 +7728,8 @@ ORG     NATIVE_ADDR
         STA     old_plot_pixels_ptr
         LDA     plot_pixels_ptr+1
         STA     old_plot_pixels_ptr+1
-        LDA     pixels_ptr_mask_index
-        STA     old_pixels_ptr_mask_index
+        LDA     pixel_column_index
+        STA     old_pixel_column_index
         LDA     draw_line_end_x
         STA     draw_line_start_x
         LDA     draw_line_end_y
@@ -7741,15 +7741,15 @@ ORG     NATIVE_ADDR
         LDA     plot_pixels_ptr
         STA     teleport_screen_addr_LO
         LDA     plot_pixels_ptr+1
-        STA     teleport_effect_L0083
-        LDA     pixels_ptr_mask_index
+        STA     teleport_screen_addr_HI
+        LDA     pixel_column_index
         STA     current_obj_visible_flag
         PLA
         PHA
         BNE     L32CB
 
         LDA     #$00
-        STA     teleport_effect_L0083
+        STA     teleport_screen_addr_HI
 		
 	.L32CB
         JSR     do_teleport_animation
@@ -9591,7 +9591,7 @@ ORG     NATIVE_ADDR
 		
 	.zp_loop
         LDA     #$00
-        STA     L0000,X
+        STA     zp_base,X
         DEX
         BNE     zp_loop					; reset first $A7 entries of zero page to 0
 
