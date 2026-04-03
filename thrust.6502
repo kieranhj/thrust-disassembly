@@ -112,7 +112,7 @@ midpoint_ypos_INT_HI   = $000C					; integer part - additional upper 8 bits
 ship_angle   = $000D							; $00 = up, $10 = down, $1F = max angle
 old_plot_ship_at_ptr   = $000E					; remembers plot_ship_at_ptr
 old_plot_ship_at_ptr_HI   = $000F				; "
-old_plot_ship_L0075   = $0010					; remembers plot_ship_L0075
+old_plot_ship_pixel_column   = $0010					; remembers plot_ship_pixel_column
 old_plot_ship_sprite_number   = $0011			; remembers plot_ship_sprite_number
 force_vectorx_FRAC_LO   = $0012					; 
 force_vectorx_FRAC   = $0013					; 
@@ -159,7 +159,7 @@ generator_recharge_counter   = $003D			; number of ticks to recharge generator
 generator_recharge_increase   = $003E			; increase in time between recharges after each hit
 old_plot_pod_sprite_at_ptr   = $003F			;
 old_plot_pod_sprite_at_ptr_HI   = $0040			;
-old_plot_pod_L0076   = $0041					;
+old_pod_pixel_column   = $0041					;
 player_ship_destroyed_flag   = $0042			; set to $FF during init, 0 or 1 at other times
 level_ended_flag   = $0043						; set to 0 each tick, set to $FF in one place - suspect collision / death?
 pod_destroying_player_timer   = $0044			; set to $FF during init, otherwise counts down during explode?
@@ -217,18 +217,18 @@ terrain_y_count_inner   = $0070
 plot_sprite_at_ptr   = $0070
 calc_force_vectory_FRAC   = $0070
 pixels_ptr_pixel_byte	= $0070
-plot_pod_L0070   = $0070						; **NEEDS TO BE IDENTIFIED**
-plot_ship_L0070   = $0070						; **NEEDS TO BE IDENTIFIED**
+plot_pod_xpos_FRAC   = $0070						; pod fractional X position in viewport
+plot_ship_row_counter   = $0070						; rows remaining before character row boundary
 
 value_HI = $0071								; in bootstrap code
 terrain_y_count_outer   = $0071
 calc_force_vectory_INT   = $0071
 plot_ship_at_y_offset   = $0071
 new_ship_xpos_FRAC   = $0071
-attach_pod_L0071   = $0071						; **NEEDS TO BE IDENTIFIED**
+best_distance   = $0071						; minimum distance found during angle search
 draw_line_L0071	= $0071							; only appears once - is this unused or another variable?
-particles_L0071   = $0071						; **NEEDS TO BE IDENTIFIED**
-plot_pod_L0071   = $0071						; **NEEDS TO BE IDENTIFIED**
+particle_screen_x   = $0071						; particle X position relative to window
+plot_pod_xpos_INT   = $0071						; pod integer X position (character column)
 
 boot_write_ptr   = $0072						; in bootstrap code
 terrain_draw_start_x   = $0072		
@@ -238,16 +238,16 @@ calc_force_vectorx_FRAC   = $0072
 plot_ship_at_ptr   = $0072						; address LO
 new_ship_xpos_INT   = $0072
 plot_pixels_ptr	= $0072
-attach_pod_L0072   = $0072						; **NEEDS TO BE IDENTIFIED**
-particles_L0072   = $0072						; **NEEDS TO BE IDENTIFIED**
-plot_pod_L0072	= $0072							; **NEEDS TO BE IDENTIFIED**
-tractor_beam_L0072	= $0072						; **NEEDS TO BE IDENTIFIED**
+delta_x_scaled   = $0072						; scaled X displacement (player-to-midpoint) for force calc
+particle_screen_y   = $0072						; particle Y position relative to window
+plot_pod_ypos_INT	= $0072							; pod integer Y position in viewport
+ship_to_pod_dx_FRAC	= $0072						; fractional X delta in ship-to-pod distance calc
 
 calc_force_vectorx_INT   = $0073
 attach_pod_L0073   = $0073	
 plot_pod_sprite_L0073   = $0073
 new_ship_ypos_FRAC   = $0073
-obj_vis_L0073   = $0073							; **NEEDS TO BE IDENTIFIED**
+obj_screen_x   = $0073							; object X position relative to window
 
 terrain_draw_wall_index   = $0074
 attach_pod_L0074   = $0074
@@ -255,14 +255,14 @@ pod_sprite_ptr_LO   = $0074
 new_ship_ypos_INT   = $0074
 particle_write_ptr	= $0074
 pixels_ptr_mask_index	= $0074
-obj_vis_L0074   = $0074							; **NEEDS TO BE IDENTIFIED**
+obj_screen_y   = $0074							; object Y position relative to window
 
 pod_sprite_ptr_HI   = $0075
-plot_ship_L0075   = $0075						; **NEEDS TO BE IDENTIFIED**
-attach_pod_L0075   = $0075						; **NEEDS TO BE IDENTIFIED**
-calc_player_ypos_INT_HI   = $0075				; **NEEDS TO BE IDENTIFIED**
-draw_line_L0075	= $0075							; **NEEDS TO BE IDENTIFIED**
-obj_vis_L0075   = $0075							; **NEEDS TO BE IDENTIFIED**
+plot_ship_pixel_column   = $0075						; sub-character X pixel offset (0-3) in MODE 5
+delta_x_shifted   = $0075						; ship-to-midpoint X delta, shifted left 2 bits
+new_ship_ypos_INT_HI   = $0075				; high byte of newly calculated ship Y position
+draw_line_delta_major	= $0075							; Bresenham major axis delta
+obj_screen_y_hi   = $0075							; high byte of obj Y offset (non-zero = offscreen)
 
 terrain_draw_addr_LO   = $0076
 plot_ship_sprite_number		= $0076				; which ship sprite to plot (0 - $10) or shield ($11)
@@ -270,56 +270,56 @@ explosion_dx_FRAC   = $0076
 particle_pixel_byte   = $0076
 rnd_AND_3   = $0076
 score_value	= $0076
-attach_pod_L0076   = $0076						; **NEEDS TO BE IDENTIFIED**
-draw_line_L0076	= $0076							; **NEEDS TO BE IDENTIFIED**
-obj_vis_L0076   = $0076							; **NEEDS TO BE IDENTIFIED**
-plot_pod_L0076   = $0076						; **NEEDS TO BE IDENTIFIED**
+delta_y_frac   = $0076						; fractional Y displacement intermediate
+draw_line_delta_minor	= $0076							; Bresenham minor axis delta
+obj_scraddr_y_lo   = $0076							; screen addr low byte from Y row calc
+pod_pixel_column   = $0076						; pixel column offset (0-3) within MODE 5 byte
 
 terrain_draw_addr_HI   = $0077					; stores HI byte of address to draw landscape at
 plot_pod_sprite_at_ptr   = $0077
 explosion_dx_INT   = $0077
 calc_ship_window_xpos_INT	= $0077
-attach_pod_L0077   = $0077						; **NEEDS TO BE IDENTIFIED**
-obj_vis_L0077   = $0077							; **NEEDS TO BE IDENTIFIED**
-particles_L0077   = $0077						; **NEEDS TO BE IDENTIFIED**
+delta_y_shifted   = $0077						; ship-to-midpoint Y delta, shifted left 1 bit
+obj_scraddr_y_hi   = $0077							; screen addr high byte from Y char row
+particle_temp_clear_77   = $0077						; cleared at particle loop start (shared ZP temp)
 
 terrain_xpos_1_clipped   = $0078
 explosion_dy_FRAC   = $0078
 draw_line_L0078	= $0078
 ship_thrust_x_INT   = $0078
-attach_pod_L0078   = $0078						; **NEEDS TO BE IDENTIFIED**
-obj_vis_L0078   = $0078							; **NEEDS TO BE IDENTIFIED**
+search_inner_count   = $0078						; inner loop counter (4 angle candidates per refinement)
+obj_pixel_row   = $0078							; pixel row within character cell (0-7)
 
 terrain_xpos_2_clipped   = $0079
 ship_window_ypos_FRAC	= $0079
 explosion_dy_INT   = $0079
 pixels_ptr_temp_L0079	= $0079
-obj_vis_L0079   = $0079							; **NEEDS TO BE IDENTIFIED**
-particles_L0079   = $0079						; **NEEDS TO BE IDENTIFIED**
-plot_pod_L0079	= $0079							; **NEEDS TO BE IDENTIFIED**
-ship_thrust_L0079   = $0079						; **NEEDS TO BE IDENTIFIED**
+obj_scraddr_x_hi   = $0079							; screen addr high byte overflow from X column
+particle_temp_clear_79   = $0079						; cleared at particle loop start (shared ZP temp)
+pod_screen_addr_LO	= $0079							; saved screen addr low byte for pod erase
+thrust_sign_extend   = $0079						; sign extension ($00/$FF) for thrust accumulation
 
 plot_ship_index   = $007A
 current_object   = $007A
 ship_thrust_x_FRAC   = $007A
-attach_pod_L007A   = $007A						; **NEEDS TO BE IDENTIFIED**
-plot_pod_L007A   = $007A						; **NEEDS TO BE IDENTIFIED**
-pod_vector_L007A   = $007A						; **NEEDS TO BE IDENTIFIED**
+angle_step_frac   = $007A						; fractional part of angle search step size
+pod_screen_addr_HI   = $007A						; saved screen addr high byte for pod erase
+pod_angle_sub_frac   = $007A						; sub-angle fraction for pod vector interpolation
 
 terrain_draw_table_index   = $007B
 obj_plot_sprite_at_ptr	= $007B
 prev_angle_var_B	= $007B
 calc_ship_delta_FRAC	= $007B
 particles_flag1   = $007B
-attach_pod_L007B	= $007B						; **NEEDS TO BE IDENTIFIED**
-plot_pod_L007B   = $007B						; **NEEDS TO BE IDENTIFIED**
-teleport_L007B   = $007B						; **NEEDS TO BE IDENTIFIED**
+angle_step_int	= $007B						; integer part of angle search step size
+pod_temp   = $007B						; scratch variable (Y-pos carry / sprite column calc)
+teleport_row_count   = $007B						; row loop counter for teleport diamond drawing
 
 prev_angle_var_C	= $007C
 calc_ship_delta_INT	= $007C
 particle_byte_mask	= $007C
 plot_pod_sprite_y_offset	= $007C
-attach_pod_L007C	= $007C						; **NEEDS TO BE IDENTIFIED**
+search_iterations	= $007C						; outer loop counter (7 refinement levels)
 
 prev_angle_var_A	= $007D
 particle_masked_pixels	= $007D
@@ -328,7 +328,7 @@ current_obj_xpos_INT	= $007D
 temp_angle_ship_to_pod	= $007E
 player_to_particle_deltay_INT	= $007E
 current_obj_ypos_INT	= $007E
-ship_thrust_L007E	= $007E						; **NEEDS TO BE IDENTIFIED**
+thrust_angle_sub_frac	= $007E						; sub-angle fraction for thrust vector interpolation
 
 calc_force_vectorx_FRAC_LO	= $007F
 explosion_particle_count	= $007F
@@ -347,14 +347,14 @@ old_plot_pixels_ptr   = $0080
 update_objects_flag   = $0080
 
 current_object_width   = $0081
-door_logic_L0081   = $0081						; **NEEDS TO BE IDENTIFIED**
+door_screen_ypos   = $0081						; door Y position in screen coordinates
 
 relocate_dest_ptr = $0082						; in relocation code
 high_score_ptr_B   = $0082						; new high score only
 level_reset_ptr2   = $0082
 current_object_height   = $0082							
 plot_high_score_number   = $0082
-teleport_effect_L0082	= $0082					; **NEEDS TO BE IDENTIFIED**
+teleport_screen_addr_LO	= $0082					; saved low byte of screen addr for teleport effect
 
 object_type   = $0083							
 teleport_effect_L0083	= $0083
@@ -362,40 +362,40 @@ teleport_effect_L0083	= $0083
 high_score_counter   = $0084					; new high score only
 level_reset_size   = $0084							
 old_pixels_ptr_mask_index   = $0084
-gun_param_L0084   = $0084						; **NEEDS TO BE IDENTIFIED**
+gun_base_angle   = $0084						; gun emplacement base firing angle
 
 current_obj_visible_flag   = $0085
 high_score_ptr_C   = $0085
 
-gun_param_L0086   = $0086						; **NEEDS TO BE IDENTIFIED**
-teleport_L0086   = $0086						; **NEEDS TO BE IDENTIFIED**
+gun_angle_spread_mask   = $0086						; bit mask controlling gun firing spread
+teleport_ring_count   = $0086						; current ring size in teleport diamond animation
 
 score_accumulation   = $0087
 teleport_appear_or_disappear   = $0087			; $00 = appear, $FF = disappear
 
 explosion_xpos_FRAC   = $0088
 draw_line_start_x   = $0088
-attach_pod_L0088   = $0088						; **NEEDS TO BE IDENTIFIED**
+multiply_operand_a   = $0088						; multiplier input for signed 8x8 multiply
 
 draw_line_start_y   = $0089
 explosion_xpos_INT   = $0089
-attach_pod_L0089   = $0089						; **NEEDS TO BE IDENTIFIED**
+multiply_result_lo   = $0089						; low byte of 8x8 multiply result
 
 draw_line_end_x   = $008A
 explosion_ypos_INT   = $008A
-attach_pod_L008A   = $008A						; **NEEDS TO BE IDENTIFIED**
+multiply_result_hi   = $008A						; high byte of 8x8 multiply result
 
 draw_line_end_y   = $008B
 explosion_ypos_INT_HI  = $008B
-attach_pod_L008B   = $008B						; **NEEDS TO BE IDENTIFIED**
+multiply_operand_b   = $008B						; multiplicand input, shifted during multiply
 
 plot_line_pixels_byte   = $008C
 explosion_angle   = $008C
-attach_pod_L008C   = $008C						; **NEEDS TO BE IDENTIFIED**
+multiply_sign_ext   = $008C						; sign extension of multiplicand (high byte in shift-add)
 
 explosion_particle_type   = $008D
-attach_pod_L008E   = $008E						; **NEEDS TO BE IDENTIFIED**
-attach_pod_L008F   = $008F						; **NEEDS TO BE IDENTIFIED**
+cross_product_term_lo   = $008E						; saved low byte of first multiply for cross product
+cross_product_term_hi   = $008F						; saved high byte of first multiply for cross product
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -1378,12 +1378,12 @@ ORG     NATIVE_ADDR
 {
         PHA
         AND     #$1C
-        STA     gun_param_L0084
+        STA     gun_base_angle
         PLA
         AND     #$03
         TAY
         LDA     gun_param_table,Y
-        STA     gun_param_L0086
+        STA     gun_angle_spread_mask
         LDY     object_type
         CPY     #OBJECT_pod_stand
         BNE     L0E29
@@ -1722,8 +1722,8 @@ ORG     NATIVE_ADDR
         AND     #$03
         STA     rnd_AND_3
         LDA     rnd_B
-        AND     gun_param_L0086
-        ADC     gun_param_L0084
+        AND     gun_angle_spread_mask
+        ADC     gun_base_angle
         ADC     rnd_AND_3
         AND     #$1F
         TAY
@@ -1852,18 +1852,18 @@ ORG     NATIVE_ADDR
         SEC
         LDA     current_obj_ypos_INT
         SBC     window_ypos_INT
-        STA     obj_vis_L0074
+        STA     obj_screen_y
         LDA     current_obj_ypos_EXT
         SBC     window_ypos_EXT
-        STA     obj_vis_L0075
+        STA     obj_screen_y_hi
         BNE     L1126
 
         LDA     #$01
         STA     current_obj_visible_flag
         SEC
-        LDA     obj_vis_L0074
+        LDA     obj_screen_y
         SBC     #$38
-        STA     obj_vis_L0074
+        STA     obj_screen_y
         CMP     #$11
         BCC     L1126
 
@@ -1874,7 +1874,7 @@ ORG     NATIVE_ADDR
         SEC
         LDA     current_obj_xpos_INT
         SBC     window_xpos_INT
-        STA     obj_vis_L0073
+        STA     obj_screen_x
         CMP     object_type_cull_size_table,Y
         BCC     calculate_object_plot_addr
 
@@ -1901,7 +1901,7 @@ ORG     NATIVE_ADDR
         LDA     current_object
         BNE     L1160
 
-        LDA     obj_vis_L0074
+        LDA     obj_screen_y
         SEC
         SBC     window_scroll_y
         ROL     A
@@ -1909,7 +1909,7 @@ ORG     NATIVE_ADDR
         SBC     #$05
         STA     pod_window_ypos_INT
         SEC
-        LDA     obj_vis_L0073
+        LDA     obj_screen_x
         SBC     #$02
         SEC
         SBC     window_scroll_x
@@ -1929,38 +1929,38 @@ ORG     NATIVE_ADDR
 
 	.L1160
         CLC
-        ROL     obj_vis_L0074
+        ROL     obj_screen_y
         LDY     #$00
-        STY     obj_vis_L0076
-        STY     obj_vis_L0079
-        LDA     obj_vis_L0074
+        STY     obj_scraddr_y_lo
+        STY     obj_scraddr_x_hi
+        LDA     obj_screen_y
         AND     #$07
-        STA     obj_vis_L0078
-        LDA     obj_vis_L0074
+        STA     obj_pixel_row
+        LDA     obj_screen_y
         LSR     A
         LSR     A
         AND     #$FE
-        STA     obj_vis_L0077
+        STA     obj_scraddr_y_hi
         LSR     A
         LSR     A
-        ROR     obj_vis_L0076
+        ROR     obj_scraddr_y_lo
         LSR     A
-        ROR     obj_vis_L0076
-        ADC     obj_vis_L0077
+        ROR     obj_scraddr_y_lo
+        ADC     obj_scraddr_y_hi
         ADC     #$38
         TAX
-        LDA     obj_vis_L0073
+        LDA     obj_screen_x
         ASL     A
         ASL     A
-        ROL     obj_vis_L0079
+        ROL     obj_scraddr_x_hi
         ASL     A
-        ROL     obj_vis_L0079
+        ROL     obj_scraddr_x_hi
         AND     #$F8
-        ADC     obj_vis_L0078
-        ADC     obj_vis_L0076
+        ADC     obj_pixel_row
+        ADC     obj_scraddr_y_lo
         STA     obj_plot_sprite_at_ptr
         TXA
-        ADC     obj_vis_L0079
+        ADC     obj_scraddr_x_hi
         STA     obj_plot_sprite_at_ptr+1
         RTS
 }
@@ -2545,48 +2545,48 @@ ORG     NATIVE_ADDR
 
 .attach_pod_calculate_UNKNOWN
 {
-        STA     attach_pod_L008B
+        STA     multiply_operand_b
         LDA     #$00
-        STA     attach_pod_L0089
-        STA     attach_pod_L008A
-        STA     attach_pod_L008C
-        LDA     attach_pod_L0088
+        STA     multiply_result_lo
+        STA     multiply_result_hi
+        STA     multiply_sign_ext
+        LDA     multiply_operand_a
         BPL     L16F2
 
         EOR     #$FF
-        STA     attach_pod_L0088
-        INC     attach_pod_L0088
-        LDA     attach_pod_L008B
+        STA     multiply_operand_a
+        INC     multiply_operand_a
+        LDA     multiply_operand_b
         EOR     #$FF
-        STA     attach_pod_L008B
-        INC     attach_pod_L008B
+        STA     multiply_operand_b
+        INC     multiply_operand_b
 
 	.L16F2
-        LDA     attach_pod_L008B
+        LDA     multiply_operand_b
         BPL     L16FA
 
         LDA     #$FF
-        STA     attach_pod_L008C
+        STA     multiply_sign_ext
 
 	.L16FA
         LDX     #$08
 
 	.L16FC
-        ROR     attach_pod_L0088
+        ROR     multiply_operand_a
         BCC     L170D
 
-        LDA     attach_pod_L008B
+        LDA     multiply_operand_b
         CLC
-        ADC     attach_pod_L0089
-        STA     attach_pod_L0089
-        LDA     attach_pod_L008C
-        ADC     attach_pod_L008A
-        STA     attach_pod_L008A
+        ADC     multiply_result_lo
+        STA     multiply_result_lo
+        LDA     multiply_sign_ext
+        ADC     multiply_result_hi
+        STA     multiply_result_hi
 
 	.L170D
         CLC
-        ROL     attach_pod_L008B
-        ROL     attach_pod_L008C
+        ROL     multiply_operand_b
+        ROL     multiply_sign_ext
         DEX
         BNE     L16FC
 
@@ -2930,12 +2930,12 @@ ORG     NATIVE_ADDR
         SEC
         LDA     #$69
         SBC     window_ypos_INT
-        STA     door_logic_L0081
+        STA     door_screen_ypos
         LDA     #$02
         SBC     window_ypos_EXT
         BNE     return
 
-        LDA     door_logic_L0081
+        LDA     door_screen_ypos
         CMP     #$F1
         BCC     L18AF
 
@@ -2962,7 +2962,7 @@ ORG     NATIVE_ADDR
         LDA     #$AE
         SBC     door_switch_counter_B
         PHA
-        LDA     door_logic_L0081
+        LDA     door_screen_ypos
         CLC
         ADC     terrain_window_y_index
         TAY
@@ -2988,12 +2988,12 @@ ORG     NATIVE_ADDR
         SEC
         LDA     #$43
         SBC     window_ypos_INT
-        STA     door_logic_L0081
+        STA     door_screen_ypos
         LDA     #$03
         SBC     window_ypos_EXT
         BNE     return
 
-        LDA     door_logic_L0081
+        LDA     door_screen_ypos
         CMP     #$E9
         BCC     L18EE
 
@@ -3016,7 +3016,7 @@ ORG     NATIVE_ADDR
         INC     door_switch_counter_B
 		
 	.L1901
-        LDA     door_logic_L0081
+        LDA     door_screen_ypos
         CLC
         ADC     terrain_window_y_index
         CLC
@@ -3050,12 +3050,12 @@ ORG     NATIVE_ADDR
         SEC
         LDA     #$70
         SBC     window_ypos_INT
-        STA     door_logic_L0081
+        STA     door_screen_ypos
         LDA     #$03
         SBC     window_ypos_EXT
         BNE     return
 
-        LDA     door_logic_L0081
+        LDA     door_screen_ypos
         CMP     #$EF
         BCC     L1931
 
@@ -3082,7 +3082,7 @@ ORG     NATIVE_ADDR
         LDA     #$C0
         SBC     door_switch_counter_B
         PHA
-        LDA     door_logic_L0081
+        LDA     door_screen_ypos
         CLC
         ADC     terrain_window_y_index
         TAY
@@ -3784,17 +3784,17 @@ ORG     NATIVE_ADDR
 
 	.L1C11
         LDA     #$00
-        STA     ship_thrust_L0079
+        STA     thrust_sign_extend
         SEC
         SBC     angle_var_B_accumulate
-        STA     ship_thrust_L007E
+        STA     thrust_angle_sub_frac
         LDA     ship_angle
         SBC     angle_ship_to_pod
         TAY
-        LDA     ship_thrust_L007E
+        LDA     thrust_angle_sub_frac
         CLC
         ADC     #$08
-        STA     ship_thrust_L007E
+        STA     thrust_angle_sub_frac
         TYA
         ADC     #$00
         AND     #$1F
@@ -3806,7 +3806,7 @@ ORG     NATIVE_ADDR
         LDX     #$0E
 		
 	.L1C38
-        LDA     ship_thrust_L007E
+        LDA     thrust_angle_sub_frac
         AND     #$F0
         CMP     lookup_top_nibble,X
         BNE     L1C46
@@ -3835,7 +3835,7 @@ ORG     NATIVE_ADDR
         BPL     L1C67
 
         LDA     #$FF
-        STA     ship_thrust_L0079
+        STA     thrust_sign_extend
 		
 	.L1C67
         CLC
@@ -3849,7 +3849,7 @@ ORG     NATIVE_ADDR
         STA     angle_var_B
         LDA     angle_var_C
         STA     prev_angle_var_C
-        ADC     ship_thrust_L0079
+        ADC     thrust_sign_extend
         STA     angle_var_C
         LDA     prev_angle_var_C
         LDX     #$06
@@ -4083,8 +4083,8 @@ ORG     NATIVE_ADDR
 		
         LDA     old_plot_ship_sprite_number
         STA     plot_ship_sprite_number
-        LDA     old_plot_ship_L0075
-        STA     plot_ship_L0075
+        LDA     old_plot_ship_pixel_column
+        STA     plot_ship_pixel_column
 		
         JSR     plot_ship_or_sheild
 
@@ -4170,11 +4170,11 @@ ORG     NATIVE_ADDR
         ROL     A
         ROL     A
         AND     #$03
-        STA     plot_ship_L0075
-        STA     old_plot_ship_L0075
+        STA     plot_ship_pixel_column
+        STA     old_plot_ship_pixel_column
         LDA     #$00
         STA     plot_ship_at_ptr
-        STA     plot_ship_L0070
+        STA     plot_ship_row_counter
         LDA     ship_window_ypos_INT
         CLC
         AND     #$F8
@@ -4230,7 +4230,7 @@ ORG     NATIVE_ADDR
 \ ******************************************************************************
 \ * Function: plot_ship_or_sheild
 \ * Params: plot_ship_at_ptr = screen address to plot sprite,
-\ * plot_ship_L0075, plot_ship_sprite_number = ?
+\ * plot_ship_pixel_column, plot_ship_sprite_number = ?
 \ * Description: <>
 \ ******************************************************************************
 
@@ -4280,7 +4280,7 @@ ORG     NATIVE_ADDR
         LDA     plot_ship_at_ptr
         AND     #$07
         EOR     #$07
-        STA     plot_ship_L0070
+        STA     plot_ship_row_counter
         LDX     #$00
         JMP     plot_ship_start
 }
@@ -4311,7 +4311,7 @@ ORG     NATIVE_ADDR
         EOR     #$1F					; **SELF-MODIFIED CODE**
         plot_ship_write_value   = plot_ship_write_opcode+1
 
-        ADC     plot_ship_L0075
+        ADC     plot_ship_pixel_column
         TAY
         AND     #$3C
         ROL     A
@@ -4342,7 +4342,7 @@ ORG     NATIVE_ADDR
         BEQ     plot_ship_return
 
         LDX     plot_ship_index
-        DEC     plot_ship_L0070
+        DEC     plot_ship_row_counter
         BMI     L1F35
 
         INC     plot_ship_at_ptr
@@ -4358,7 +4358,7 @@ ORG     NATIVE_ADDR
 
 	.L1F35
         LDA     #$07
-        STA     plot_ship_L0070
+        STA     plot_ship_row_counter
         CLC
         LDA     plot_ship_at_ptr
         ADC     #$39
@@ -4390,7 +4390,7 @@ ORG     NATIVE_ADDR
         LDA     angle_var_B_accumulate
         CLC
         ADC     #$08
-        STA     pod_vector_L007A
+        STA     pod_angle_sub_frac
         LDA     angle_ship_to_pod
         ADC     #$00
         AND     #$1F
@@ -4406,7 +4406,7 @@ ORG     NATIVE_ADDR
         LDX     top_nibble_index
 		
 	.L1F75
-        LDA     pod_vector_L007A
+        LDA     pod_angle_sub_frac
         AND     #$F0
         CMP     lookup_top_nibble,X
         BNE     L1F83
@@ -4569,38 +4569,38 @@ ORG     NATIVE_ADDR
         STA     attach_pod_L0074
         LDA     player_xpos_INT
         SBC     midpoint_xpos_INT
-        STA     attach_pod_L0075
+        STA     delta_x_shifted
         ROL     attach_pod_L0074
-        ROL     attach_pod_L0075
+        ROL     delta_x_shifted
         ROL     attach_pod_L0074
-        ROL     attach_pod_L0075
-        LDA     attach_pod_L0075
-        STA     attach_pod_L0072
+        ROL     delta_x_shifted
+        LDA     delta_x_shifted
+        STA     delta_x_scaled
         LDA     player_ypos_FRAC
         SBC     midpoint_ypos_FRAC
-        STA     attach_pod_L0076
+        STA     delta_y_frac
         LDA     player_ypos_INT
         SBC     midpoint_ypos_INT
-        STA     attach_pod_L0077
-        ROL     attach_pod_L0076
-        ROL     attach_pod_L0077
-        LDA     attach_pod_L0077
+        STA     delta_y_shifted
+        ROL     delta_y_frac
+        ROL     delta_y_shifted
+        LDA     delta_y_shifted
         STA     attach_pod_L0073
         LDA     #$0A
-        STA     attach_pod_L007B
+        STA     angle_step_int
         LDA     #$AB
-        STA     attach_pod_L007A
+        STA     angle_step_frac
         LDA     #$07
-        STA     attach_pod_L007C
+        STA     search_iterations
         LDA     #$00
         STA     angle_var_B_accumulate
         STA     angle_ship_to_pod
 		
 	.L207E
         LDA     #$FF
-        STA     attach_pod_L0071
+        STA     best_distance
         LDX     #$03
-        STX     attach_pod_L0078
+        STX     search_inner_count
 		
 	.L2086
         JSR     calculate_attached_pod_vector
@@ -4613,30 +4613,30 @@ ORG     NATIVE_ADDR
         ROL     midpoint_deltay_INT
         SEC
         LDA     midpoint_deltax_INT
-        SBC     attach_pod_L0075
+        SBC     delta_x_shifted
         BPL     L20A0
 
         EOR     #$FF
         ADC     #$01
 		
 	.L20A0
-        STA     attach_pod_L0088
+        STA     multiply_operand_a
         SEC
         LDA     midpoint_deltay_INT
-        SBC     attach_pod_L0077
+        SBC     delta_y_shifted
         BPL     L20AD
 
         EOR     #$FF
         ADC     #$01
 		
 	.L20AD
-        STA     attach_pod_L0089
+        STA     multiply_result_lo
         JSR     get_distance_ship_to_pod_tractor_ext
 
-        CMP     attach_pod_L0071
+        CMP     best_distance
         BCS     L20C0
 
-        STA     attach_pod_L0071
+        STA     best_distance
         LDA     angle_var_B_accumulate
         STA     prev_angle_var_A
         LDA     angle_ship_to_pod
@@ -4645,13 +4645,13 @@ ORG     NATIVE_ADDR
 	.L20C0
         CLC
         LDA     angle_var_B_accumulate
-        ADC     attach_pod_L007A
+        ADC     angle_step_frac
         STA     angle_var_B_accumulate
         LDA     angle_ship_to_pod
-        ADC     attach_pod_L007B
+        ADC     angle_step_int
         AND     #$1F
         STA     angle_ship_to_pod
-        DEC     attach_pod_L0078
+        DEC     search_inner_count
         BNE     L2086
 
         LDA     prev_angle_var_A
@@ -4659,60 +4659,60 @@ ORG     NATIVE_ADDR
         LDA     temp_angle_ship_to_pod
         STA     angle_ship_to_pod
         CLC
-        ROR     attach_pod_L007B
-        ROR     attach_pod_L007A
-        DEC     attach_pod_L007C
+        ROR     angle_step_int
+        ROR     angle_step_frac
+        DEC     search_iterations
         BEQ     L20F6
 
         SEC
         LDA     angle_var_B_accumulate
-        SBC     attach_pod_L007A
+        SBC     angle_step_frac
         STA     angle_var_B_accumulate
         LDA     angle_ship_to_pod
-        SBC     attach_pod_L007B
+        SBC     angle_step_int
         AND     #$1F
         STA     angle_ship_to_pod
         JMP     L207E
 
 	.L20F6
         LDA     force_vectorx_INT
-        STA     attach_pod_L0088
+        STA     multiply_operand_a
         LDA     force_vectorx_FRAC
         ROL     A
-        ROL     attach_pod_L0088
+        ROL     multiply_operand_a
         ROL     A
-        ROL     attach_pod_L0088
+        ROL     multiply_operand_a
         ROL     A
-        ROL     attach_pod_L0088
+        ROL     multiply_operand_a
         ROL     A
-        ROL     attach_pod_L0088
+        ROL     multiply_operand_a
         LDA     attach_pod_L0073
         JSR     attach_pod_calculate_UNKNOWN
 
-        LDA     attach_pod_L0089
-        STA     attach_pod_L008E
-        LDA     attach_pod_L008A
-        STA     attach_pod_L008F
+        LDA     multiply_result_lo
+        STA     cross_product_term_lo
+        LDA     multiply_result_hi
+        STA     cross_product_term_hi
         LDA     force_vectory_INT
-        STA     attach_pod_L0088
+        STA     multiply_operand_a
         LDA     force_vectory_FRAC
         ROL     A
-        ROL     attach_pod_L0088
+        ROL     multiply_operand_a
         ROL     A
-        ROL     attach_pod_L0088
+        ROL     multiply_operand_a
         ROL     A
-        ROL     attach_pod_L0088
+        ROL     multiply_operand_a
         ROL     A
-        ROL     attach_pod_L0088
-        LDA     attach_pod_L0072
+        ROL     multiply_operand_a
+        LDA     delta_x_scaled
         JSR     attach_pod_calculate_UNKNOWN
 
         SEC
-        LDA     attach_pod_L0089
-        SBC     attach_pod_L008E
+        LDA     multiply_result_lo
+        SBC     cross_product_term_lo
         STA     angle_var_B
-        LDA     attach_pod_L008A
-        SBC     attach_pod_L008F
+        LDA     multiply_result_hi
+        SBC     cross_product_term_hi
         PHA
         ROL     A
         PLA
@@ -4746,7 +4746,7 @@ ORG     NATIVE_ADDR
         LDA     #$00
         STA     window_xpos_INT
         STA     window_ypos_EXT
-        STA     plot_ship_L0075
+        STA     plot_ship_pixel_column
         JSR     plot_ship_or_sheild
 
 	.loop
@@ -4773,8 +4773,8 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Function: plot_pod_sprite
-\ * Params: plot_pod_L0070 = ?,plot_pod_L0071 = ?,
-\ * plot_pod_L0072 = ?
+\ * Params: plot_pod_xpos_FRAC = ?,plot_pod_xpos_INT = ?,
+\ * plot_pod_ypos_INT = ?
 \ * Description: <>
 \ ******************************************************************************
 
@@ -4782,16 +4782,16 @@ ORG     NATIVE_ADDR
 \\ {
         JSR     set_plot_pod_sprite_mask_addr
 
-        LDA     plot_pod_L0070
+        LDA     plot_pod_xpos_FRAC
         ROL     A
         ROL     A
         ROL     A
         AND     #$03
-        STA     plot_pod_L0076
+        STA     pod_pixel_column
         LDA     #$00
         STA     plot_pod_sprite_at_ptr
-        STA     plot_pod_L007B
-        LDA     plot_pod_L0072
+        STA     pod_temp
+        LDA     plot_pod_ypos_INT
         CLC
         AND     #$F8
         ROR     A
@@ -4805,19 +4805,19 @@ ORG     NATIVE_ADDR
         ADC     #$38
         ADC     plot_pod_sprite_at_ptr+1
         STA     plot_pod_sprite_at_ptr+1
-        LDY     plot_pod_L0071
+        LDY     plot_pod_xpos_INT
         LDA     mult_by_8_LO,Y
         ADC     plot_pod_sprite_at_ptr
         STA     plot_pod_sprite_at_ptr
         LDA     mult_by_8_HI,Y
         ADC     plot_pod_sprite_at_ptr+1
         STA     plot_pod_sprite_at_ptr+1
-        STA     plot_pod_L007A
-        LDA     plot_pod_L0072
+        STA     pod_screen_addr_HI
+        LDA     plot_pod_ypos_INT
         AND     #$07
         ADC     plot_pod_sprite_at_ptr
         STA     plot_pod_sprite_at_ptr
-        STA     plot_pod_L0079
+        STA     pod_screen_addr_LO
 
 	.L21B6
         JSR     set_plot_pod_sprite_mask_addr
@@ -4848,12 +4848,12 @@ ORG     NATIVE_ADDR
 
 	.L21DE
         CLC
-        ADC     plot_pod_L0076
-        STA     plot_pod_L007B
+        ADC     pod_pixel_column
+        STA     pod_temp
         AND     #$3C
         ROL     A
         STA     plot_pod_sprite_y_offset
-        LDA     plot_pod_L007B
+        LDA     pod_temp
         AND     #$03
         TAX
 
@@ -4975,8 +4975,8 @@ ORG     NATIVE_ADDR
         STA     plot_pod_sprite_at_ptr
         LDA     old_plot_pod_sprite_at_ptr+1
         STA     plot_pod_sprite_at_ptr+1
-        LDA     old_plot_pod_L0076
-        STA     plot_pod_L0076
+        LDA     old_pod_pixel_column
+        STA     pod_pixel_column
         LDX     #$03
         JSR     L21B6
 
@@ -4998,23 +4998,23 @@ ORG     NATIVE_ADDR
         SEC
         LDA     midpoint_ypos_FRAC
         SBC     midpoint_deltay_FRAC
-        STA     plot_pod_L007B
+        STA     pod_temp
         LDA     midpoint_window_ypos_INT
         SBC     midpoint_deltay_INT
-        ROL     plot_pod_L007B
+        ROL     pod_temp
         ROL     A
-        STA     plot_pod_L0072
+        STA     plot_pod_ypos_INT
         STA     pod_window_ypos_INT
         SEC
         LDA     midpoint_xpos_FRAC_LO
         SBC     midpoint_deltax_FRAC_LO
         LDA     midpoint_xpos_FRAC
         SBC     midpoint_deltax_FRAC
-        STA     plot_pod_L0070
+        STA     plot_pod_xpos_FRAC
         STA     pod_window_xpos_FRAC
         LDA     midpoint_window_xpos_INT
         SBC     midpoint_deltax_INT
-        STA     plot_pod_L0071
+        STA     plot_pod_xpos_INT
         STA     pod_window_xpos_INT
         LDX     #$03
         LDA     pod_attached_flag_1
@@ -5029,12 +5029,12 @@ ORG     NATIVE_ADDR
         STA     pod_sprite_plotted_flag
         JSR     plot_pod_sprite
 
-        LDA     plot_pod_L0079
+        LDA     pod_screen_addr_LO
         STA     old_plot_pod_sprite_at_ptr
-        LDA     plot_pod_L007A
+        LDA     pod_screen_addr_HI
         STA     old_plot_pod_sprite_at_ptr+1
-        LDA     plot_pod_L0076
-        STA     old_plot_pod_L0076
+        LDA     pod_pixel_column
+        STA     old_pod_pixel_column
 
 	.return
         RTS
@@ -5279,7 +5279,7 @@ ORG     NATIVE_ADDR
 	.L23E7
         PLP
         ADC     midpoint_ypos_INT_HI
-        STA     calc_player_ypos_INT_HI
+        STA     new_ship_ypos_INT_HI
 
         SEC
         LDA     temp_midpoint_xpos_FRAC_LO
@@ -5300,7 +5300,7 @@ ORG     NATIVE_ADDR
         LDA     new_ship_ypos_INT
         SBC     player_ypos_INT
         STA     player_velocityy_INT
-        LDA     calc_player_ypos_INT_HI
+        LDA     new_ship_ypos_INT_HI
         SBC     player_ypos_INT_HI
         STA     player_velocityy_INT_HI
 
@@ -5324,7 +5324,7 @@ ORG     NATIVE_ADDR
         STA     player_ypos_FRAC
         LDA     new_ship_ypos_INT
         STA     player_ypos_INT
-        LDA     calc_player_ypos_INT_HI
+        LDA     new_ship_ypos_INT_HI
         STA     player_ypos_INT_HI
         RTS
 }
@@ -5693,9 +5693,9 @@ ORG     NATIVE_ADDR
         JSR     particles_generate_stars
 
         LDA     #$00
-        STA     particles_L0077
+        STA     particle_temp_clear_77
         LDA     #$00
-        STA     particles_L0079
+        STA     particle_temp_clear_79
 
         LDX     #$1F
 		
@@ -5750,12 +5750,12 @@ ORG     NATIVE_ADDR
         SEC
         LDA     particles_ypos_INT,X
         SBC     window_ypos_INT
-        STA     particles_L0072
+        STA     particle_screen_y
         LDA     particles_ypos_INT_HI,X
         SBC     window_ypos_EXT
         BNE     L2938
 
-        LDA     particles_L0072
+        LDA     particle_screen_y
         CLC
         ADC     terrain_window_y_index
         TAY
@@ -5774,11 +5774,11 @@ ORG     NATIVE_ADDR
         CMP     #$48
         BCS     next_X1
 
-        STA     particles_L0071
+        STA     particle_screen_x
         SEC
-        LDA     particles_L0072
+        LDA     particle_screen_y
         SBC     #$38
-        STA     particles_L0072
+        STA     particle_screen_y
         CMP     #$11
         BCC     next_X1
 
@@ -5797,9 +5797,9 @@ ORG     NATIVE_ADDR
         LDA     particles_lifetime,X
         ORA     #$80
         STA     particles_lifetime,X
-        LDA     particles_L0072
+        LDA     particle_screen_y
         ROL     A
-        STA     particles_L0072
+        STA     particle_screen_y
         LDY     #$00
         STY     particle_write_ptr
         AND     #$F8
@@ -5814,7 +5814,7 @@ ORG     NATIVE_ADDR
         ADC     #$38
         ADC     particle_write_ptr+1
         STA     particle_write_ptr+1
-        LDY     particles_L0071
+        LDY     particle_screen_x
         LDA     mult_by_8_LO,Y
         ADC     particle_write_ptr
         STA     particle_write_ptr
@@ -5822,7 +5822,7 @@ ORG     NATIVE_ADDR
         ADC     particle_write_ptr+1
         STA     particle_write_ptr+1
         STA     particles_scraddr_HI,X
-        LDA     particles_L0072
+        LDA     particle_screen_y
         AND     #$07
         CMP     #$07
         BNE     L2981
@@ -6890,11 +6890,11 @@ ORG     NATIVE_ADDR
         ADC     #$01
 		
 	.L2EE7
-        STA     attach_pod_L0089
+        STA     multiply_result_lo
         LDA     ship_window_xpos_FRAC
         SEC
         SBC     pod_window_xpos_FRAC
-        STA     tractor_beam_L0072
+        STA     ship_to_pod_dx_FRAC
         LDA     ship_window_xpos_INT
         SBC     pod_window_xpos_INT
         BVS     return_max_distance
@@ -6908,9 +6908,9 @@ ORG     NATIVE_ADDR
 
 	.L2EFF
         TYA
-        ROL     tractor_beam_L0072
+        ROL     ship_to_pod_dx_FRAC
         ROL     A
-        ROL     tractor_beam_L0072
+        ROL     ship_to_pod_dx_FRAC
         ROL     A
         BPL     L2F0D
 
@@ -6919,26 +6919,26 @@ ORG     NATIVE_ADDR
         ADC     #$01
 		
 	.L2F0D
-        STA     attach_pod_L0088
+        STA     multiply_operand_a
 
 .get_distance_ship_to_pod_tractor_ext
-        LDA     attach_pod_L0088
-        CMP     attach_pod_L0089
+        LDA     multiply_operand_a
+        CMP     multiply_result_lo
         BCS     L2F1B
 
-        LDY     attach_pod_L0089
-        STA     attach_pod_L0089
-        STY     attach_pod_L0088
+        LDY     multiply_result_lo
+        STA     multiply_result_lo
+        STY     multiply_operand_a
 	.L2F1B
-        LDA     attach_pod_L0089
+        LDA     multiply_result_lo
         CLC
-        ADC     attach_pod_L0088
+        ADC     multiply_operand_a
         BCS     return_max_distance
 
-        ADC     attach_pod_L0088
+        ADC     multiply_operand_a
         BCS     return_max_distance
 
-        ADC     attach_pod_L0088
+        ADC     multiply_operand_a
         BCS     return_max_distance
 
         BCC     return_distance
@@ -6995,7 +6995,7 @@ ORG     NATIVE_ADDR
 		
 	.L2F52
         STA     pixels_ptr_pixel_byte
-        STA     draw_line_L0075
+        STA     draw_line_delta_major
         LDA     #LO(pixels_ptr_increment)
         STA     old_jmp_fn_LO						; **MODIFIES CODE**
         LDA     #HI(pixels_ptr_increment)
@@ -7028,15 +7028,15 @@ ORG     NATIVE_ADDR
 		
 	.L2F8E
         STA     draw_line_L0071
-        STA     draw_line_L0076
-        CMP     draw_line_L0075
+        STA     draw_line_delta_minor
+        CMP     draw_line_delta_major
         BCC     L2FAD
 
         PHA
-        LDA     draw_line_L0075
-        STA     draw_line_L0076
+        LDA     draw_line_delta_major
+        STA     draw_line_delta_minor
         PLA
-        STA     draw_line_L0075
+        STA     draw_line_delta_major
         LDA     old_jmp_fn_LO
         STA     plot_line_bresenham_1_addr_LO			; **MODIFIES CODE**
         LDA     old_jmp_fn_HI
@@ -7050,11 +7050,11 @@ ORG     NATIVE_ADDR
         STA     plot_line_bresenham_2_addr_HI			; **MODIFIES CODE**
 	
 	.L2FB9
-        LDA     draw_line_L0075
+        LDA     draw_line_delta_major
         CLC
         ROR     A
         STA     draw_line_L0078
-        LDX     draw_line_L0075
+        LDX     draw_line_delta_major
         INX
 		
         JMP     plot_line_pixels
@@ -7073,10 +7073,10 @@ ORG     NATIVE_ADDR
 
         LDA     draw_line_L0078
         CLC
-        ADC     draw_line_L0076
+        ADC     draw_line_delta_minor
         BCS     plot_line_bresenham_2
 
-        CMP     draw_line_L0075
+        CMP     draw_line_delta_major
         BCS     plot_line_bresenham_2
 
         STA     draw_line_L0078
@@ -7104,7 +7104,7 @@ ORG     NATIVE_ADDR
 
 .plot_line_bresenham_2
 {
-        SBC     draw_line_L0075
+        SBC     draw_line_delta_major
         STA     draw_line_L0078
 }
 \\ Fall through!!
@@ -7194,7 +7194,7 @@ ORG     NATIVE_ADDR
         PHA
         LDA     pixels_ptr_mask_index
         PHA
-        LDX     teleport_L0086
+        LDX     teleport_ring_count
 		
 	.L303D
         JSR     plot_teleport_effect_step_horizontal
@@ -7202,8 +7202,8 @@ ORG     NATIVE_ADDR
         DEX
         BNE     L303D
 
-        LDA     teleport_L0086
-        STA     teleport_L007B
+        LDA     teleport_ring_count
+        STA     teleport_row_count
 		
 	.L3047
         LDA     plot_pixels_ptr
@@ -7232,7 +7232,7 @@ ORG     NATIVE_ADDR
         DEX
         BNE     L3060
 
-        DEC     teleport_L007B
+        DEC     teleport_row_count
         BNE     L3047
 
         PLA
@@ -7279,7 +7279,7 @@ ORG     NATIVE_ADDR
 
         LDA     #$FF
         STA     pixels_ptr_pixel_byte
-        LDA     teleport_effect_L0082
+        LDA     teleport_screen_addr_LO
         STA     plot_pixels_ptr
         LDA     teleport_effect_L0083
         STA     plot_pixels_ptr+1
@@ -7637,15 +7637,15 @@ ORG     NATIVE_ADDR
 .do_teleport_animation
 {
         LDA     #$00
-        STA     teleport_L0086
+        STA     teleport_ring_count
 		
 	.L3239
-        INC     teleport_L0086
+        INC     teleport_ring_count
         JSR     plot_teleport_effect_1
 
         JSR     L325B
 
-        LDA     teleport_L0086
+        LDA     teleport_ring_count
         CMP     #$06
         BNE     L3239
 
@@ -7655,7 +7655,7 @@ ORG     NATIVE_ADDR
 
         JSR     plot_teleport_effect_1
 
-        DEC     teleport_L0086
+        DEC     teleport_ring_count
         BNE     L3247
         RTS
 
@@ -7670,7 +7670,7 @@ ORG     NATIVE_ADDR
         BEQ     go_to_draw
 
 	.L3261
-        LDA     teleport_L0086
+        LDA     teleport_ring_count
         CMP     #$03
         BCS     go_to_draw
 
@@ -7739,7 +7739,7 @@ ORG     NATIVE_ADDR
         JSR     pixels_ptr_offset_diagonal_by_4
 
         LDA     plot_pixels_ptr
-        STA     teleport_effect_L0082
+        STA     teleport_screen_addr_LO
         LDA     plot_pixels_ptr+1
         STA     teleport_effect_L0083
         LDA     pixels_ptr_mask_index
