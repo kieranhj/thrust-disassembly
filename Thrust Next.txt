@@ -1,0 +1,37 @@
+Thrust Next
+~~~
+(A Beeb sequel not the C64 version of Thrust 2.)
+Essentially Thrust meets Exile.
+
+TODO:
+- Make a new test level to mess about in.
+- Understand the landscape drawing routine properly this time.
+- Understand the dynamics implementation properly this time.
+- Put raster timing into the game to see what cycles are available.
+- Identify slowest parts of the code for future optimisation.
+- Add thrust particle effects (reuse debris) from ship.
+- Add a new enemy type.
+- Add a new enemy bullet type.
+
+Some desired goals:
+- Larger levels.
+- Ability to have more than just left & right sides of the landscape.
+    - Multiple / split paths.
+    - Standalone segments of landscape.
+- Ability to have slopes that are not fixed to 0 or 4 pixels horizontally?
+- New weapon types:
+    - Standard bullet (absorbed by shield, no impulse)
+    - Heavy (absorbed by shield, sends impulse to ship)
+    - Explosive (knocks out shield temporarily, sends impulse to ship)
+    - Laser / railgun (bounces off shield, goes through destructables)
+    - Rocket (propelled in straight line)
+    - Guided rocket (propelled towards player with limited turning circle)
+    - EMP (knocks out shield and tractor beam temporarily)
+- New missions:
+    - Collect the pod.
+    - Land safely.
+    - Collect a thing, drop a thing.
+    - Mission briefing.
+    - Mid mission pop-up.
+    - Keys, doors, the usual.
+- Super stretch, enemy Thrust ship?
