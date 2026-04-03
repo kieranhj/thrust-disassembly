@@ -37,7 +37,7 @@
 NATIVE_ADDR        = &A60        ; address at which code will run
 RELOAD_ADDR        = &1A00        ; address at which code will load
 
-OFFSET            = RELOAD_ADDR - NATIVE_ADDR
+OFFSET             = RELOAD_ADDR - NATIVE_ADDR
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -46,9 +46,9 @@ OFFSET            = RELOAD_ADDR - NATIVE_ADDR
 \ ******************************************************************************
 
 SCREEN_BASE_ADDR                    = $3C80
-SCREEN_WIDTH_CHARS = 72
-SCREEN_CHAR_ROW_BYTES = (SCREEN_WIDTH_CHARS * 8)
-SCREEN_START_ADDR = SCREEN_BASE_ADDR + SCREEN_CHAR_ROW_BYTES * 2        ; first two rows are status bar
+SCREEN_WIDTH_CHARS                  = 72
+SCREEN_CHAR_ROW_BYTES               = (SCREEN_WIDTH_CHARS * 8)
+SCREEN_START_ADDR                   = SCREEN_BASE_ADDR + SCREEN_CHAR_ROW_BYTES * 2        ; first two rows are status bar
 
 ASCII_beep                          = $07
 ASCII_space                         = $20
