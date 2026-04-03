@@ -123,12 +123,12 @@ pod_sprite_plotted_flag             = $0017     ; set to 1 as plot_pod_sprite is
 ship_sprite_plotted_flag            = $0018     ; set to 1 when ship sprite has been plotted
 level_tick_counter                  = $0019     ; increments every tick loop
 vsync_count                         = $001A     ; increments every vsync event
-angle_var_A_accumulate              = $001B     ; accumulates angle_var_A
-angle_var_B_accumulate              = $001C     ; accumulates angle_var_B
-angle_ship_to_pod                   = $001D     ; AND #$1F - number of angles in table
-angle_var_A                         = $001E     ; these all appear to accumulate to calculate accurate angle of midpoint vector
-angle_var_B                         = $001F     ; essentially the rotational physics simulation
-angle_var_C                         = $0020     ; rotational physics accumulator (with A and B)
+tether_angle_LO                     = $001B     ; tether angle, extra precision low byte
+tether_angle_FRAC                   = $001C     ; tether angle, fractional part (sub-angle for interpolation)
+angle_ship_to_pod                   = $001D     ; tether angle, integer part (0-31 index into trig tables)
+tether_angular_vel_LO               = $001E     ; tether angular velocity, extra precision low byte
+tether_angular_vel_FRAC             = $001F     ; tether angular velocity, fractional part
+tether_angular_vel_INT              = $0020     ; tether angular velocity, integer/sign part
 pod_attached_flag_1                 = $0022     ; set to non-zero at top of attach_pod_to_ship function
 midpoint_deltax_FRAC                = $0023     ; add midpoint_delta to midpoint to get ship_position
 midpoint_deltax_INT                 = $0024     ; subtract midpoint_delta from midpoint to get pod_position
@@ -308,20 +308,20 @@ pod_angle_sub_frac                  = $007A     ; sub-angle fraction for pod vec
 
 terrain_draw_table_index            = $007B     ; index into terrain draw lookup tables
 obj_plot_sprite_at_ptr              = $007B     ; screen addr ptr for object sprite plotting
-prev_angle_var_B                    = $007B     ; saved angle_var_B before thrust accumulation
+prev_tether_vel_FRAC                = $007B     ; saved angular velocity FRAC for damping calc
 calc_ship_delta_FRAC                = $007B     ; fractional ship offset from angle (Y halved)
 particle_collision_flag             = $007B     ; $FF when particle collides with scenery
 angle_step_int                      = $007B     ; integer part of angle search step size
 pod_temp                            = $007B     ; scratch variable (Y-pos carry / sprite column calc)
 teleport_row_count                  = $007B     ; row loop counter for teleport diamond drawing
 
-prev_angle_var_C                    = $007C     ; saved angle_var_C before thrust accumulation
+prev_tether_vel_INT                 = $007C     ; saved angular velocity INT for damping calc
 calc_ship_delta_INT                 = $007C     ; integer ship offset from angle (Y halved)
 particle_byte_mask                  = $007C     ; pixel column mask for particle collision test
 plot_pod_sprite_y_offset            = $007C     ; byte offset into pod sprite data for Y row
 search_iterations                   = $007C     ; outer loop counter (7 refinement levels)
 
-prev_angle_var_A                    = $007D     ; saved angle_var_A / best sub-angle in search
+prev_tether_vel_LO                  = $007D     ; saved angular velocity LO for damping calc
 particle_masked_pixels              = $007D     ; particle pixels masked for collision detection
 current_obj_xpos_INT                = $007D     ; X position of object being processed
 
@@ -3786,7 +3786,7 @@ ORG     NATIVE_ADDR
         LDA     #$00
         STA     thrust_sign_extend
         SEC
-        SBC     angle_var_B_accumulate
+        SBC     tether_angle_FRAC
         STA     thrust_angle_sub_frac
         LDA     ship_angle
         SBC     angle_ship_to_pod
@@ -3839,19 +3839,19 @@ ORG     NATIVE_ADDR
         
     .L1C67
         CLC
-        LDA     angle_var_A
-        STA     prev_angle_var_A
+        LDA     tether_angular_vel_LO
+        STA     prev_tether_vel_LO
         ADC     ship_thrust_x_FRAC
-        STA     angle_var_A
-        LDA     angle_var_B
-        STA     prev_angle_var_B
+        STA     tether_angular_vel_LO
+        LDA     tether_angular_vel_FRAC
+        STA     prev_tether_vel_FRAC
         ADC     ship_thrust_x_INT
-        STA     angle_var_B
-        LDA     angle_var_C
-        STA     prev_angle_var_C
+        STA     tether_angular_vel_FRAC
+        LDA     tether_angular_vel_INT
+        STA     prev_tether_vel_INT
         ADC     thrust_sign_extend
-        STA     angle_var_C
-        LDA     prev_angle_var_C
+        STA     tether_angular_vel_INT
+        LDA     prev_tether_vel_INT
         LDX     #$06
         
     .L1C84
@@ -3859,23 +3859,23 @@ ORG     NATIVE_ADDR
         ROL     A
         PLA
         ROR     A
-        ROR     prev_angle_var_B
-        ROR     prev_angle_var_A
+        ROR     prev_tether_vel_FRAC
+        ROR     prev_tether_vel_LO
         DEX
         BNE     L1C84
 
-        STA     prev_angle_var_C
+        STA     prev_tether_vel_INT
 
         CLC
-        LDA     angle_var_A
-        SBC     prev_angle_var_A
-        STA     angle_var_A
-        LDA     angle_var_B
-        SBC     prev_angle_var_B
-        STA     angle_var_B
-        LDA     angle_var_C
-        SBC     prev_angle_var_C
-        STA     angle_var_C
+        LDA     tether_angular_vel_LO
+        SBC     prev_tether_vel_LO
+        STA     tether_angular_vel_LO
+        LDA     tether_angular_vel_FRAC
+        SBC     prev_tether_vel_FRAC
+        STA     tether_angular_vel_FRAC
+        LDA     tether_angular_vel_INT
+        SBC     prev_tether_vel_INT
+        STA     tether_angular_vel_INT
 
     .end_of_thrust_force_calculation
         LDA     force_vectorx_FRAC_LO
@@ -4387,7 +4387,7 @@ ORG     NATIVE_ADDR
 
 .calculate_attached_pod_vector
 {
-        LDA     angle_var_B_accumulate
+        LDA     tether_angle_FRAC
         CLC
         ADC     #$08
         STA     pod_angle_sub_frac
@@ -4593,7 +4593,7 @@ ORG     NATIVE_ADDR
         LDA     #$07
         STA     search_iterations
         LDA     #$00
-        STA     angle_var_B_accumulate
+        STA     tether_angle_FRAC
         STA     angle_ship_to_pod
         
     .L207E
@@ -4637,16 +4637,16 @@ ORG     NATIVE_ADDR
         BCS     L20C0
 
         STA     best_distance
-        LDA     angle_var_B_accumulate
-        STA     prev_angle_var_A
+        LDA     tether_angle_FRAC
+        STA     prev_tether_vel_LO
         LDA     angle_ship_to_pod
         STA     temp_angle_ship_to_pod
         
     .L20C0
         CLC
-        LDA     angle_var_B_accumulate
+        LDA     tether_angle_FRAC
         ADC     angle_step_frac
-        STA     angle_var_B_accumulate
+        STA     tether_angle_FRAC
         LDA     angle_ship_to_pod
         ADC     angle_step_int
         AND     #$1F
@@ -4654,8 +4654,8 @@ ORG     NATIVE_ADDR
         DEC     search_inner_count
         BNE     L2086
 
-        LDA     prev_angle_var_A
-        STA     angle_var_B_accumulate
+        LDA     prev_tether_vel_LO
+        STA     tether_angle_FRAC
         LDA     temp_angle_ship_to_pod
         STA     angle_ship_to_pod
         CLC
@@ -4665,9 +4665,9 @@ ORG     NATIVE_ADDR
         BEQ     L20F6
 
         SEC
-        LDA     angle_var_B_accumulate
+        LDA     tether_angle_FRAC
         SBC     angle_step_frac
-        STA     angle_var_B_accumulate
+        STA     tether_angle_FRAC
         LDA     angle_ship_to_pod
         SBC     angle_step_int
         AND     #$1F
@@ -4710,20 +4710,20 @@ ORG     NATIVE_ADDR
         SEC
         LDA     multiply_result_lo
         SBC     cross_product_term_lo
-        STA     angle_var_B
+        STA     tether_angular_vel_FRAC
         LDA     multiply_result_hi
         SBC     cross_product_term_hi
         PHA
         ROL     A
         PLA
         ROR     A
-        ROR     angle_var_B
+        ROR     tether_angular_vel_FRAC
         PHA
         ROL     A
         PLA
         ROR     A
-        ROR     angle_var_B
-        STA     angle_var_C
+        ROR     tether_angular_vel_FRAC
+        STA     tether_angular_vel_INT
         
         JSR     collect_pod_fuel_sound
 
@@ -5226,13 +5226,13 @@ ORG     NATIVE_ADDR
 
     .L23A7
         CLC
-        LDA     angle_var_A
-        ADC     angle_var_A_accumulate
-        STA     angle_var_A_accumulate
-        LDA     angle_var_B
-        ADC     angle_var_B_accumulate
-        STA     angle_var_B_accumulate
-        LDA     angle_var_C
+        LDA     tether_angular_vel_LO
+        ADC     tether_angle_LO
+        STA     tether_angle_LO
+        LDA     tether_angular_vel_FRAC
+        ADC     tether_angle_FRAC
+        STA     tether_angle_FRAC
+        LDA     tether_angular_vel_INT
         ADC     angle_ship_to_pod
         AND     #$1F
         STA     angle_ship_to_pod
