@@ -35,9 +35,9 @@
 
 
 NATIVE_ADDR        = &A60        ; address at which code will run
-RELOAD_ADDR        = &1A00        ; address at which code will load
+RELOAD_ADDR        = &1A00       ; address at which code will load
 
-OFFSET             = RELOAD_ADDR - NATIVE_ADDR
+OFFSET             = RELOAD_ADDR - NATIVE_ADDR  ; difference between load and run addresses
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -45,49 +45,49 @@ OFFSET             = RELOAD_ADDR - NATIVE_ADDR
 \ ******************************************************************************
 \ ******************************************************************************
 
-SCREEN_BASE_ADDR                    = $3C80
-SCREEN_WIDTH_CHARS                  = 72
-SCREEN_CHAR_ROW_BYTES               = (SCREEN_WIDTH_CHARS * 8)
+SCREEN_BASE_ADDR                    = $3C80     ; MODE 5 screen memory base
+SCREEN_WIDTH_CHARS                  = 72        ; screen width in character columns
+SCREEN_CHAR_ROW_BYTES               = (SCREEN_WIDTH_CHARS * 8) ; bytes per character row
 SCREEN_START_ADDR                   = SCREEN_BASE_ADDR + SCREEN_CHAR_ROW_BYTES * 2        ; first two rows are status bar
 
-ASCII_beep                          = $07
-ASCII_space                         = $20
-ASCII_escape                        = $1B
-ASCII_0                             = $30
-ASCII_9                             = $39
-ASCII_a                             = $61
-ASCII_z                             = $7A
-ASCII_delete                        = $7F
+ASCII_beep                          = $07       ; BEL character
+ASCII_space                         = $20       ; space character
+ASCII_escape                        = $1B       ; escape character
+ASCII_0                             = $30       ; digit 0
+ASCII_9                             = $39       ; digit 9
+ASCII_a                             = $61       ; lowercase a
+ASCII_z                             = $7A       ; lowercase z
+ASCII_delete                        = $7F       ; delete character
 
-INKEY_spacebar                      = $9D
-INKEY_ctrl                          = $FE
-INKEY_capslock                      = $BF
-INKEY_shift                         = $FF
-INKEY_return                        = $B6
-INKEY_escape                        = $8F
-INKEY_copy                          = $96
-INKEY_Q                             = $EF
-INKEY_S                             = $AE
+INKEY_spacebar                      = $9D       ; negative INKEY value for spacebar
+INKEY_ctrl                          = $FE       ; negative INKEY value for CTRL
+INKEY_capslock                      = $BF       ; negative INKEY value for CAPS LOCK
+INKEY_shift                         = $FF       ; negative INKEY value for SHIFT
+INKEY_return                        = $B6       ; negative INKEY value for RETURN
+INKEY_escape                        = $8F       ; negative INKEY value for ESCAPE
+INKEY_copy                          = $96       ; negative INKEY value for COPY
+INKEY_Q                             = $EF       ; negative INKEY value for Q
+INKEY_S                             = $AE       ; negative INKEY value for S
 
-OBJECT_gun_up_right                 = $0
-OBJECT_gun_down_right               = $1
-OBJECT_gun_up_left                  = $2
-OBJECT_gun_down_left                = $3
-OBJECT_fuel                         = $4
-OBJECT_pod_stand                    = $5
-OBJECT_generator                    = $6
-OBJECT_door_switch_right            = $7
-OBJECT_door_switch_left             = $8
+OBJECT_gun_up_right                 = $0        ; gun emplacement facing up-right
+OBJECT_gun_down_right               = $1        ; gun emplacement facing down-right
+OBJECT_gun_up_left                  = $2        ; gun emplacement facing up-left
+OBJECT_gun_down_left                = $3        ; gun emplacement facing down-left
+OBJECT_fuel                         = $4        ; fuel pickup
+OBJECT_pod_stand                    = $5        ; pod on its stand
+OBJECT_generator                    = $6        ; reactor/generator
+OBJECT_door_switch_right            = $7        ; door switch (right side)
+OBJECT_door_switch_left             = $8        ; door switch (left side)
 
 PARTICLE_flag                       = $80       ; particle can be replaced
-PARTICLE_lifetime_bullet            = $28
-PARTICLE_lifetime_generator         = $0A
-PARTICLE_lifetime_star              = $1E
-PARTICLE_table_max                  = $1F
-PARTICLE_type_player_bullet         = $00
+PARTICLE_lifetime_bullet            = $28       ; bullet lifetime in ticks
+PARTICLE_lifetime_generator         = $0A       ; generator debris lifetime
+PARTICLE_lifetime_star              = $1E       ; star lifetime in ticks
+PARTICLE_table_max                  = $1F       ; max index into particle table (32 slots)
+PARTICLE_type_player_bullet         = $00       ; player bullet particle type
 PARTICLE_type_debris                = $01       ; shoot generator
-PARTICLE_type_star                  = $02
-PARTICLE_type_hostile_bullet        = $03
+PARTICLE_type_star                  = $02       ; background star particle type
+PARTICLE_type_hostile_bullet        = $03       ; enemy bullet particle type
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -426,11 +426,11 @@ IRQ1_RETURN_A                       = $00FC     ; OS IRQ handler
 \ ******************************************************************************
 \ ******************************************************************************
 
-high_score_table                    = $0100
+high_score_table                    = $0100     ; 8 entries of name + score data
 score_A                             = $0180     ; score stored as three byte BCD number
 score_B                             = $0181     ; so max score is 999,999
-score_C                             = $0182
-old_irq1v                           = $0190
+score_C                             = $0182     ; score hundreds/thousands digits (BCD)
+old_irq1v                           = $0190     ; saved original IRQ1 vector for restore
 sound_params_enter_orbit            = $0192     ; found some spare bytes!
 
 \ ******************************************************************************
@@ -439,35 +439,35 @@ sound_params_enter_orbit            = $0192     ; found some spare bytes!
 \ ******************************************************************************
 \ ******************************************************************************
 
-USERV                               = $0200
-BRKV                                = $0202
-IRQ1V                               = $0204
-L0205                               = $0205
-IRQ2V                               = $0206
-CLIV                                = $0208
-BYTEV                               = $020A
-WORDV                               = $020C
-WRCHV                               = $020E
-L020F                               = $020F
-RDCHV                               = $0210
-FILEV                               = $0212
-ARGSV                               = $0214
-BGETV                               = $0216
-BPUTV                               = $0218
-GBPBV                               = $021A
-FINDV                               = $021C
-FSCV                                = $021E
-EVENTV                              = $0220
-UPTV                                = $0222
-NETV                                = $0224
-VDUV                                = $0226
-KEYV                                = $0228
-INSV                                = $022A
-REMV                                = $022C
-CNPV                                = $022E
-INDV1                               = $0230
-INDV2                               = $0232
-INDV3                               = $0234
+USERV                               = $0200     ; user vector
+BRKV                                = $0202     ; BRK vector
+IRQ1V                               = $0204     ; IRQ1 vector
+L0205                               = $0205     ; IRQ1V high byte
+IRQ2V                               = $0206     ; IRQ2 vector
+CLIV                                = $0208     ; CLI vector
+BYTEV                               = $020A     ; OSBYTE vector
+WORDV                               = $020C     ; OSWORD vector
+WRCHV                               = $020E     ; write character vector
+L020F                               = $020F     ; WRCHV high byte
+RDCHV                               = $0210     ; read character vector
+FILEV                               = $0212     ; file operations vector
+ARGSV                               = $0214     ; file arguments vector
+BGETV                               = $0216     ; byte get vector
+BPUTV                               = $0218     ; byte put vector
+GBPBV                               = $021A     ; get/put bytes block vector
+FINDV                               = $021C     ; open/close file vector
+FSCV                                = $021E     ; filing system control vector
+EVENTV                              = $0220     ; event vector
+UPTV                                = $0222     ; user print vector
+NETV                                = $0224     ; network vector
+VDUV                                = $0226     ; unrecognised VDU command vector
+KEYV                                = $0228     ; keyboard vector
+INSV                                = $022A     ; insert into buffer vector
+REMV                                = $022C     ; remove from buffer vector
+CNPV                                = $022E     ; count/purge buffer vector
+INDV1                               = $0230     ; spare indirect vector 1
+INDV2                               = $0232     ; spare indirect vector 2
+INDV3                               = $0234     ; spare indirect vector 3
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -475,10 +475,10 @@ INDV3                               = $0234
 \ ******************************************************************************
 \ ******************************************************************************
 
-game_entry                          = $0400
-palette_table                       = $048F
-crtc_regs                           = $04A0
-interlace_status_bit                = $04A8
+game_entry                          = $0400     ; relocated game entry point
+palette_table                       = $048F     ; colour palette data for mode setup
+crtc_regs                           = $04A0     ; 6845 CRTC register values table
+interlace_status_bit                = $04A8     ; interlace mode toggle flag
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -491,8 +491,8 @@ terrain_draw_table_2                = $0300     ; 94 bytes
 terrain_draw_table_3                = $035E     ; 11 bytes
 terrain_draw_table_4                = $036F     ; 145 bytes
 
-terrain_left_wall                   = $0400
-terrain_right_wall                  = $0500
+terrain_left_wall                   = $0400     ; left wall X positions indexed by Y
+terrain_right_wall                  = $0500     ; right wall X positions indexed by Y
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -500,20 +500,20 @@ terrain_right_wall                  = $0500
 \ ******************************************************************************
 \ ******************************************************************************
 
-particles_xpos_FRAC                 = $0600
-particles_xpos_INT                  = $0620
-particles_ypos_FRAC                 = $0640
-particles_ypos_INT                  = $0660
-particles_ypos_INT_HI               = $0680
-particles_dx_FRAC                   = $06A0
-particles_dx_INT                    = $06C0
-particles_dy_FRAC                   = $06E0
-particles_dy_INT                    = $0700
-particles_lifetime                  = $0720
-particles_scraddr_LO                = $0740
-particles_scraddr_HI                = $0760
-particles_pixels_byte               = $0780
-particles_type                      = $07A0
+particles_xpos_FRAC                 = $0600     ; 32 entries, fractional X position
+particles_xpos_INT                  = $0620     ; 32 entries, integer X position
+particles_ypos_FRAC                 = $0640     ; 32 entries, fractional Y position
+particles_ypos_INT                  = $0660     ; 32 entries, integer Y position
+particles_ypos_INT_HI               = $0680     ; 32 entries, Y position high byte
+particles_dx_FRAC                   = $06A0     ; 32 entries, fractional X velocity
+particles_dx_INT                    = $06C0     ; 32 entries, integer X velocity
+particles_dy_FRAC                   = $06E0     ; 32 entries, fractional Y velocity
+particles_dy_INT                    = $0700     ; 32 entries, integer Y velocity
+particles_lifetime                  = $0720     ; 32 entries, remaining lifetime
+particles_scraddr_LO                = $0740     ; 32 entries, screen address low byte
+particles_scraddr_HI                = $0760     ; 32 entries, screen address high byte
+particles_pixels_byte               = $0780     ; 32 entries, pixel pattern for plotting
+particles_type                      = $07A0     ; 32 entries, particle type
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -521,15 +521,15 @@ particles_type                      = $07A0
 \ ******************************************************************************
 \ ******************************************************************************
 
-sound_params_page                   = $0700
-sound_params_countdown              = $07C0
-sound_params_own_gun                = $07C8
-sound_params_explosion_1            = $07D0
-sound_params_explosion_2            = $07D8
-sound_params_hostile_gun            = $07E0
-sound_params_collect_1              = $07E8
-sound_params_collect_2              = $07F0
-sound_params_engine                 = $07F8
+sound_params_page                   = $0700     ; high byte of sound params address page
+sound_params_countdown              = $07C0     ; countdown timer sound
+sound_params_own_gun                = $07C8     ; player gun firing sound
+sound_params_explosion_1            = $07D0     ; explosion sound (channel 1)
+sound_params_explosion_2            = $07D8     ; explosion sound (channel 2)
+sound_params_hostile_gun            = $07E0     ; enemy gun firing sound
+sound_params_collect_1              = $07E8     ; collect/pickup sound (channel 1)
+sound_params_collect_2              = $07F0     ; collect/pickup sound (channel 2)
+sound_params_engine                 = $07F8     ; engine thrust sound
 sound_param_engine_pitch            = $07FC     ; $2 or $5
 
 \ ******************************************************************************
@@ -538,8 +538,8 @@ sound_param_engine_pitch            = $07FC     ; $2 or $5
 \ ******************************************************************************
 \ ******************************************************************************
 
-angle_to_y_FRAC                     = $0880
-angle_to_y_INT                      = $08A0
+angle_to_y_FRAC                     = $0880     ; angle-to-Y vector lookup (fractional)
+angle_to_y_INT                      = $08A0     ; angle-to-Y vector lookup (integer)
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -547,13 +547,13 @@ angle_to_y_INT                      = $08A0
 \ ******************************************************************************
 \ ******************************************************************************
 
-in_game_messages                    = $0900
+in_game_messages                    = $0900     ; start of relocated in-game message strings
 string_game_over                    = $0900     ; in_game_messages + message_game_over - in_game_messages_relocated
-string_top_8_thrusters              = $090D
-string_congratulations              = $0924
-string_enter_name                   = $0937
-string_press_spacebar               = $0951
-string_out_of_fuel                  = $096D
+string_top_8_thrusters              = $090D     ; "Top 8 Thrusters" string
+string_congratulations              = $0924     ; "Congratulations" string
+string_enter_name                   = $0937     ; "Enter Name" string
+string_press_spacebar               = $0951     ; "Press Spacebar" string
+string_out_of_fuel                  = $096D     ; "Out Of Fuel" string
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -561,8 +561,8 @@ string_out_of_fuel                  = $096D
 \ ******************************************************************************
 \ ******************************************************************************
 
-angle_to_x_FRAC                     = $0980
-angle_to_x_INT                      = $09A0
+angle_to_x_FRAC                     = $0980     ; angle-to-X vector lookup (fractional)
+angle_to_x_INT                      = $09A0     ; angle-to-X vector lookup (integer)
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -570,8 +570,8 @@ angle_to_x_INT                      = $09A0
 \ ******************************************************************************
 \ ******************************************************************************
 
-mult_by_8_LO                        = $09C0
-mult_by_8_HI                        = $0A10
+mult_by_8_LO                        = $09C0     ; N*8 lookup table, low bytes
+mult_by_8_HI                        = $0A10     ; N*8 lookup table, high bytes
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -579,44 +579,44 @@ mult_by_8_HI                        = $0A10
 \ ******************************************************************************
 \ ******************************************************************************
 
-SHEILA_6845_Register                = $FE00
-SHEILA_6845_Value                   = $FE01
-SHEILA_Video_ULA                    = $FE20
-SHEILA_PaletteReg                   = $FE21
-SHEILA_System_VIA_Register_B        = $FE40
-SHEILA_System_VIA_Register_A        = $FE41
-SHEILA_System_VIA_Data_Dir          = $FE43
-SHEILA_System_VIA_Interrupt_Flag    = $FE4D
-SHEILA_System_VIA_Interrupt_Enable  = $FE4E
-SHEILA_System_VIA_Register_A_NH     = $FE4F
-SHEILA_User_VIA_Timer1_Low_Order    = $FE64
-SHEILA_User_VIA_Timer1_High_Order   = $FE65
-SHEILA_User_VIA_Aux_Ctrl_Reg        = $FE6B
-SHEILA_User_VIA_Interrupt_Flag      = $FE6D
-SHEILA_User_VIA_Interrupt_Enable    = $FE6E
+SHEILA_6845_Register                = $FE00     ; 6845 CRTC address register
+SHEILA_6845_Value                   = $FE01     ; 6845 CRTC data register
+SHEILA_Video_ULA                    = $FE20     ; video ULA control register
+SHEILA_PaletteReg                   = $FE21     ; video ULA palette register
+SHEILA_System_VIA_Register_B        = $FE40     ; system VIA port B data
+SHEILA_System_VIA_Register_A        = $FE41     ; system VIA port A data
+SHEILA_System_VIA_Data_Dir          = $FE43     ; system VIA port A data direction
+SHEILA_System_VIA_Interrupt_Flag    = $FE4D     ; system VIA interrupt flag register
+SHEILA_System_VIA_Interrupt_Enable  = $FE4E     ; system VIA interrupt enable register
+SHEILA_System_VIA_Register_A_NH     = $FE4F     ; system VIA port A (no handshake)
+SHEILA_User_VIA_Timer1_Low_Order    = $FE64     ; user VIA timer 1 latch/counter low
+SHEILA_User_VIA_Timer1_High_Order   = $FE65     ; user VIA timer 1 counter high
+SHEILA_User_VIA_Aux_Ctrl_Reg        = $FE6B     ; user VIA auxiliary control register
+SHEILA_User_VIA_Interrupt_Flag      = $FE6D     ; user VIA interrupt flag register
+SHEILA_User_VIA_Interrupt_Enable    = $FE6E     ; user VIA interrupt enable register
 
-OSWRSC                              = $FFB3
-DEFVEC                              = $FFB6
-OSRDSC                              = $FFB9
-OSEVEN                              = $FFBF
-GSINIT                              = $FFC2
-GSREAD                              = $FFC5
-NVRDCH                              = $FFC8
-NNWRCH                              = $FFCB
-OSFIND                              = $FFCE
-OSGBPB                              = $FFD1
-OSBPUT                              = $FFD4
-OSBGET                              = $FFD7
-OSARGS                              = $FFDA
-OSFILE                              = $FFDD
-OSRDCH                              = $FFE0
-OSASCI                              = $FFE3
-OSNEWL                              = $FFE7
-OSWRCH                              = $FFEE
-OSWORD                              = $FFF1
-OSBYTE                              = $FFF4
-OSCLI                               = $FFF7
-LFFFF                               = $FFFF
+OSWRSC                              = $FFB3     ; write to sideways RAM
+DEFVEC                              = $FFB6     ; set default vectors
+OSRDSC                              = $FFB9     ; read from sideways RAM
+OSEVEN                              = $FFBF     ; generate an event
+GSINIT                              = $FFC2     ; general string input initialise
+GSREAD                              = $FFC5     ; general string input read character
+NVRDCH                              = $FFC8     ; non-vectored read character
+NNWRCH                              = $FFCB     ; non-vectored write character
+OSFIND                              = $FFCE     ; open/close a file
+OSGBPB                              = $FFD1     ; get/put multiple bytes
+OSBPUT                              = $FFD4     ; put a byte to a file
+OSBGET                              = $FFD7     ; get a byte from a file
+OSARGS                              = $FFDA     ; read/write file arguments
+OSFILE                              = $FFDD     ; load/save a file
+OSRDCH                              = $FFE0     ; read a character
+OSASCI                              = $FFE3     ; write character with CR translation
+OSNEWL                              = $FFE7     ; write newline (CR+LF)
+OSWRCH                              = $FFEE     ; write a character
+OSWORD                              = $FFF1     ; OS word-length call
+OSBYTE                              = $FFF4     ; OS byte-length call
+OSCLI                               = $FFF7     ; OS command line interpreter
+LFFFF                               = $FFFF     ; placeholder for self-modifying code
 
 \ ******************************************************************************
 \ ******************************************************************************
