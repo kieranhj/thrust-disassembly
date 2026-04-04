@@ -34,7 +34,7 @@ precision at the low end whilst _INT_HI is used for additional upper bits.
 
 To do
 = 
-* Properly document each function and how each routine actually works
-* Identify remaining zero page variables
-* Extract constants and globals from immediates
-* Sleep
+* Properly document each function and how each routine actually works ([see also](https://github.com/JamesRandall/ts-thrust/tree/main/specs))
+* ~~Identify remaining zero page variables~~
+* ~~Extract constants and globals from immediates~~
+* ~~Sleep~~
