@@ -88,6 +88,29 @@ PARTICLE_type_player_bullet         = $00       ; player bullet particle type
 PARTICLE_type_debris                = $01       ; shoot generator
 PARTICLE_type_star                  = $02       ; background star particle type
 PARTICLE_type_hostile_bullet        = $03       ; enemy bullet particle type
+PARTICLE_type_random_debris         = $04       ; random debris explosion particle type
+
+NUM_ANGLES                          = 32        ; number of discrete ship/tether angles
+ANGLE_MASK                          = NUM_ANGLES - 1 ; bitmask for angle wrapping (0-31)
+ANGLE_DOWN                          = $10       ; ship angle pointing straight down
+
+PIXEL_COLUMN_MASK                   = $03       ; pixel column mask (4 pixels per MODE 5 byte)
+SCREEN_ADDR_HI_OFFSET               = $38       ; high byte offset for screen address calculation
+LANDSCAPE_COLOUR_BYTE               = $F0       ; pixel byte for terrain lines (colour 2)
+
+PLAYER_CENTRE_X_OFFSET              = $04       ; X offset to centre of player sprite
+PLAYER_CENTRE_Y_OFFSET              = $05       ; Y offset to centre of player sprite
+SHIELD_SPRITE_INDEX                 = $11       ; sprite index for shield (after 17 rotation frames)
+LEVEL_MAX_OBJECTS                   = $1F       ; max object index per level (32 objects)
+INITIAL_LIVES                       = $04       ; starting number of lives
+INITIAL_FUEL                        = $10       ; starting fuel value (BCD 1000)
+PLANET_COUNTDOWN_SECONDS            = $0A       ; planet countdown timer in seconds
+POD_DESTROY_TIMER_INIT              = $3C       ; pod destroying player timer initial value (60 ticks)
+TRACTOR_BEAM_ACTIVATE_DIST          = $75       ; distance threshold to activate tractor beam
+TRACTOR_BEAM_ATTACH_DIST            = $84       ; distance threshold to attach pod
+WORLD_X_WRAP_THRESHOLD              = (256 - SCREEN_WIDTH_CHARS) ; $B8 - X position wrap point
+WORLD_X_WRAP_FORWARD                = (SCREEN_WIDTH_CHARS + 1) ; $49 - forward wrap delta
+WORLD_X_WRAP_BACKWARD               = (0 - SCREEN_WIDTH_CHARS - 1) AND $FF ; $B7 - backward wrap delta
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -1187,7 +1210,7 @@ ORG     NATIVE_ADDR
         STA     terrain_draw_ptr+1
         
         LDY     terrain_draw_addr_LO
-        LDA     #$F0                        ; solid line colour 2
+        LDA     #LANDSCAPE_COLOUR_BYTE                        ; solid line colour 2
         EOR     (terrain_draw_ptr),Y
         STA     (terrain_draw_ptr),Y
         DEX
@@ -1203,7 +1226,7 @@ ORG     NATIVE_ADDR
         INC     terrain_draw_ptr+1
         
     .inc_terrain_draw_ptr_no_carry
-        LDA     #$F0                        ; solid line colour 2
+        LDA     #LANDSCAPE_COLOUR_BYTE                        ; solid line colour 2
         EOR     (terrain_draw_ptr),Y
         STA     (terrain_draw_ptr),Y
         DEX
@@ -1496,7 +1519,7 @@ ORG     NATIVE_ADDR
         LDA     #$0F
         STA     planet_explode_anim
     .L0ECD
-        LDA     #$3C
+        LDA     #POD_DESTROY_TIMER_INIT
         STA     pod_destroying_player_timer
         LDA     #$01
         STA     explosion_particle_type
@@ -1580,7 +1603,7 @@ ORG     NATIVE_ADDR
 
         LDA     #$FF
         STA     generator_recharge_counter
-        LDA     #$0A
+        LDA     #PLANET_COUNTDOWN_SECONDS
         STA     planet_countdown_timer
         LDA     #$01
         STA     countdown_timer_ticks
@@ -1596,7 +1619,7 @@ ORG     NATIVE_ADDR
         STA     explosion_ypos_INT_HI
         LDA     particles_ypos_INT,X
         STA     explosion_ypos_INT
-        LDA     #$04                        ; random debris
+        LDA     #PARTICLE_type_random_debris                        ; random debris
         STA     explosion_particle_type
         JMP     create_explosion
 
@@ -1725,7 +1748,7 @@ ORG     NATIVE_ADDR
         AND     gun_angle_spread_mask
         ADC     gun_base_angle
         ADC     rnd_AND_3
-        AND     #$1F
+        AND     #ANGLE_MASK
         TAY
         JSR     angle_to_bullet_dx_dy
 
@@ -1862,7 +1885,7 @@ ORG     NATIVE_ADDR
         STA     current_obj_visible_flag
         SEC
         LDA     obj_screen_y
-        SBC     #$38
+        SBC     #SCREEN_ADDR_HI_OFFSET
         STA     obj_screen_y
         CMP     #$11
         BCC     L1126
@@ -1947,7 +1970,7 @@ ORG     NATIVE_ADDR
         LSR     A
         ROR     obj_scraddr_y_lo
         ADC     obj_scraddr_y_hi
-        ADC     #$38
+        ADC     #SCREEN_ADDR_HI_OFFSET
         TAX
         LDA     obj_screen_x
         ASL     A
@@ -2656,7 +2679,7 @@ ORG     NATIVE_ADDR
         LDA     midpoint_ypos_INT
         SBC     window_ypos_INT
         SEC
-        SBC     #$38
+        SBC     #SCREEN_ADDR_HI_OFFSET
         STA     midpoint_window_ypos_INT
         SEC
         LDA     force_vectory_INT
@@ -2808,14 +2831,14 @@ ORG     NATIVE_ADDR
         BCC     L181F
 
     .L181B
-        LDA     #$B7
+        LDA     #WORLD_X_WRAP_BACKWARD
         BNE     L1825
 
     .L181F
-        CMP     #$B8
+        CMP     #WORLD_X_WRAP_THRESHOLD
         BCC     L187E
 
-        LDA     #$49
+        LDA     #WORLD_X_WRAP_FORWARD
         
     .L1825
         STA     window_deltax_INT
@@ -2835,7 +2858,7 @@ ORG     NATIVE_ADDR
         CLC
         ADC     window_deltax_INT
         STA     old_player_xpos_INT
-        LDX     #$1F
+        LDX     #PARTICLE_table_max
         
     .L1845
         LDA     particles_xpos_INT,X
@@ -2853,17 +2876,17 @@ ORG     NATIVE_ADDR
         LDA     terrain_draw_table_1,X
         BNE     L187B
 
-        LDA     #$48
+        LDA     #SCREEN_WIDTH_CHARS
         STA     terrain_draw_table_1,X
         STA     terrain_draw_table_3,X
         JMP     L187B
 
     .L1868
-        CMP     #$48
+        CMP     #SCREEN_WIDTH_CHARS
         BNE     L187B
 
         LDA     terrain_draw_table_1,X
-        CMP     #$48
+        CMP     #SCREEN_WIDTH_CHARS
         BNE     L187B
 
         LDA     #$00
@@ -3797,7 +3820,7 @@ ORG     NATIVE_ADDR
         STA     thrust_angle_sub_frac
         TYA
         ADC     #$00
-        AND     #$1F
+        AND     #ANGLE_MASK
         TAY
         LDA     angle_to_x_FRAC,Y
         STA     ship_thrust_x_FRAC
@@ -3813,7 +3836,7 @@ ORG     NATIVE_ADDR
 
         INY
         TYA
-        AND     #$1F
+        AND     #ANGLE_MASK
         TAY
         
     .L1C46
@@ -4169,7 +4192,7 @@ ORG     NATIVE_ADDR
         ROL     A
         ROL     A
         ROL     A
-        AND     #$03
+        AND     #PIXEL_COLUMN_MASK
         STA     plot_ship_pixel_column
         STA     old_plot_ship_pixel_column
         LDA     #$00
@@ -4186,7 +4209,7 @@ ORG     NATIVE_ADDR
         ROR     plot_ship_at_ptr
         ROR     A
         ROR     plot_ship_at_ptr
-        ADC     #$38
+        ADC     #SCREEN_ADDR_HI_OFFSET
         ADC     plot_ship_at_ptr+1
         STA     plot_ship_at_ptr+1
         LDA     player_ship_destroyed_flag
@@ -4252,11 +4275,11 @@ ORG     NATIVE_ADDR
         LDA     #HI(pixel_masks_1)
         STA     ship_pixel_mask_addr_HI                    ; **MODIFIES CODE**
 
-        LDA     #$11                    ; sheild sprite?
+        LDA     #SHIELD_SPRITE_INDEX                    ; sheild sprite?
         JMP     L1ECB
 
     .L1EB7
-        CMP     #$11
+        CMP     #SHIELD_SPRITE_INDEX
         BCC     L1ECB
 
         LDA     #$49                    ; OPCODE EOR IMMEDIATE
@@ -4317,7 +4340,7 @@ ORG     NATIVE_ADDR
         ROL     A
         STA     plot_ship_at_y_offset
         TYA
-        AND     #$03
+        AND     #PIXEL_COLUMN_MASK
         TAX
 
 .ship_load_pixel_mask
@@ -4393,7 +4416,7 @@ ORG     NATIVE_ADDR
         STA     pod_angle_sub_frac
         LDA     angle_ship_to_pod
         ADC     #$00
-        AND     #$1F
+        AND     #ANGLE_MASK
         TAY
         LDA     angle_to_x_FRAC,Y
         STA     midpoint_deltax_FRAC
@@ -4413,7 +4436,7 @@ ORG     NATIVE_ADDR
 
         INY
         TYA
-        AND     #$1F
+        AND     #ANGLE_MASK
         TAY
         
     .L1F83
@@ -4498,10 +4521,10 @@ ORG     NATIVE_ADDR
         
         JSR     get_distance_ship_to_pod_tractor        ; must return distance?
 
-        CMP     #$75
+        CMP     #TRACTOR_BEAM_ACTIVATE_DIST
         BCC     set_flag
 
-        CMP     #$84                                    ; must be distance of ship from pod stand
+        CMP     #TRACTOR_BEAM_ATTACH_DIST                                    ; must be distance of ship from pod stand
         BCS     attach_pod_to_ship
 
         RTS
@@ -4649,7 +4672,7 @@ ORG     NATIVE_ADDR
         STA     tether_angle_FRAC
         LDA     angle_ship_to_pod
         ADC     angle_step_int
-        AND     #$1F
+        AND     #ANGLE_MASK
         STA     angle_ship_to_pod
         DEC     search_inner_count
         BNE     L2086
@@ -4670,7 +4693,7 @@ ORG     NATIVE_ADDR
         STA     tether_angle_FRAC
         LDA     angle_ship_to_pod
         SBC     angle_step_int
-        AND     #$1F
+        AND     #ANGLE_MASK
         STA     angle_ship_to_pod
         JMP     L207E
 
@@ -4786,7 +4809,7 @@ ORG     NATIVE_ADDR
         ROL     A
         ROL     A
         ROL     A
-        AND     #$03
+        AND     #PIXEL_COLUMN_MASK
         STA     pod_pixel_column
         LDA     #$00
         STA     plot_pod_sprite_at_ptr
@@ -4802,7 +4825,7 @@ ORG     NATIVE_ADDR
         ROR     plot_pod_sprite_at_ptr
         ROR     A
         ROR     plot_pod_sprite_at_ptr
-        ADC     #$38
+        ADC     #SCREEN_ADDR_HI_OFFSET
         ADC     plot_pod_sprite_at_ptr+1
         STA     plot_pod_sprite_at_ptr+1
         LDY     plot_pod_xpos_INT
@@ -4854,7 +4877,7 @@ ORG     NATIVE_ADDR
         ROL     A
         STA     plot_pod_sprite_y_offset
         LDA     pod_temp
-        AND     #$03
+        AND     #PIXEL_COLUMN_MASK
         TAX
 
 .plot_pod_sprite_load_pixel_mask
@@ -5171,7 +5194,7 @@ ORG     NATIVE_ADDR
 
     .rotate_right_not_pressed
         LDA     ship_angle
-        AND     #$1F
+        AND     #ANGLE_MASK
         STA     ship_angle
 
     .return
@@ -5234,7 +5257,7 @@ ORG     NATIVE_ADDR
         STA     tether_angle_FRAC
         LDA     tether_angular_vel_INT
         ADC     angle_ship_to_pod
-        AND     #$1F
+        AND     #ANGLE_MASK
         STA     angle_ship_to_pod
 
     .return
@@ -5346,7 +5369,7 @@ ORG     NATIVE_ADDR
 
         LDX     #$08
         LDA     explosion_particle_type
-        CMP     #$04                        ; random debris
+        CMP     #PARTICLE_type_random_debris                        ; random debris
         BNE     loop
 
         LDX     #$03
@@ -5356,7 +5379,7 @@ ORG     NATIVE_ADDR
         INC     explosion_particle_type
         JSR     rnd
 
-        AND     #$1F
+        AND     #ANGLE_MASK
         STA     explosion_angle
         
     .loop
@@ -5377,7 +5400,7 @@ ORG     NATIVE_ADDR
         AND     #$03
         CLC
         ADC     explosion_angle
-        AND     #$1F
+        AND     #ANGLE_MASK
         TAX
         LDA     angle_to_x_FRAC,X
         STA     explosion_dx_FRAC
@@ -5451,7 +5474,7 @@ ORG     NATIVE_ADDR
         ROL     A
         ROL     A
         ROL     A
-        EOR     #$1F
+        EOR     #ANGLE_MASK
         STA     explosion_dx_FRAC
         LDA     particles_lifetime,Y
         ROL     A
@@ -5466,7 +5489,7 @@ ORG     NATIVE_ADDR
         CLC
         LDA     explosion_angle
         ADC     #$04
-        AND     #$1F
+        AND     #ANGLE_MASK
         STA     explosion_angle
         TYA
         TAX
@@ -5508,7 +5531,7 @@ ORG     NATIVE_ADDR
     .L2533
         LDA     particles_lifetime,Y
         AND     #($FF EOR PARTICLE_flag)
-        CMP     #$0A
+        CMP     #PARTICLE_lifetime_generator
         BCC     return
 
         DEY
@@ -5697,7 +5720,7 @@ ORG     NATIVE_ADDR
         LDA     #$00
         STA     particle_temp_clear_79
 
-        LDX     #$1F
+        LDX     #PARTICLE_table_max
         
     .particle_update_loop_X
         LDA     #$00
@@ -5771,13 +5794,13 @@ ORG     NATIVE_ADDR
         SBC     window_xpos_INT
         BCC     next_X1
 
-        CMP     #$48
+        CMP     #SCREEN_WIDTH_CHARS
         BCS     next_X1
 
         STA     particle_screen_x
         SEC
         LDA     particle_screen_y
-        SBC     #$38
+        SBC     #SCREEN_ADDR_HI_OFFSET
         STA     particle_screen_y
         CMP     #$11
         BCC     next_X1
@@ -5811,7 +5834,7 @@ ORG     NATIVE_ADDR
         ROR     particle_write_ptr
         ROR     A
         ROR     particle_write_ptr
-        ADC     #$38
+        ADC     #SCREEN_ADDR_HI_OFFSET
         ADC     particle_write_ptr+1
         STA     particle_write_ptr+1
         LDY     particle_screen_x
@@ -5838,7 +5861,7 @@ ORG     NATIVE_ADDR
         ROL     A
         ROL     A
         ROL     A
-        AND     #$03
+        AND     #PIXEL_COLUMN_MASK
         TAY
         LDA     particles_xpos_byte_mask,Y
         STA     particle_byte_mask
@@ -6237,7 +6260,7 @@ ORG     NATIVE_ADDR
         LDA     gravity_INT
         BPL     L2BAF
 
-        LDA     #$10                        ; angle $10 - straight down for reverse gravity
+        LDA     #ANGLE_DOWN                        ; angle $10 - straight down for reverse gravity
         STA     ship_angle
 
     .L2BAF
@@ -6311,7 +6334,7 @@ ORG     NATIVE_ADDR
         
     .normal_gravity
         STY     gravity_INT
-        LDA     #$F0
+        LDA     #LANDSCAPE_COLOUR_BYTE
         ORA     invisible_landscape_flag
         STA     level_line_pixels_byte
         STA     hostile_bullet_pixel_byte
@@ -6352,7 +6375,7 @@ ORG     NATIVE_ADDR
         ROR     A                                        ; level_number /= 2
         TAX
 
-        LDX     #$1F                                    ; max objects per level
+        LDX     #LEVEL_MAX_OBJECTS                                    ; max objects per level
         
     .initialise_sprite_table_A
         LDA     #$02
@@ -6716,13 +6739,13 @@ ORG     NATIVE_ADDR
         STA     particles_xpos_FRAC,X
         LDA     player_xpos_INT
         CLC
-        ADC     #$04                    ; player x position offset by $4 - start bullet in centre?
+        ADC     #PLAYER_CENTRE_X_OFFSET                    ; player x position offset by $4 - start bullet in centre?
         STA     particles_xpos_INT,X
         LDA     player_ypos_FRAC
         STA     particles_ypos_FRAC,X
         CLC
         LDA     player_ypos_INT
-        ADC     #$05                    ; player y position offset by $5 - start bullet in centre?
+        ADC     #PLAYER_CENTRE_Y_OFFSET                    ; player y position offset by $5 - start bullet in centre?
         STA     particles_ypos_INT,X
         LDA     player_ypos_INT_HI
         ADC     #$00
@@ -7139,7 +7162,7 @@ ORG     NATIVE_ADDR
         ROR     plot_pixels_ptr
         ROR     A
         ROR     plot_pixels_ptr
-        ADC     #$38
+        ADC     #SCREEN_ADDR_HI_OFFSET
         ADC     plot_pixels_ptr+1
         STA     plot_pixels_ptr+1
         LDA     draw_line_start_x
@@ -7156,7 +7179,7 @@ ORG     NATIVE_ADDR
         ADC     plot_pixels_ptr
         STA     plot_pixels_ptr
         LDA     draw_line_start_x
-        AND     #$03
+        AND     #PIXEL_COLUMN_MASK
         STA     pixel_column_index
         RTS
 }
@@ -7500,7 +7523,7 @@ ORG     NATIVE_ADDR
         STA     draw_line_end_y
         STA     old_draw_line_end_y
         LDA     ship_window_xpos_INT
-        ADC     #$04
+        ADC     #PLAYER_CENTRE_X_OFFSET
         ROL     ship_window_xpos_FRAC
         ROL     A
         ROL     ship_window_xpos_FRAC
@@ -7508,7 +7531,7 @@ ORG     NATIVE_ADDR
         STA     draw_line_start_x
         STA     old_draw_line_start_x
         LDA     pod_window_xpos_INT
-        ADC     #$04
+        ADC     #PLAYER_CENTRE_X_OFFSET
         ROL     pod_window_xpos_FRAC
         ROL     A
         ROL     pod_window_xpos_FRAC
@@ -8272,11 +8295,11 @@ ORG     NATIVE_ADDR
         LDA     #$00                                    ; set initial score_A
         JSR     add_A_to_score
 
-        LDA     #$04                                    ; set initial number of lives
+        LDA     #INITIAL_LIVES                                    ; set initial number of lives
         STA     lives
         JSR     lose_a_life
 
-        LDA     #$10
+        LDA     #INITIAL_FUEL
         STA     fuel_B                                    ; set initial fuel value (1000)
         
         LDA     #$FF
@@ -8759,7 +8782,7 @@ ORG     NATIVE_ADDR
         LDA     player_ship_destroyed_flag
         BPL     return
 
-        LDA     #$3C
+        LDA     #POD_DESTROY_TIMER_INIT
         STA     pod_destroying_player_timer
         LDA     #$00
         STA     plot_ship_collision_detected
@@ -8769,11 +8792,11 @@ ORG     NATIVE_ADDR
         STA     explosion_xpos_FRAC
         CLC
         LDA     old_player_xpos_INT
-        ADC     #$04            ; to centre of player object?
+        ADC     #PLAYER_CENTRE_X_OFFSET            ; to centre of player object?
         STA     explosion_xpos_INT
         CLC
         LDA     old_player_ypos_INT
-        ADC     #$05            ; to centre of player object?
+        ADC     #PLAYER_CENTRE_Y_OFFSET            ; to centre of player object?
         STA     explosion_ypos_INT
         LDA     old_player_ypos_INT_HI
         ADC     #$00
@@ -8799,7 +8822,7 @@ ORG     NATIVE_ADDR
         DEX
         STX     pod_attached_flag_1
         STX     plot_pod_collision_detected
-        LDA     #$3C
+        LDA     #POD_DESTROY_TIMER_INIT
         STA     pod_destroying_player_timer
         LDA     pod_xpos_FRAC
         STA     explosion_xpos_FRAC
@@ -8982,12 +9005,12 @@ ORG     NATIVE_ADDR
     .L3A09
         LDA     #$00
         STA     terrain_draw_table_1,X
-        LDA     #$48                    ; $48 = 72 = num chars
+        LDA     #SCREEN_WIDTH_CHARS                    ; $48 = 72 = num chars
         STA     terrain_draw_table_3,X
         INX
         BPL     L3A09
 
-        LDX     #$1F                    ; max number of objects
+        LDX     #LEVEL_MAX_OBJECTS                    ; max number of objects
         
     .L3A18
         LDA     level_obj_flags,X
@@ -9655,7 +9678,7 @@ ORG     NATIVE_ADDR
 
 \\ Store angle lookup tables lower down in memory
         
-        LDX     #$1F
+        LDX     #ANGLE_MASK
         
     .store_32_bytes_loop
         LDA     lookup_angle_to_y_FRAC,X
