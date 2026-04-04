@@ -427,7 +427,7 @@ terrain_data_count_ptr              = $009F     ; pointer to terrain count data 
 irq1_timer1_signal                  = $00A1     ; set to 0 at vsync and 1 when timer1 triggers
 mute_sound_flag                     = $00A2     ; set to non-zero to mute sound
 hostile_gun_shoot_probability       = $00A3     ; probability that a gun will shoot
-UNUSED_game_flag                    = $00A4     ; set to $FF or $00 - unused?
+total_levels_played                 = $00A4     ; total number of levels played in one game
 invisible_landscape_flag            = $00A5     ; game var init 0 - inverted start of each level
 gravity_INT                         = $00A6     ; gravity vector for level (integer part)
 gravity_FRAC                        = $00A7     ; " (fractional part)
@@ -8395,7 +8395,7 @@ ORG     NATIVE_ADDR
         JSR     OSBYTE                    ; clear escape + effects
 
         LDA     #$00
-        STA     UNUSED_game_flag
+        STA     total_levels_played
         STA     invisible_landscape_flag
         STA     level_number
         STA     reverse_gravity_flag
@@ -8504,7 +8504,7 @@ ORG     NATIVE_ADDR
         STA     fuel_B                                    ; set initial fuel value (1000)
         
         LDA     #$FF
-        STA     UNUSED_game_flag                        ; set UNUSED_game_flag to 255 (-1)
+        STA     total_levels_played                        ; set total_levels_played to 255 (-1)
         
         LDA     #$FF
         STA     level_number                            ; set level_number to 255 (-1)
@@ -8529,7 +8529,7 @@ ORG     NATIVE_ADDR
         LDA     #$00
         STA     midpoint_ypos_INT
         STA     midpoint_ypos_INT_HI
-        INC     UNUSED_game_flag
+        INC     total_levels_played
         INC     level_number
         LDA     level_number
         CMP     #$06                                    ; number of levels
