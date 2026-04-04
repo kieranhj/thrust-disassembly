@@ -3658,7 +3658,7 @@ ORG     NATIVE_ADDR
         STA     force_vectorx_FRAC
         RTS
 
-	.L1B5F
+.L1B5F
         LDA     level_tick_counter
         AND     #$0F
         BEQ     add_gravity_to_force_vector
@@ -3680,7 +3680,7 @@ ORG     NATIVE_ADDR
 
         RTS
 
-	.add_gravity_to_force_vector
+.add_gravity_to_force_vector
         CLC
         LDA     force_vectory_FRAC
         ADC     gravity_FRAC
@@ -3700,10 +3700,10 @@ ORG     NATIVE_ADDR
 
         BEQ     thrust_was_pressed
 
-	.no_thrust
+.no_thrust
         JMP     end_of_thrust_force_calculation
 
-	.thrust_was_pressed
+.thrust_was_pressed
         JSR     use_fuel
         JSR     run_engine
 
@@ -3712,13 +3712,13 @@ ORG     NATIVE_ADDR
         BEQ     L1BA6
 
         INY
-	.L1BA6
+.L1BA6
         LDX     ship_angle
         LDA     angle_to_y_FRAC,X
         STA     calc_force_vectory_FRAC
         LDA     angle_to_y_INT,X
-		
-	.L1BB0
+
+.L1BB0
         ROR     A
         ROR     calc_force_vectory_FRAC
         DEY
@@ -3732,15 +3732,14 @@ ORG     NATIVE_ADDR
         LDY     #$04
         LDA     pod_attached_flag_1
         BEQ     L1BC6
-
         INY
-		
-	.L1BC6
+
+.L1BC6
         LDA     angle_to_x_FRAC,X
         STA     calc_force_vectorx_FRAC
         LDA     angle_to_x_INT,X
 
-	.L1BCE
+.L1BCE
         ROR     A
         ROR     calc_force_vectorx_FRAC
         ROR     calc_force_vectorx_FRAC_LO
@@ -3762,6 +3761,7 @@ ORG     NATIVE_ADDR
         LDA     force_vectorx_INT
         ADC     calc_force_vectorx_INT
         STA     force_vectorx_INT
+
         CLC
         LDA     force_vectory_FRAC
         ADC     calc_force_vectory_FRAC
@@ -3772,17 +3772,19 @@ ORG     NATIVE_ADDR
         LDA     level_tick_counter
         AND     #$0F
         CMP     #$03
+        AND     #$0F
+        CMP     #$03
         BNE     L1C0A
 
         JMP     end_of_thrust_force_calculation
 
-	.L1C0A
+.L1C0A
         CMP     #$0B
         BNE     L1C11
 
         JMP     end_of_thrust_force_calculation
 
-	.L1C11
+.L1C11
         LDA     #$00
         STA     ship_thrust_L0079
         SEC
@@ -3794,8 +3796,6 @@ ORG     NATIVE_ADDR
         LDA     ship_thrust_L007E
         CLC
         ADC     #$08
-        STA     ship_thrust_L007E
-        TYA
         ADC     #$00
         AND     #$1F
         TAY
@@ -3804,8 +3804,8 @@ ORG     NATIVE_ADDR
         LDA     angle_to_x_INT,Y
         STA     ship_thrust_x_INT
         LDX     #$0E
-		
-	.L1C38
+
+.L1C38
         LDA     ship_thrust_L007E
         AND     #$F0
         CMP     lookup_top_nibble,X
@@ -3815,8 +3815,8 @@ ORG     NATIVE_ADDR
         TYA
         AND     #$1F
         TAY
-		
-	.L1C46
+
+.L1C46
         CLC
         LDA     angle_to_x_FRAC,Y
         ADC     ship_thrust_x_FRAC
@@ -3831,13 +3831,13 @@ ORG     NATIVE_ADDR
         ROL     A
         ROR     ship_thrust_x_INT
         ROR     ship_thrust_x_FRAC
+
         LDA     ship_thrust_x_INT
         BPL     L1C67
-
         LDA     #$FF
         STA     ship_thrust_L0079
-		
-	.L1C67
+
+.L1C67
         CLC
         LDA     angle_var_A
         STA     prev_angle_var_A
@@ -3853,8 +3853,8 @@ ORG     NATIVE_ADDR
         STA     angle_var_C
         LDA     prev_angle_var_C
         LDX     #$06
-		
-	.L1C84
+
+.L1C84
         PHA
         ROL     A
         PLA
@@ -3877,15 +3877,15 @@ ORG     NATIVE_ADDR
         SBC     prev_angle_var_C
         STA     angle_var_C
 
-	.end_of_thrust_force_calculation
+.end_of_thrust_force_calculation
         LDA     force_vectorx_FRAC_LO
         STA     calc_force_vectory_FRAC
         LDA     force_vectorx_FRAC
         STA     calc_force_vectory_INT
         LDA     force_vectorx_INT
         LDX     #$06
-		
-	.L1CB0
+
+.L1CB0
         PHA
         ROL     A
         PLA
@@ -3913,16 +3913,16 @@ ORG     NATIVE_ADDR
 
         LDA     #$FF
         STA     calc_force_vectorx_INT
-		
-	.L1CDC
+
+.L1CDC
         LDA     force_vectory_FRAC
         STA     calc_force_vectory_FRAC
         LDA     force_vectory_INT
         STA     calc_force_vectory_INT
         LDA     calc_force_vectorx_INT
         LDX     #$08
-		
-	.L1CE8
+
+.L1CE8
         PHA
         ROL     A
         PLA
@@ -4380,50 +4380,120 @@ ORG     NATIVE_ADDR
         RTS
 \\ }
 
-\ ******************************************************************************
-\ * Function: calculate_attached_pod_vector
-\ * Description: <>
-\ ******************************************************************************
+; ******************************************************************************
+; Function: calculate_attached_pod_vector
+;
+; Description:
+;   Convert a tether angle (integer + fractional accumulator) into a vector
+;   (midpoint_deltax, midpoint_deltay).
+;
+;   The vector represents the displacement from the CENTRE of the tether
+;   to the spaceship; the full tether length is therefore twice this vector.
+;
+; High‑level equivalent (after final scaling):
+;   dx ≈  1.25 * sin(angle) * (tetherIndex + 2) / 4
+;   dy ≈ -2.5  * cos(angle) * (tetherIndex + 2) / 4
+;
+; Note that normally, tetherIndex=14; so the tether length is fixed.
+; However when the player's ship is exploding, the tether beam is seen
+; to contract.  So in that case tetherIndex is decreased in steps of 2,
+; so as to create that animation.
+;
+; Implementation summary:
+;   - Uses 32‑entry fixed‑point SIN/COS lookup tables
+;   - Fractional angles are handled via linear interpolation
+;   - Interpolation is implemented by repeated accumulation plus a
+;     single controlled angle increment inside the loop
+; ******************************************************************************
 
 .calculate_attached_pod_vector
 {
-        LDA     angle_var_B_accumulate
+; ---------------------------------------------------------------------------
+; Form working fractional value = angleFrac + 8
+;
+; The +8 offset shifts the interpolation switch point so it can be detected
+; via the TOP NIBBLE of the adjusted fraction.
+;
+; Any overflow generates a carry into the integer angle, matching true
+; 8‑bit accumulator behaviour.
+; ---------------------------------------------------------------------------
+
+        LDA     angle_var_B_accumulate        ; fractional angle (0–255)
         CLC
-        ADC     #$08
-        STA     pod_vector_L007A
-        LDA     angle_ship_to_pod
-        ADC     #$00
-        AND     #$1F
-        TAY
+        ADC     #$08                          ; bias by +8
+        STA     pod_vector_L007A              ; store (fraction + 8)
+
+        LDA     angle_ship_to_pod             ; integer angle (0–31)
+        ADC     #$00                          ; add carry from frac+8
+        AND     #$1F                          ; wrap into 32‑entry table
+        TAY                                   ; Y = starting angle index
+
+; ---------------------------------------------------------------------------
+; Load first SIN/COS sample into the accumulators.
+;
+; This contributes the FIRST of (tetherIndex + 2) total samples.
+; The remaining (tetherIndex + 1) samples are added in the loop below.
+; ---------------------------------------------------------------------------
+
         LDA     angle_to_x_FRAC,Y
         STA     midpoint_deltax_FRAC
         LDA     angle_to_x_INT,Y
+        STA     midpoint_deltax_FRAC
+        LDA     angle_to_x_INT,Y
         STA     midpoint_deltax_INT
+
         LDA     angle_to_y_FRAC,Y
         STA     midpoint_deltay_FRAC
         LDA     angle_to_y_INT,Y
         STA     midpoint_deltay_INT
-        LDX     top_nibble_index
-		
-	.L1F75
-        LDA     pod_vector_L007A
-        AND     #$F0
-        CMP     lookup_top_nibble,X
+
+; ---------------------------------------------------------------------------
+; Prepare nibble‑controlled accumulation loop.
+;
+; top_nibble_index corresponds directly to pod.tetherIndex.
+; The loop executes (top_nibble_index + 1) times.
+;
+; Combined with the initial sample above, this yields exactly
+; (tetherIndex + 2) accumulated SIN/COS samples.
+; ---------------------------------------------------------------------------
+
+        LDX     top_nibble_index               ; typically initialised to $0E (14)
+
+; ===========================================================================
+; NIBBLE‑CONTROLLED ACCUMULATION LOOP
+;
+; For each iteration:
+;   - The top nibble of (fraction + 8) is compared against a lookup table
+;     indexed by the loop counter.
+;   - When a match occurs, Y is incremented EXACTLY ONCE, switching from
+;     angleShipToPod to angleShipToPod + 1.
+;   - One SIN and COS table entry is added to the accumulators.
+;
+; Effect:
+;   - First K samples use angleShipToPod
+;   - Remaining samples use angleShipToPod + 1
+;
+; This implements linear interpolation between adjacent table entries.
+; ===========================================================================
+
+.L1F75
+        LDA     pod_vector_L007A              ; (fraction + 8)
+        AND     #$F0                          ; extract top nibble
+        CMP     lookup_top_nibble,X           ; does angle advance here?
         BNE     L1F83
 
-        INY
+        INY                                   ; switch to angle + 1
         TYA
-        AND     #$1F
+        AND     #$1F                          ; wrap to 0–31
         TAY
-		
-	.L1F83
-        CLC
-        LDA     angle_to_x_FRAC,Y
+
+.L1F83
         ADC     midpoint_deltax_FRAC
         STA     midpoint_deltax_FRAC
         LDA     angle_to_x_INT,Y
         ADC     midpoint_deltax_INT
         STA     midpoint_deltax_INT
+
         CLC
         LDA     angle_to_y_FRAC,Y
         ADC     midpoint_deltay_FRAC
@@ -4431,29 +4501,44 @@ ORG     NATIVE_ADDR
         LDA     angle_to_y_INT,Y
         ADC     midpoint_deltay_INT
         STA     midpoint_deltay_INT
+
         DEX
-        BPL     L1F75
+        BPL     L1F75                         ; loop while X >= 0
+
+; ---------------------------------------------------------------------------
+; Final normalisation: arithmetic shift right by 2 (divide by 4).
+;
+; The accumulated result is intentionally over‑scaled. Dividing by 4
+; produces the final tether vector:
+;
+;   dx ≈  1.25 * sin(angle) * (tetherIndex + 2) / 4
+;   dy ≈ -2.5  * cos(angle) * (tetherIndex + 2) / 4
+; ---------------------------------------------------------------------------
 
         LDA     midpoint_deltax_INT
         ROL     A
         ROR     midpoint_deltax_INT
         ROR     midpoint_deltax_FRAC
-        ROR     midpoint_deltax_FRAC_LO
+        ROR     midpoint_deltax_FRAC_LO       ; >> 1
         LDA     midpoint_deltax_INT
         ROL     A
         ROR     midpoint_deltax_INT
         ROR     midpoint_deltax_FRAC
-        ROR     midpoint_deltax_FRAC_LO
+        ROR     midpoint_deltax_FRAC_LO       ; >> 1 again (÷4 total)
+
         LDA     midpoint_deltay_INT
         ROL     A
         ROR     midpoint_deltay_INT
-        ROR     midpoint_deltay_FRAC
+        ROR     midpoint_deltay_FRAC          ; >> 1
         LDA     midpoint_deltay_INT
         ROL     A
         ROR     midpoint_deltay_INT
-        ROR     midpoint_deltay_FRAC
+        ROR     midpoint_deltay_FRAC          ; >> 1 again (÷4 total)
+
         RTS
 }
+
+
 
 \ ******************************************************************************
 \ * Function: update_pod_tractor_beam
@@ -4518,20 +4603,63 @@ ORG     NATIVE_ADDR
         RTS
 }
 
-\ ******************************************************************************
-\ * Function: attach_pod_to_ship
-\ * Description: calculate mid-point between player position & nearest object
-\ ******************************************************************************
-
+; ******************************************************************************
+; Function: attach_pod_to_ship
+;
+; Called when the tractor beam successfully attaches a pod to the ship.
+;
+; This routine transitions the game from “ship only” physics to
+; “ship + pod” physics by:
+;
+;   - Marking the pod as attached and updating level state flags.
+;
+;   - Computing the exact midpoint between the ship and the pod in
+;     fixed‑point world coordinates.  This midpoint becomes the origin
+;     of the attached system (the centre of mass).
+;
+;   - Conserving momentum by halving the ship’s existing linear force
+;     vectors so that ship and pod move together as a single body.
+;
+;   - Computing the target vector from the midpoint to the ship, with
+;     intentional asymmetric scaling of X and Y to match the geometry
+;     of the tether lookup tables.
+;
+;   - Performing a 7‑pass coarse‑to‑fine angular search to determine the
+;     tether angle (integer angle + fractional accumulator) whose
+;     calculated tether vector most closely matches the ship→midpoint
+;     direction.  Conceptually, this search is equivalent to solving an
+;     atan2‑style operation without using trigonometry.
+;
+;   - Finalising the attachment by deriving angular impulse and rotational
+;     velocity terms based on the chosen tether angle and the current
+;     linear forces, enabling the pendulum‑like swinging behaviour of the
+;     ship and pod.
+;
+; On exit, the physics state is fully initialised for an attached pod:
+; the midpoint is established, the tether angle is fixed, forces are
+; rebalanced, and the angular motion of the combined system is ready to
+; evolve on subsequent ticks.
+;
+; ******************************************************************************
 .attach_pod_to_ship
 {
-        LDA     tractor_beam_started_flag
+        LDA     tractor_beam_started_flag     ; exit if tractor beam inactive
         BEQ     tractor_beam_return
 
-        LDA     #$FF
+        LDA     #$FF                          ; mark pod as attached
         STA     pod_attached_flag_1
         STA     pod_attached_flag_2
         STA     level_reset_with_pod_flag
+
+; ---------------------------------------------------------------------------
+; Compute midpoint between ship and pod.
+;
+; This midpoint is the SEARCH TARGET.  We are looking for the tether vector
+; from the midpoint to the ship.
+;
+; X midpoint is computed as a fixed‑point average (INT+FRAC).
+; Y midpoint uses extended precision (Q10.8 via INT_HI).
+; ---------------------------------------------------------------------------
 
         CLC
         LDA     player_xpos_FRAC
@@ -4542,9 +4670,10 @@ ORG     NATIVE_ADDR
         ROR     A
         STA     midpoint_xpos_INT
         ROR     midpoint_xpos_FRAC
+
         CLC
         LDA     player_ypos_FRAC
-        ADC     #$80
+        ADC     #$80                         ; +0.5 for divide‑by‑2 rounding
         STA     midpoint_ypos_FRAC
         LDA     player_ypos_INT
         ADC     nearest_obj_ypos_INT
@@ -4555,126 +4684,221 @@ ORG     NATIVE_ADDR
         STA     midpoint_ypos_INT_HI
         ROR     midpoint_ypos_INT
         ROR     midpoint_ypos_FRAC
+
+; ---------------------------------------------------------------------------
+; Halve ship force vectors.
+;
+; This conserves momentum: after attachment, ship + pod move as one body.
+; ---------------------------------------------------------------------------
+
         LDA     force_vectory_INT
         ROL     A
         ROR     force_vectory_INT
+        ROL     A
+        ROR     force_vectory_INT
         ROR     force_vectory_FRAC
+
         LDA     force_vectorx_INT
         ROL     A
         ROR     force_vectorx_INT
         ROR     force_vectorx_FRAC
-        ROR     force_vectorx_FRAC_LO
+        ROR     force_vectorx_FRAC_LO        ; X uses extra precision (Q7.16)
+
+; ---------------------------------------------------------------------------
+; Compute target vector = ship − midpoint.
+;
+; Axes are intentionally scaled asymmetrically so they match the scale
+; of the tether vectors produced by calculate_attached_pod_vector:
+;   - X scaled ×4
+;   - Y scaled ×2
+;
+; This compensates for the different X/Y magnitudes (1.25 vs 2.5).
+; ---------------------------------------------------------------------------
+
         LDA     player_xpos_FRAC
         SBC     midpoint_xpos_FRAC
-        STA     attach_pod_L0074
+        STA     attach_pod_L0074              ; target dX frac
         LDA     player_xpos_INT
         SBC     midpoint_xpos_INT
-        STA     attach_pod_L0075
+        STA     attach_pod_L0075              ; target dX int
         ROL     attach_pod_L0074
         ROL     attach_pod_L0075
         ROL     attach_pod_L0074
-        ROL     attach_pod_L0075
+        ROL     attach_pod_L0075              ; X scaled ×4
         LDA     attach_pod_L0075
-        STA     attach_pod_L0072
+        STA     attach_pod_L0072              ; store target dX int
+
         LDA     player_ypos_FRAC
         SBC     midpoint_ypos_FRAC
-        STA     attach_pod_L0076
+        STA     attach_pod_L0076              ; target dY frac
         LDA     player_ypos_INT
         SBC     midpoint_ypos_INT
-        STA     attach_pod_L0077
+        STA     attach_pod_L0077              ; target dY int
         ROL     attach_pod_L0076
-        ROL     attach_pod_L0077
+        ROL     attach_pod_L0077              ; Y scaled ×2
         LDA     attach_pod_L0077
-        STA     attach_pod_L0073
+        STA     attach_pod_L0073              ; store target dY int
+
+; ---------------------------------------------------------------------------
+; Now perform a search of which angle will produce a tractor beam 
+; vector which most closely matches target dX and target dY
+; 
+; This routine computes the midpoint between the ship and pod, then performs
+; a 7‑pass coarse‑to‑fine angular search to determine the tether angle
+; (integer + fractional) whose tether vector best matches the ship→pod axis.
+;
+; Conceptually, the nested loops are performing a single atan2‑like operation:
+; The objective of these 2 nested loops is to calculate:
+;   angle ≈ atan2(targetDx / 1.25, targetDy / -2.5) * (32 / 2π)
+;
+; The 6502 implementation avoids trig by:
+;   - generating candidate tether vectors
+;   - comparing them to the target direction
+;   - minimising a Manhattan distance metric
+;
+; Each pass tests 3 candidate angles and then halves the search step size.
+;
+; Initialise angular search parameters.
+;
+; stepHi:stepLo form a Q8.8 angle step.
+; Initial step ≈ 32 / 3, dividing the full angular range into thirds.
+;
+; The search runs for 7 passes, halving the step size each time.
+; ---------------------------------------------------------------------------
+
         LDA     #$0A
-        STA     attach_pod_L007B
+        STA     attach_pod_L007B              ; stepHi
         LDA     #$AB
-        STA     attach_pod_L007A
+        STA     attach_pod_L007A              ; stepLo
         LDA     #$07
-        STA     attach_pod_L007C
+        STA     attach_pod_L007C              ; number of passes
+
         LDA     #$00
-        STA     angle_var_B_accumulate
-        STA     angle_ship_to_pod
-		
-	.L207E
+        STA     angle_var_B_accumulate        ; starting angleFrac
+        STA     angle_ship_to_pod             ; starting integer angle
+
+; ===========================================================================
+; OUTER LOOP: 7‑PASS COARSE‑TO‑FINE ANGLE SEARCH
+; ===========================================================================
+
+.L207E
         LDA     #$FF
-        STA     attach_pod_L0071
+        STA     attach_pod_L0071              ; best distance this pass
         LDX     #$03
-        STX     attach_pod_L0078
-		
-	.L2086
-        JSR     calculate_attached_pod_vector
+        STX     attach_pod_L0078              ; 3 candidate angles
+
+; ---------------------------------------------------------------------------
+; INNER LOOP: test 3 candidate angles at current step size
+;
+; These candidates divide the current angular search window into thirds.
+; ---------------------------------------------------------------------------
+
+.L2086
+        JSR     calculate_attached_pod_vector ; compute candidate tether vector
+
+; Scale candidate vector to match target scaling (X×4, Y×2)
 
         ROL     midpoint_deltax_FRAC
         ROL     midpoint_deltax_INT
         ROL     midpoint_deltax_FRAC
-        ROL     midpoint_deltax_INT
+        ROL     midpoint_deltax_INT            ; X scaled ×4
         ROL     midpoint_deltay_FRAC
-        ROL     midpoint_deltay_INT
+        ROL     midpoint_deltay_INT            ; Y scaled ×2
+
+; Compute |dx − target_dx|
+
         SEC
         LDA     midpoint_deltax_INT
         SBC     attach_pod_L0075
+        LDA     midpoint_deltax_INT
+        SBC     attach_pod_L0075
         BPL     L20A0
-
         EOR     #$FF
         ADC     #$01
-		
-	.L20A0
-        STA     attach_pod_L0088
+.L20A0
+        STA     attach_pod_L0088               ; |ΔX|
+
+; Compute |dy − target_dy|
+
         SEC
         LDA     midpoint_deltay_INT
         SBC     attach_pod_L0077
+        LDA     midpoint_deltay_INT
+        SBC     attach_pod_L0077
         BPL     L20AD
-
         EOR     #$FF
         ADC     #$01
-		
-	.L20AD
-        STA     attach_pod_L0089
+.L20AD
+        STA     attach_pod_L0089               ; |ΔY|
+
+; Combine |ΔX| and |ΔY| into a Manhattan distance metric.
+;
+; X contributes twice the weight of Y implicitly due to scaling above.
+; ---------------------------------------------------------------------------
+
         JSR     get_distance_ship_to_pod_tractor_ext
+
+; Keep the best candidate this pass
 
         CMP     attach_pod_L0071
         BCS     L20C0
 
-        STA     attach_pod_L0071
+        STA     attach_pod_L0071              ; new best distance
         LDA     angle_var_B_accumulate
-        STA     prev_angle_var_A
+        STA     prev_angle_var_A              ; save best frac
         LDA     angle_ship_to_pod
-        STA     temp_angle_ship_to_pod
-		
-	.L20C0
+        STA     temp_angle_ship_to_pod        ; save best int
+
+; Advance angle to next candidate: angle += step (Q8.8)
+; Carry from fractional addition propagates into integer angle.
+
+.L20C0
         CLC
-        LDA     angle_var_B_accumulate
-        ADC     attach_pod_L007A
-        STA     angle_var_B_accumulate
-        LDA     angle_ship_to_pod
         ADC     attach_pod_L007B
         AND     #$1F
         STA     angle_ship_to_pod
+
         DEC     attach_pod_L0078
-        BNE     L2086
+        BNE     L2086                         ; test next candidate
+
+; ---------------------------------------------------------------------------
+; Restore best candidate for this pass and halve step size
+; ---------------------------------------------------------------------------
 
         LDA     prev_angle_var_A
         STA     angle_var_B_accumulate
+        STA     angle_var_B_accumulate
         LDA     temp_angle_ship_to_pod
         STA     angle_ship_to_pod
+
         CLC
-        ROR     attach_pod_L007B
+        ROR     attach_pod_L007B              ; step >> 1 (Q8.8)
         ROR     attach_pod_L007A
+
+; ---------------------------------------------------------------------------
+; Prepare for next pass.
+; Rewind angle by half a step so the new search window is centered.
+; ---------------------------------------------------------------------------
+
         DEC     attach_pod_L007C
-        BEQ     L20F6
+        BEQ     L20F6                         ; after 7 passes, done
 
         SEC
         LDA     angle_var_B_accumulate
-        SBC     attach_pod_L007A
-        STA     angle_var_B_accumulate
-        LDA     angle_ship_to_pod
         SBC     attach_pod_L007B
         AND     #$1F
         STA     angle_ship_to_pod
         JMP     L207E
+; ---------------------------------------------------------------------------
+; Atan2 calculation is now finished.
+; ---------------------------------------------------------------------------
 
-	.L20F6
+; ===========================================================================
+; 
+; Final phase: derive angular velocity / torque terms based on final angle
+; ===========================================================================
+
+.L20F6
         LDA     force_vectorx_INT
         STA     attach_pod_L0088
         LDA     force_vectorx_FRAC
@@ -4685,14 +4909,15 @@ ORG     NATIVE_ADDR
         ROL     A
         ROL     attach_pod_L0088
         ROL     A
-        ROL     attach_pod_L0088
+        ROL     attach_pod_L0088              ; project X force onto tether frame
         LDA     attach_pod_L0073
-        JSR     attach_pod_calculate_UNKNOWN
+        JSR     attach_pod_calculate_UNKNOWN  ; multiply/projection helper
 
         LDA     attach_pod_L0089
         STA     attach_pod_L008E
         LDA     attach_pod_L008A
         STA     attach_pod_L008F
+
         LDA     force_vectory_INT
         STA     attach_pod_L0088
         LDA     force_vectory_FRAC
@@ -4703,9 +4928,11 @@ ORG     NATIVE_ADDR
         ROL     A
         ROL     attach_pod_L0088
         ROL     A
-        ROL     attach_pod_L0088
+        ROL     attach_pod_L0088              ; project Y force similarly
         LDA     attach_pod_L0072
         JSR     attach_pod_calculate_UNKNOWN
+
+; Compute net angular impulse (difference of projections)
 
         SEC
         LDA     attach_pod_L0089
@@ -4723,13 +4950,11 @@ ORG     NATIVE_ADDR
         PLA
         ROR     A
         ROR     angle_var_B
-        STA     angle_var_C
-		
-        JSR     collect_pod_fuel_sound
+        STA     angle_var_C                  ; final angular velocity term
+        JSR     collect_pod_fuel_sound        ; audio feedback on attachment
 
         RTS
 }
-
 \ ******************************************************************************
 \ * Function: generate_stars_to_start
 \ * Description: <>
@@ -9988,7 +10213,34 @@ ORG     NATIVE_ADDR
 
 \ ******************************************************************************
 \ * Look up table - converts angle to 16-bit X & Y values in Q2.8 format
+\ *
+\ * Description:
+\ *   These tables convert a discrete 32‑step angle into signed fixed‑point
+\ *   X and Y components.  Together, INT + FRAC form a signed Q7.8 value:
+\ *
+\ *     value = INT + FRAC / 256
+\ *
+\ *   Angle index:
+\ *     0  = pointing straight up
+\ *     8  = pointing right
+\ *     16 = pointing down
+\ *     24 = pointing left
+\ *     angles increase clockwise
+\ *
+\ *   Geometry:
+\ *     X ≈  1.25 * sin(theta)
+\ *     Y ≈ -2.5  * cos(theta)
+\ *
+\ *   The unequal amplitudes deliberately encode an ellipse rather than
+\ *   a circle.  This asymmetry is relied upon elsewhere in the physics
+\ *   (e.g. distance comparison and axis weighting).
 \ ******************************************************************************
+
+; ---------------------------------------------------------------------------
+; Y component – fractional byte (Q7.8)
+; Values are the fractional part of approximately:
+;   -2.5 * cos(i * 2π / 32)
+; ---------------------------------------------------------------------------
 
 .lookup_angle_to_y_FRAC
         EQUB    $80,$8D,$B1,$EC,$3C,$9D,$0C,$84
@@ -9996,17 +10248,34 @@ ORG     NATIVE_ADDR
         EQUB    $80,$73,$4F,$14,$C4,$63,$F4,$7C
         EQUB    $00,$84,$0C,$9D,$3C,$EC,$B1,$8D
 
+; ---------------------------------------------------------------------------
+; Y component – integer byte (Q7.8 signed)
+; Combined with *_FRAC gives Y magnitude up to about ±2.5.
+; ---------------------------------------------------------------------------
+
 .lookup_angle_to_y_INT
         EQUB    $FD,$FD,$FD,$FD,$FE,$FE,$FF,$FF
         EQUB    $00,$00,$00,$01,$01,$02,$02,$02
         EQUB    $02,$02,$02,$02,$01,$01,$00,$00
         EQUB    $00,$FF,$FF,$FE,$FE,$FD,$FD,$FD
 
+; ---------------------------------------------------------------------------
+; X component – fractional byte (Q7.8)
+; Values are the fractional part of approximately:
+;   +1.25 * sin(i * 2π / 32)
+; ---------------------------------------------------------------------------
+
 .lookup_angle_to_x_FRAC
         EQUB    $00,$3E,$7A,$B1,$E2,$0A,$27,$39
         EQUB    $40,$39,$27,$0A,$E2,$B1,$7A,$3E
         EQUB    $00,$C2,$86,$4F,$1E,$F6,$D9,$C7
         EQUB    $C0,$C7,$D9,$F6,$1E,$4F,$86,$C2
+
+; ---------------------------------------------------------------------------
+; X component – integer byte (Q7.8 signed)
+; Combined with *_FRAC gives X magnitude up to about ±1.25.
+; Note X has roughly half the amplitude of Y by design.
+; ---------------------------------------------------------------------------
 
 .lookup_angle_to_x_INT
         EQUB    $00,$00,$00,$00,$00,$01,$01,$01
