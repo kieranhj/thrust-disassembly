@@ -24,12 +24,6 @@
 \ * _FRAC & _INT are used to identify the fraction and integer components of a
 \ * fixed-point variable. _FRAC_LO is used to signify an additional byte of
 \ * precision at the low end whilst _INT_HI is used for additional upper bits.
-\ * 
-\ * TO DO:
-\ * - Properly document each function and how each routine actually works
-\ * - Identify remaining zero page variables
-\ * - Extract constants and globals from immediates
-\ * - Sleep
 \ *****************************************************************************
 \ *****************************************************************************
 
