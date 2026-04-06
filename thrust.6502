@@ -2553,59 +2553,119 @@ ORG     NATIVE_ADDR
 \ ******************************************************************************
 \ ******************************************************************************
 
-\ ******************************************************************************
-\ * Function: attach_pod_calculate_UNKNOWN
-\ * Params: A = <unknown input>
-\ * Returns: none
-\ * Description: Multiplies two signed 8-bit values into a 16-bit result
-\ ******************************************************************************
+; ******************************************************************************
+; Function: attach_pod_calculate_UNKNOWN
+;
+; Purpose:
+;   Perform a signed 8‑bit × 8‑bit multiplication, producing a 16‑bit
+;   signed result.
+;
+;   This routine is used during pod attachment to compute cross‑product
+;   terms of the form:
+;
+;       (linear_velocity_component × displacement_component)
+;
+;   These products are later combined as:
+;
+;       angularVelocity ∝ (Fy * dx) − (Fx * dy)
+;
+;   to give the initial angular velocity of the ship‑pod system when the
+;   tether is created.
+;
+; Inputs:
+;   - multiply_operand_a : signed multiplier (prepared by caller)
+;   - A register         : signed multiplicand (passed in via A)
+;
+; Outputs:
+;   - multiply_result_lo : result low byte
+;   - multiply_result_hi : result high byte
+;
+; Temporaries:
+;   - multiply_operand_b : working copy of multiplicand
+;   - multiply_sign_ext  : sign‑extension byte for signed arithmetic
+;
+; Notes:
+;   - Implements classic signed “shift‑and‑add” multiplication.
+;   - Converts operands to positive, performs unsigned multiply,
+;     then restores sign using two’s‑complement arithmetic.
+;
+; ******************************************************************************
 
 .attach_pod_calculate_UNKNOWN
 {
-        STA     multiply_operand_b
+        STA     multiply_operand_b        ; save multiplicand (operand B)
+
         LDA     #$00
-        STA     multiply_result_lo
-        STA     multiply_result_hi
-        STA     multiply_sign_ext
+        STA     multiply_result_lo         ; clear result low byte
+        STA     multiply_result_hi         ; clear result high byte
+        STA     multiply_sign_ext          ; clear sign‑extension byte
+
+; ---------------------------------------------------------------------------
+; If multiplier (operand A) is negative, negate both operands.
+; This allows the multiply itself to be done using unsigned arithmetic.
+; ---------------------------------------------------------------------------
+
         LDA     multiply_operand_a
-        BPL     L16F2
+        BPL     L16F2                      ; skip if operand A ≥ 0
 
         EOR     #$FF
         STA     multiply_operand_a
-        INC     multiply_operand_a
+        INC     multiply_operand_a         ; two’s complement: −operand A
+
         LDA     multiply_operand_b
         EOR     #$FF
         STA     multiply_operand_b
-        INC     multiply_operand_b
+        INC     multiply_operand_b         ; two’s complement: −operand B
 
-    .L16F2
+; ---------------------------------------------------------------------------
+; Determine final sign of the result.
+; If operand B is negative, set the sign‑extension byte.
+; ---------------------------------------------------------------------------
+
+.L16F2
         LDA     multiply_operand_b
         BPL     L16FA
 
         LDA     #$FF
-        STA     multiply_sign_ext
+        STA     multiply_sign_ext          ; mark result as negative
 
-    .L16FA
-        LDX     #$08
+; ---------------------------------------------------------------------------
+; Main multiply loop: 8 iterations (one per bit of multiplier).
+; Uses shift‑right of multiplier and shift‑left of multiplicand.
+; ---------------------------------------------------------------------------
 
-    .L16FC
-        ROR     multiply_operand_a
-        BCC     L170D
+.L16FA
+        LDX     #$08                       ; process 8 bits
+
+.L16FC
+        ROR     multiply_operand_a         ; shift multiplier right
+        BCC     L170D                      ; if bit = 0, skip addition
 
         LDA     multiply_operand_b
         CLC
         ADC     multiply_result_lo
-        STA     multiply_result_lo
+        STA     multiply_result_lo         ; add multiplicand to result (low)
+
         LDA     multiply_sign_ext
         ADC     multiply_result_hi
-        STA     multiply_result_hi
+        STA     multiply_result_hi         ; propagate carry to high byte
 
-    .L170D
+; ---------------------------------------------------------------------------
+; Shift multiplicand left by 1 bit, preserving sign via sign‑extension byte.
+; ---------------------------------------------------------------------------
+
+.L170D
         CLC
-        ROL     multiply_operand_b
-        ROL     multiply_sign_ext
+        ROL     multiply_operand_b         ; multiplicand <<= 1
+        ROL     multiply_sign_ext          ; shift sign extension with it
+
         DEX
-        BNE     L16FC
+        BNE     L16FC                      ; repeat for remaining bits
+
+; ---------------------------------------------------------------------------
+; Result is now complete:
+;   multiply_result_hi : multiply_result_lo = signed product
+; ---------------------------------------------------------------------------
 
         RTS
 }
@@ -3652,28 +3712,106 @@ ORG     NATIVE_ADDR
 \ ******************************************************************************
 \ ******************************************************************************
 
-\ ******************************************************************************
-\ * Function: ship_input_thrust_calculate_force
-\ * Description: Zeroes or applies gravity to ship force vector based on state
-\ ******************************************************************************
+
+; ******************************************************************************
+; Function: ship_input_thrust_calculate_force
+;
+; Purpose:
+;   This routine performs the core physics update for the ship on selected
+;   ticks of the game loop.  It accumulates linear and angular motion due to
+;   gravity, thrust input, and (when attached) tether torque.
+;
+; Overview of processing steps:
+;
+;   1. Early‑out conditions
+;      - If the ship is neither attached to a pod nor in a destruction
+;        sequence, forces are cleared and no physics is applied.
+;
+;   2. Tick gating
+;      - Physics runs only on specific slots of a 16‑tick cycle
+;        (6 active ticks per frame block)
+;
+;   3. Gravity
+;      - On active ticks, gravity is always accumulated into the vertical
+;        force vector as a fixed‑point increment.
+;
+;   4. Thrust input
+;      - If the thrust key is pressed and fuel is available:
+;          * Fuel is consumed and the engine sound is triggered.
+;          * A thrust vector is generated from the ship’s angle using
+;            lookup tables.
+;          * Thrust magnitude is scaled by the ship’s effective mass:
+;              - ship alone     → thrust >> 4
+;              - ship + pod     → thrust >> 5
+;          * The resulting thrust components are added to the force vectors.
+;
+;   5. Torque from thrust (pod attached only)
+;      - When a pod is attached, thrust can also generate angular motion.
+;      - On active ticks except two skip slots (3 and 11), a tangential
+;        thrust component relative to the tether direction is computed.
+;      - This tangential component is added into the tether angular velocity,
+;        giving swing when thrust is applied off‑axis.
+;
+;   6. Angular damping
+;      - The tether angular velocity is damped each active tick by a small
+;        factor (implemented as a fixed‑point right shift), preventing
+;        unbounded oscillation.
+;
+;   7. Linear drag
+;      - After thrust and gravity, linear drag is applied:
+;          * Horizontal drag:  forceX -= forceX >> 6   (63/64)
+;          * Vertical drag:    forceY -= forceY >> 8   (255/256)
+;      - Different drag strengths are intentional and replicate the
+;        original game’s feel.
+;
+; Result:
+;   - force_vectorx / force_vectory contain the updated linear velocity
+;     increments for this tick.
+;   - tether_angular_vel contains the updated angular velocity when the
+;     pod is attached.
+;
+; Notes:
+;   - Despite their names, the “force_” variables represent velocity
+;     increments per tick rather than physical forces.
+;   - Position integration and angular position updates occur elsewhere
+;     in the main loop using the values calculated here.
+;
+; ******************************************************************************
 
 .ship_input_thrust_calculate_force
 {
+; ===========================================================================
+; STEP 1 — EARLY EXIT FOR INACTIVE SHIP
+;
+; If the ship is neither attached to a pod nor in the process of being
+; destroyed, then no physics should be applied on this tick.
+; In this case, the linear velocity (“force”) vectors are cleared and the
+; routine exits immediately.
+; ===========================================================================
+
         LDA     pod_destroying_player_timer
-        BMI     L1B5F
+        BMI     L1B5F                      ; if ship is being destroyed, continue
 
         LDA     pod_attached_flag_1
-        BNE     L1B5F
+        BNE     L1B5F                      ; if pod attached, continue
 
         LDA     player_ship_destroyed_flag
-        BNE     L1B5F
+        BNE     L1B5F                      ; if ship destroyed, continue
 
         LDA     #$00
-        STA     force_vectory_INT
-        STA     force_vectory_FRAC
-        STA     force_vectorx_INT
-        STA     force_vectorx_FRAC
-        RTS
+        STA     force_vectory_INT          ; clear vertical velocity (INT)
+        STA     force_vectory_FRAC         ; clear vertical velocity (FRAC)
+        STA     force_vectorx_INT          ; clear horizontal velocity (INT)
+        STA     force_vectorx_FRAC         ; clear horizontal velocity (FRAC)
+        RTS                                ; no physics this tick
+
+; ===========================================================================
+; STEP 2 — TICK GATING
+;
+; Physics updates are performed only on specific slots of a 16‑tick cycle.
+; This ensures a fixed physics rate.
+; Active slots: 0, 3, 5, 8, 11, 13.
+; ===========================================================================
 
     .L1B5F
         LDA     level_tick_counter
@@ -3695,7 +3833,15 @@ ORG     NATIVE_ADDR
         CMP     #$0D
         BEQ     add_gravity_to_force_vector
 
-        RTS
+        RTS                                ; inactive tick → exit
+
+; ===========================================================================
+; STEP 3 — GRAVITY
+;
+; On every active physics tick, gravity is always applied.
+; Gravity is accumulated into the vertical velocity vector using
+; fixed‑point arithmetic.
+; ===========================================================================
 
     .add_gravity_to_force_vector
         CLC
@@ -3706,68 +3852,114 @@ ORG     NATIVE_ADDR
         ADC     gravity_INT
         STA     force_vectory_INT
 
+; ===========================================================================
+; STEP 4 — THRUST AVAILABILITY CHECK
+;
+; Thrust is applied only if:
+;   - the ship is not currently in the destruction countdown,
+;   - fuel has not just run out,
+;   - and the thrust key is pressed.
+; ===========================================================================
+
         LDA     pod_destroying_player_timer
-        BPL     no_thrust
+        BPL     no_thrust                  ; disable thrust while dying
 
         LDA     fuel_just_ran_out_flag
-        BNE     no_thrust
+        BNE     no_thrust                  ; no fuel → no thrust
 
         LDX     #INKEY_shift
-        JSR     test_inkey
-
+        JSR     test_inkey                 ; test thrust key
         BEQ     thrust_was_pressed
 
     .no_thrust
         JMP     end_of_thrust_force_calculation
 
+; ===========================================================================
+; STEP 4b — BEGIN THRUST FORCE CALCULATION
+;
+; Thrust input is active. Fuel is consumed and the engine sound triggered.
+; The thrust vector is then derived from the ship angle and scaled by mass.
+; ===========================================================================
+
     .thrust_was_pressed
         JSR     use_fuel
         JSR     run_engine
 
+; ---------------------------------------------------------------------------
+; Determine thrust scaling based on effective mass.
+;   Ship alone     → shift right by 4
+;   Ship + pod     → shift right by 5
+; ---------------------------------------------------------------------------
+
         LDY     #$04
         LDA     pod_attached_flag_1
         BEQ     L1BA6
-
         INY
+
     .L1BA6
         LDX     ship_angle
+
+; ---------------------------------------------------------------------------
+; Compute vertical thrust component from angle lookup table and apply
+; mass‑dependent scaling via repeated shifts.
+; ---------------------------------------------------------------------------
+
         LDA     angle_to_y_FRAC,X
         STA     calc_force_vectory_FRAC
         LDA     angle_to_y_INT,X
         
     .L1BB0
-        ROR     A
+        ROR     A                          ; divide by 2 per iteration
         ROR     calc_force_vectory_FRAC
         DEY
         BNE     L1BB0
 
-        AND     #$01
+        AND     #$01                       ; recover sign bit
         EOR     #$FF
         CLC
         ADC     #$01
-        STA     calc_force_vectory_INT
+        STA     calc_force_vectory_INT     ; signed vertical thrust component
+
         LDY     #$04
         LDA     pod_attached_flag_1
         BEQ     L1BC6
-        INY
+        INY 
+
+
+; ===========================================================================
+; STEP 4c — HORIZONTAL THRUST COMPONENT
+;
+; Compute the horizontal (X) component of thrust from the ship angle.
+; This mirrors the vertical thrust calculation above, but uses an extra
+; low‑order fractional byte for additional precision.
+;
+; The thrust magnitude is scaled by effective mass (ship vs ship+pod)
+; via repeated right shifts.
+; ===========================================================================
 
     .L1BC6
         LDA     angle_to_x_FRAC,X
-        STA     calc_force_vectorx_FRAC
-        LDA     angle_to_x_INT,X
+        STA     calc_force_vectorx_FRAC       ; X thrust fractional part
+        LDA     angle_to_x_INT,X              ; X thrust integer part
 
     .L1BCE
-        ROR     A
+        ROR     A                             ; scale thrust (>> 1)
         ROR     calc_force_vectorx_FRAC
-        ROR     calc_force_vectorx_FRAC_LO
+        ROR     calc_force_vectorx_FRAC_LO    ; extra precision for X
         DEY
-        BNE     L1BCE
+        BNE     L1BCE                        ; repeat for mass scaling
 
-        AND     #$01
+        AND     #$01                          ; extract sign bit
         EOR     #$FF
         CLC
         ADC     #$01
-        STA     calc_force_vectorx_INT
+        STA     calc_force_vectorx_INT        ; signed X thrust component
+
+; ---------------------------------------------------------------------------
+; Accumulate horizontal thrust into the ship’s linear velocity.
+; force_vectorx represents velocity per tick, despite the name.
+; ---------------------------------------------------------------------------
+
         CLC
         LDA     force_vectorx_FRAC_LO
         ADC     calc_force_vectorx_FRAC_LO
@@ -3779,6 +3971,10 @@ ORG     NATIVE_ADDR
         ADC     calc_force_vectorx_INT
         STA     force_vectorx_INT
 
+; ---------------------------------------------------------------------------
+; Accumulate vertical thrust into the ship’s linear velocity.
+; ---------------------------------------------------------------------------
+
         CLC
         LDA     force_vectory_FRAC
         ADC     calc_force_vectory_FRAC
@@ -3786,6 +3982,16 @@ ORG     NATIVE_ADDR
         LDA     force_vectory_INT
         ADC     calc_force_vectory_INT
         STA     force_vectory_INT
+
+; ===========================================================================
+; STEP 5 — TORQUE SKIP CHECK
+;
+; Even when thrust is applied, angular (tether) torque updates are skipped
+; on specific tick slots to limit angular update frequency.
+;
+; Slots skipped: 3 and 11 (out of each 16‑tick cycle).
+; ===========================================================================
+
         LDA     level_tick_counter
         AND     #$0F
         CMP     #$03
@@ -3799,36 +4005,67 @@ ORG     NATIVE_ADDR
 
         JMP     end_of_thrust_force_calculation
 
+; ===========================================================================
+; STEP 5 (continued) — PREPARE FOR TETHER TORQUE CALCULATION
+;
+; At this point:
+;   - Linear thrust has already been applied.
+;   - Pod is attached.
+;   - This is a tick where torque is allowed.
+;
+; The following code prepares the angular difference between ship angle
+; and tether angle for computing a tangential thrust component.
+; ===========================================================================
+
     .L1C11
         LDA     #$00
-        STA     thrust_sign_extend
+        STA     thrust_sign_extend            ; clear sign extension
+
         SEC
         SBC     tether_angle_FRAC
-        STA     thrust_angle_sub_frac
+        STA     thrust_angle_sub_frac         ; −tether angle fraction
+
         LDA     ship_angle
         SBC     angle_ship_to_pod
-        TAY
+        TAY                                   ; angular difference (integer)
+
         LDA     thrust_angle_sub_frac
         CLC
-        ADC     #$08
+        ADC     #$08                          ; center fractional range
         STA     thrust_angle_sub_frac
+
         TYA
-        ADC     #$00
+        ADC     #$00                          ; propagate carry into angle
         AND     #ANGLE_MASK
         TAY
+
+; ---------------------------------------------------------------------------
+; Look up tangential thrust component based on angular difference.
+; This will later be integrated into tether angular velocity.
+; ---------------------------------------------------------------------------
+
         LDA     angle_to_x_FRAC,Y
         STA     ship_thrust_x_FRAC
         LDA     angle_to_x_INT,Y
         STA     ship_thrust_x_INT
-        LDX     #$0E
+        LDX     #$0E                          ; interpolation count
         
+; ===========================================================================
+; STEP 5 — COMPUTE TANGENTIAL THRUST VIA ANGLE INTERPOLATION
+;
+; This loop computes the tangential component of thrust relative to the
+; tether direction. It performs a nibble‑based interpolation over the
+; angle lookup tables, identical in structure to calculate_attached_pod_vector,
+; but applied to angular difference rather than absolute angle.
+; ===========================================================================
+
     .L1C38
-        LDA     thrust_angle_sub_frac
-        AND     #$F0
-        CMP     lookup_top_nibble,X
+        LDA     thrust_angle_sub_frac      ; fractional angular difference
+        AND     #$F0                       ; extract high nibble
+        CMP     lookup_top_nibble,X        ; compare against interpolation table
         BNE     L1C46
 
-        INY
+        INY                                ; advance angle index when matched
         TYA
         AND     #ANGLE_MASK
         TAY
@@ -3836,40 +4073,64 @@ ORG     NATIVE_ADDR
     .L1C46
         CLC
         LDA     angle_to_x_FRAC,Y
-        ADC     ship_thrust_x_FRAC
+        ADC     ship_thrust_x_FRAC         ; accumulate tangential thrust (frac)
         STA     ship_thrust_x_FRAC
         LDA     angle_to_x_INT,Y
-        ADC     ship_thrust_x_INT
+        ADC     ship_thrust_x_INT          ; accumulate tangential thrust (int)
         STA     ship_thrust_x_INT
+
         DEX
-        BPL     L1C38
+        BPL     L1C38                      ; repeat interpolation steps
+
+; ---------------------------------------------------------------------------
+; Normalise the accumulated tangential thrust.
+; This converts the summed value back into a signed fixed‑point quantity
+; suitable for use as an angular impulse.
+; ---------------------------------------------------------------------------
 
         LDA     ship_thrust_x_INT
         ROL     A
         ROR     ship_thrust_x_INT
-        ROR     ship_thrust_x_FRAC
+        ROR     ship_thrust_x_FRAC         ; arithmetic right shift (÷2)
 
         LDA     ship_thrust_x_INT
         BPL     L1C67
         LDA     #$FF
-        STA     thrust_sign_extend
-        
+        STA     thrust_sign_extend         ; sign extension for negative values
+
+; ===========================================================================
+; STEP 5 (continued) — APPLY TANGENTIAL THRUST TO ANGULAR VELOCITY
+;
+; Tangential thrust is accumulated into the tether angular velocity.
+; This represents torque due to thrust applied off‑axis.
+; ===========================================================================
+
     .L1C67
         CLC
         LDA     tether_angular_vel_LO
         STA     prev_tether_vel_LO
         ADC     ship_thrust_x_FRAC
         STA     tether_angular_vel_LO
+
         LDA     tether_angular_vel_FRAC
         STA     prev_tether_vel_FRAC
         ADC     ship_thrust_x_INT
         STA     tether_angular_vel_FRAC
+
         LDA     tether_angular_vel_INT
         STA     prev_tether_vel_INT
         ADC     thrust_sign_extend
         STA     tether_angular_vel_INT
+
+; ===========================================================================
+; STEP 6 — ANGULAR DAMPING
+;
+; Apply angular drag to prevent unbounded oscillation.
+; This subtracts angularVelocity >> 6 (≈63/64 multiplier per update).
+; ===========================================================================
+
         LDA     prev_tether_vel_INT
-        LDX     #$06
+        LDX     #$06                       ; divide by 64
 
     .L1C84
         PHA
@@ -3881,7 +4142,7 @@ ORG     NATIVE_ADDR
         DEX
         BNE     L1C84
 
-        STA     prev_tether_vel_INT
+        STA     prev_tether_vel_INT        ; damped angular velocity
 
         CLC
         LDA     tether_angular_vel_LO
@@ -3894,13 +4155,22 @@ ORG     NATIVE_ADDR
         SBC     prev_tether_vel_INT
         STA     tether_angular_vel_INT
 
+; ===========================================================================
+; STEP 7 — LINEAR DRAG
+;
+; Apply per‑axis linear damping to the ship’s velocity.
+; This reduces velocity gradually each physics tick:
+;   - X drag: forceX -= forceX >> 6   (63/64)
+;   - Y drag: forceY -= forceY >> 8   (255/256)
+; ===========================================================================
+
     .end_of_thrust_force_calculation
         LDA     force_vectorx_FRAC_LO
         STA     calc_force_vectory_FRAC
         LDA     force_vectorx_FRAC
         STA     calc_force_vectory_INT
         LDA     force_vectorx_INT
-        LDX     #$06
+        LDX     #$06                       ; X drag divisor
 
     .L1CB0
         PHA
@@ -3923,6 +4193,7 @@ ORG     NATIVE_ADDR
         LDA     force_vectorx_INT
         SBC     calc_force_vectorx_FRAC
         STA     force_vectorx_INT
+
         LDA     #$00
         STA     calc_force_vectorx_INT
         LDA     force_vectory_INT
@@ -3931,13 +4202,18 @@ ORG     NATIVE_ADDR
         LDA     #$FF
         STA     calc_force_vectorx_INT
 
+; ---------------------------------------------------------------------------
+; Vertical drag (weaker than horizontal).
+; This subtracts forceY >> 8 (≈255/256 multiplier per update).
+; ---------------------------------------------------------------------------
+
     .L1CDC
         LDA     force_vectory_FRAC
         STA     calc_force_vectory_FRAC
         LDA     force_vectory_INT
         STA     calc_force_vectory_INT
         LDA     calc_force_vectorx_INT
-        LDX     #$08
+        LDX     #$08                       ; Y drag divisor
 
     .L1CE8
         PHA
@@ -3957,10 +4233,12 @@ ORG     NATIVE_ADDR
         LDA     force_vectory_INT
         SBC     calc_force_vectory_INT
         STA     force_vectory_INT
+
         LDA     calc_force_vectorx_INT
-        SBC     calc_force_vectorx_FRAC
+        SBC     calc_force_vectorx_FRAC     ; final sign correction
         STA     calc_force_vectorx_INT
         RTS
+                
 }
 
 \ ******************************************************************************
@@ -4892,12 +5170,64 @@ ORG     NATIVE_ADDR
 ; Atan2 calculation is now finished.
 ; ---------------------------------------------------------------------------
 
+
 ; ===========================================================================
-; 
-; Final phase: derive angular velocity / torque terms based on final angle
+;
+; Final phase: derive initial angular velocity of the ship‑pod system.
+;
+; When the pod attaches, any sideways linear motion of the ship relative
+; to the pod must be converted into rotational motion about the midpoint.
+;
+; This block computes a 2‑D signed cross product between:
+;   - the ship’s current linear velocity vector, and
+;   - the displacement from the midpoint to the ship.
+;
+; Conceptually:
+;
+;   angularVelocity ∝ (velY * dx) − (velX * dy)
+;
+; where (dx, dy) is the ship‑to‑midpoint vector.
+;
+; IMPORTANT IMPLEMENTATION DETAIL:
+;
+; The 6502 never performs an explicit divide by the tether length r.
+; Instead, the division by r is handled implicitly by careful fixed‑point
+; scaling:
+;
+;   - Displacement values (dx, dy) were already scaled earlier to reflect
+;     the effective tether half‑length (≈ 4 units).
+;
+;   - Here, groups of 4 ROL instructions multiply velocity values by 16
+;     *before* the multiply. The signed multiply then produces a 16‑bit
+;     result, of which only the high byte is taken forward.
+;
+;     Net effect: ×16 followed by implicit ÷256 (via high‑byte extraction)
+;                 ⇒ overall ÷16.
+;
+;   - This compensates for the earlier displacement scaling and leaves
+;     the resulting angular velocity in a stable, well‑tuned range.
+;
+; The end result behaves like:
+;
+;   angularVelocity ≈ (r × v) / r
+;
+; without ever computing r explicitly.
+;
 ; ===========================================================================
 
 .L20F6
+        ; ---------------------------------------------------------------
+        ; Compute cross‑product term (velX * dy).
+        ;
+        ; Prepare X velocity in fixed‑point form. The repeated ROLs
+        ; shift fractional bits up into the integer domain, effectively
+        ; multiplying velX by 16 so that the *significant* part of the
+        ; product ends up in the high byte of the 16‑bit result.
+        ;
+        ; This scaling is deliberate: only the high byte of the multiply
+        ; result will be used later to form angular velocity.
+        ; ---------------------------------------------------------------
+
         LDA     force_vectorx_INT
         STA     multiply_operand_a
         LDA     force_vectorx_FRAC
@@ -4908,14 +5238,25 @@ ORG     NATIVE_ADDR
         ROL     A
         ROL     multiply_operand_a
         ROL     A
-        ROL     multiply_operand_a              ; project X force onto tether frame
-        LDA     attach_pod_delta_y_scaled
-        JSR     attach_pod_calculate_UNKNOWN    ; multiply/projection helper
+        ROL     multiply_operand_a              ; velX × 16 (scale‑alignment)
 
+        LDA     attach_pod_delta_y_scaled        ; dy (midpoint → ship, pre‑scaled)
+        JSR     attach_pod_calculate_UNKNOWN    ; signed multiply: velX * dy
+
+        ; Save this term so we can subtract it later
         LDA     multiply_result_lo
         STA     cross_product_term_lo
         LDA     multiply_result_hi
         STA     cross_product_term_hi
+
+        ; ---------------------------------------------------------------
+        ; Compute cross‑product term (velY * dx).
+        ;
+        ; Identical preparation for Y velocity: shift by 4 bits so that
+        ; after multiplication the meaningful angular contribution lands
+        ; in the high byte of the result.
+        ; ---------------------------------------------------------------
+
         LDA     force_vectory_INT
         STA     multiply_operand_a
         LDA     force_vectory_FRAC
@@ -4926,32 +5267,48 @@ ORG     NATIVE_ADDR
         ROL     A
         ROL     multiply_operand_a
         ROL     A
-        ROL     multiply_operand_a              ; project Y force similarly
-        LDA     delta_x_scaled
-        JSR     attach_pod_calculate_UNKNOWN
+        ROL     multiply_operand_a              ; velY × 16 (scale‑alignment)
 
-; Compute net angular impulse (difference of projections)
+        LDA     delta_x_scaled                  ; dx (midpoint → ship, pre‑scaled)
+        JSR     attach_pod_calculate_UNKNOWN    ; signed multiply: velY * dx
+
+; ---------------------------------------------------------------------------
+; Compute net angular impulse:
+;
+;   angularVelocity ∝ (velY * dx) − (velX * dy)
+;
+; At this point, the important information is primarily in the *high*
+; bytes of the multiplication results. The following subtract and
+; sign‑preserving shifts normalise the fixed‑point value into the final
+; angular velocity accumulator.
+; ---------------------------------------------------------------------------
 
         SEC
         LDA     multiply_result_lo
         SBC     cross_product_term_lo
         STA     tether_angular_vel_FRAC
+
         LDA     multiply_result_hi
         SBC     cross_product_term_hi
-        PHA
-        ROL     A
-        PLA
-        ROR     A
-        ROR     tether_angular_vel_FRAC
-        PHA
-        ROL     A
-        PLA
-        ROR     A
-        ROR     tether_angular_vel_FRAC
-        STA     tether_angular_vel_INT          ; final angular velocity term
-        
-        JSR     collect_pod_fuel_sound          ; audio feedback on attachment
 
+        ; Fixed‑point normalisation: propagate sign and scale the result
+        ; so that one unit of angular velocity corresponds to a sensible
+        ; per‑tick rotation rate.
+        PHA
+        ROL     A
+        PLA
+        ROR     A
+        ROR     tether_angular_vel_FRAC
+        PHA
+        ROL     A
+        PLA
+        ROR     A
+        ROR     tether_angular_vel_FRAC
+
+        STA     tether_angular_vel_INT          ; final initial angular velocity
+
+        ; Audible confirmation of successful pod attachment
+        JSR     collect_pod_fuel_sound
         RTS
 }
 \ ******************************************************************************
