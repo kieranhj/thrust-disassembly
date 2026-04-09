@@ -47,3 +47,4 @@ Temporary Items
 .apdisk
 compile.txt
 .claude/settings.local.json
+*.pyc
