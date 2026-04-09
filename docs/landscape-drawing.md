@@ -42,7 +42,7 @@ Negative increments (e.g. `$FF` = -1, `$F1` = -15 signed) slope the wall leftwar
 
 ### Level Data Location
 
-Terrain data for all 6 levels is stored at lines 5536-5593 (`terrain_data_level_0_A` through `terrain_data_level_5_D`). `initialise_level_pointers` (line 6274) loads the appropriate four pointers into working variables indexed by `level_number`.
+Terrain data for all 6 levels is stored in `level_data.6502` (`terrain_left_wall_count_0` through `terrain_right_wall_inc_5`). `initialise_level_pointers` (line 6274) loads the appropriate four pointers into working variables indexed by `level_number`.
 
 ---
 

@@ -156,8 +156,8 @@ def export_beebasm(levels):
     lines.append("\\ ******************************************************************************")
     lines.append("")
     lines.append("\\ ******************************************************************************")
-    lines.append("\\ * Terrain data per level - sets A & B same length C & D same length")
-    lines.append("\\ * Terrain pointers either set to A & B or C & D")
+    lines.append("\\ * Terrain data per level - left count & inc same length, right count & inc same length")
+    lines.append("\\ * Terrain pointers set to left or right wall count & increment arrays")
     lines.append("\\ ******************************************************************************")
     lines.append("")
 
@@ -170,18 +170,18 @@ def export_beebasm(levels):
             rc, ri = encode_wall_rle(lv.right_wall, 0xFF)
         else:
             # Use original RLE data
-            lc = lv.terrain_rle["A"]
-            li = lv.terrain_rle["B"]
-            rc = lv.terrain_rle["C"]
-            ri = lv.terrain_rle["D"]
+            lc = lv.terrain_rle["left_count"]
+            li = lv.terrain_rle["left_inc"]
+            rc = lv.terrain_rle["right_count"]
+            ri = lv.terrain_rle["right_inc"]
 
-        lines.append(f".terrain_data_level_{n}_A")
+        lines.append(f".terrain_left_wall_count_{n}")
         lines.append(f"        EQUB    {format_bytes(lc)}")
-        lines.append(f".terrain_data_level_{n}_B")
+        lines.append(f".terrain_left_wall_inc_{n}")
         lines.append(f"        EQUB    {format_bytes(li)}")
-        lines.append(f".terrain_data_level_{n}_C")
+        lines.append(f".terrain_right_wall_count_{n}")
         lines.append(f"        EQUB    {format_bytes(rc)}")
-        lines.append(f".terrain_data_level_{n}_D")
+        lines.append(f".terrain_right_wall_inc_{n}")
         lines.append(f"        EQUB    {format_bytes(ri)}")
         if n < 5:
             lines.append("")
