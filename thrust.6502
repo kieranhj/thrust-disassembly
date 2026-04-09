@@ -5751,7 +5751,7 @@ ORG     NATIVE_ADDR
         RTS
 }
 
-INCLUDE "level_data.6502"
+INCLUDE "tools/output/thrust_levels_export.asm"
 
 .level_obj_flags                                        ; initialised to $02 at start of level
 {
