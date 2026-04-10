@@ -19,6 +19,7 @@ Controls:
     Ctrl+Z      Undo
     Ctrl+Shift+Z Redo
     Ctrl+S      Export to assembly file
+    Ctrl+I      Import from assembly file
     Delete      Delete selected object
     Escape      Deselect / cancel
 
@@ -29,6 +30,8 @@ import copy
 import math
 import os
 import sys
+import tkinter as tk
+from tkinter import filedialog
 from pathlib import Path
 
 import pygame
@@ -669,6 +672,9 @@ class Editor:
         elif event.key == pygame.K_s and ctrl:
             self._export()
 
+        elif event.key == pygame.K_i and ctrl:
+            self._import()
+
         elif event.key == pygame.K_DELETE:
             if self.selected_object is not None and self.mode == "object":
                 self.undo.save(self.level)
@@ -862,6 +868,11 @@ class Editor:
             self.mode = "object"
             self.dragging_wall = None
 
+        # Import button
+        import_x = self.screen.get_width() - 200
+        if import_x <= mx < import_x + 90:
+            self._import()
+
         # Export button
         export_x = self.screen.get_width() - 100
         if export_x <= mx < export_x + 90:
@@ -888,12 +899,45 @@ class Editor:
         self.show_obj_menu = False
 
     def _export(self):
-        """Export level data to assembly file."""
-        path = Path("tools/output/thrust_levels_export.asm")
-        path.parent.mkdir(parents=True, exist_ok=True)
+        """Export level data to assembly file via file dialog."""
+        root = tk.Tk()
+        root.withdraw()
+        default_path = Path("tools/output/thrust_levels_export.asm").resolve()
+        path = filedialog.asksaveasfilename(
+            title="Export level data",
+            initialdir=str(default_path.parent),
+            initialfile=default_path.name,
+            defaultextension=".asm",
+            filetypes=[("BeebAsm assembly", "*.asm"), ("All files", "*.*")],
+        )
+        root.destroy()
+        if not path:
+            return
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
         src = export_beebasm(self.levels)
-        path.write_text(src)
+        Path(path).write_text(src)
         print(f"Exported to {path}")
+
+    def _import(self):
+        """Import level data from assembly file via file dialog."""
+        root = tk.Tk()
+        root.withdraw()
+        default_path = Path("tools/output/thrust_levels_export.asm").resolve()
+        path = filedialog.askopenfilename(
+            title="Import level data",
+            initialdir=str(default_path.parent),
+            defaultextension=".asm",
+            filetypes=[("BeebAsm assembly", "*.asm"), ("All files", "*.*")],
+        )
+        root.destroy()
+        if not path:
+            return
+        self.levels = import_beebasm(path)
+        self._centre_on_level()
+        self.selected_object = None
+        self.dragging_wall = None
+        self.undo = UndoManager()
+        print(f"Imported from {path}")
 
     # -------------------------------------------------------------------
     # Rendering
@@ -1143,6 +1187,14 @@ class Editor:
             pygame.draw.rect(screen, (80, 80, 80), rect, 1, border_radius=4)
             txt = self.font.render(mode_name, True, COL_TOOLBAR_TEXT)
             screen.blit(txt, (mode_x + offset + 8, 12))
+
+        # Import button
+        import_x = sw - 200
+        rect = pygame.Rect(import_x, 5, 90, 30)
+        pygame.draw.rect(screen, (40, 40, 60), rect, border_radius=4)
+        pygame.draw.rect(screen, (80, 80, 80), rect, 1, border_radius=4)
+        txt = self.font.render("Import", True, (150, 150, 255))
+        screen.blit(txt, (import_x + 16, 12))
 
         # Export button
         export_x = sw - 100
