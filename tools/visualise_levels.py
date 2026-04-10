@@ -325,10 +325,18 @@ def decode_wall(counts, increments, start_xpos=0, start_segment=0):
     The game uses two interleaved triples per wall. Triple 2 (which starts at
     segment 1) overwrites triple 1's entries in the wall array, so the effective
     wall positions come from triple 2's walk starting at start_segment=1.
+
+    When start_segment=1 (triple 2 mode), the first segment's count is
+    overridden to 255 to match the game's hardcoded initial counter ($FF).
+    The game ignores count[1] and always uses 255 steps for that segment.
     """
     x = start_xpos
     rows = []
-    for count, inc in zip(counts[start_segment:], increments[start_segment:]):
+    for seg_idx, (count, inc) in enumerate(zip(counts[start_segment:], increments[start_segment:])):
+        # Game hardcodes the initial counter to $FF for both triples,
+        # so the first segment always gets exactly 255 steps.
+        if seg_idx == 0 and start_segment > 0:
+            count = 0xFF
         for _ in range(count):
             x = (x + inc) & 0xFF
             rows.append(x)

@@ -5,7 +5,7 @@ Allows viewing and editing of terrain wall data and object placements
 for all 6 levels. Edited levels can be exported as BeebAsm assembly.
 
 Usage:
-    python tools/level_editor.py [--level N]
+    python tools/level_editor.py [--level N] [--import FILE]
 
 Controls:
     1-6         Switch level
@@ -99,11 +99,19 @@ def darken(rgb, factor=0.35):
 def encode_wall_rle(positions, start_xpos):
     """Re-encode wall position array back to RLE (counts, increments).
 
-    Produces a segment 0 filler for triple 1, followed by the actual
-    RLE data starting at segment 1 for triple 2.
+    The game uses two interleaved decoder triples per wall:
+    - Triple 1 starts at segment 0 with a hardcoded counter of $FF
+    - Triple 2 starts at segment 1 with a hardcoded counter of $FF
+    Triple 2 overwrites triple 1, so the effective wall comes from triple 2.
+
+    Segment 1 MUST have count=$FF because the game ignores count[1] and
+    always uses its hardcoded initial counter of 255. The first 255 rows
+    all use the same increment (inc[1]). Remaining data follows as seg2+.
+
+    Segment 0 is filler for triple 1 (count ignored, uses hardcoded $FF).
     """
     if not positions:
-        return [0x01], [0x00]
+        return [0xFF, 0xFF], [0x00, 0x00]
 
     # Compute deltas with unsigned 8-bit wrapping
     deltas = []
@@ -113,30 +121,27 @@ def encode_wall_rle(positions, start_xpos):
         deltas.append(d)
         prev = x
 
-    # RLE compress consecutive identical deltas
+    # Segment 1 must be exactly 255 steps with a single increment.
+    # Use the first delta for all 255 steps (game constraint).
+    seg1_inc = deltas[0] if deltas else 0x00
+
+    # RLE compress remaining deltas (from position 255 onward)
     counts = []
     increments = []
+    remaining = deltas[255:] if len(deltas) > 255 else []
     i = 0
-    while i < len(deltas):
-        current = deltas[i]
+    while i < len(remaining):
+        current = remaining[i]
         run = 0
-        while i < len(deltas) and deltas[i] == current and run < 0xFF:
+        while i < len(remaining) and remaining[i] == current and run < 0xFF:
             run += 1
             i += 1
         counts.append(run)
         increments.append(current)
 
-    # Prepend segment 0 filler(s) for triple 1
-    total = len(positions)
-    seg0_counts = []
-    remaining = total
-    while remaining > 0:
-        c = min(remaining, 0xFF)
-        seg0_counts.append(c)
-        remaining -= c
-
-    final_counts = seg0_counts + counts
-    final_increments = [0x00] * len(seg0_counts) + increments
+    # seg0 (triple 1 filler) + seg1 ($FF fixed) + seg2+ (remaining RLE)
+    final_counts = [0xFF, 0xFF] + counts
+    final_increments = [0x00, seg1_inc] + increments
 
     return final_counts, final_increments
 
@@ -144,6 +149,93 @@ def encode_wall_rle(positions, start_xpos):
 def format_bytes(data):
     """Format byte list as BeebAsm EQUB data (no spaces, matching original style)."""
     return ",".join(f"${b:02X}" for b in data)
+
+
+def parse_equb_line(line):
+    """Parse an EQUB line and return list of integer values."""
+    # Strip comment
+    line = line.split("\\")[0].strip()
+    if "EQUB" not in line.upper():
+        return []
+    _, _, rest = line.partition("EQUB")
+    rest = rest.strip()
+    values = []
+    for tok in rest.split(","):
+        tok = tok.strip()
+        if tok.startswith("$"):
+            values.append(int(tok[1:], 16))
+        elif tok.startswith("&"):
+            values.append(int(tok[1:], 16))
+        elif tok.isdigit():
+            values.append(int(tok))
+    return values
+
+
+def import_beebasm(path):
+    """Import level data from an exported BeebAsm assembly file.
+
+    Returns a list of 6 LevelData objects.
+    """
+    text = Path(path).read_text()
+    lines = text.splitlines()
+
+    # Build a dict mapping label -> list of bytes from the EQUB line(s) that follow
+    labels = {}
+    current_label = None
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith(".") and not stripped.startswith("\\"):
+            current_label = stripped[1:]  # remove leading dot
+            labels[current_label] = []
+        elif current_label and "EQUB" in line.upper():
+            labels[current_label].extend(parse_equb_line(line))
+        elif stripped == "" or stripped.startswith("\\"):
+            pass  # blank or comment line, keep current_label
+        else:
+            current_label = None
+
+    levels = []
+    for n in range(6):
+        # Terrain RLE data
+        lc = labels.get(f"terrain_left_wall_count_{n}", [])
+        li = labels.get(f"terrain_left_wall_inc_{n}", [])
+        rc = labels.get(f"terrain_right_wall_count_{n}", [])
+        ri = labels.get(f"terrain_right_wall_inc_{n}", [])
+        terrain_rle = {
+            "left_count": list(lc), "left_inc": list(li),
+            "right_count": list(rc), "right_inc": list(ri),
+        }
+
+        # Decode walls from RLE
+        left_wall = decode_wall(lc, li, start_xpos=0x00, start_segment=1)
+        right_wall = decode_wall(rc, ri, start_xpos=0xFF, start_segment=1)
+
+        # Object data
+        obj_x = labels.get(f"level_{n}_obj_pos_X", [])
+        obj_y = labels.get(f"level_{n}_obj_pos_Y", [])
+        obj_y_ext = labels.get(f"level_{n}_obj_pos_Y_EXT", [])
+        obj_type = labels.get(f"level_{n}_obj_type", [])
+        gun_param = labels.get(f"level_{n}_gun_param", [])
+
+        # Remove $FF terminator from type list
+        types = [t for t in obj_type if t != 0xFF]
+
+        objects = []
+        for i in range(len(types)):
+            y_world = ((obj_y_ext[i] if i < len(obj_y_ext) else 0) << 8) | \
+                      (obj_y[i] if i < len(obj_y) else 0)
+            gp = gun_param[i] if i < len(gun_param) else 0x00
+            objects.append({
+                "x": obj_x[i] if i < len(obj_x) else 0,
+                "y": y_world,
+                "type": types[i],
+                "gun_param": gp,
+            })
+
+        lv = LevelData(n, list(left_wall), list(right_wall), objects, terrain_rle)
+        levels.append(lv)
+
+    return levels
 
 
 def export_beebasm(levels):
@@ -165,9 +257,18 @@ def export_beebasm(levels):
     for lv in levels:
         n = lv.level_num
         if lv.terrain_dirty:
+            # Clamp walls so left never crosses right (game's EOR rendering
+            # creates visible gaps where walls overlap)
+            left = list(lv.left_wall)
+            right = list(lv.right_wall)
+            for row in range(min(len(left), len(right))):
+                if left[row] > right[row]:
+                    mid = (left[row] + right[row]) // 2
+                    left[row] = mid
+                    right[row] = mid
             # Re-encode from edited wall positions
-            lc, li = encode_wall_rle(lv.left_wall, 0x00)
-            rc, ri = encode_wall_rle(lv.right_wall, 0xFF)
+            lc, li = encode_wall_rle(left, 0x00)
+            rc, ri = encode_wall_rle(right, 0xFF)
         else:
             # Use original RLE data
             lc = lv.terrain_rle["left_count"]
@@ -412,7 +513,7 @@ class UndoManager:
 # ---------------------------------------------------------------------------
 
 class Editor:
-    def __init__(self, start_level=0):
+    def __init__(self, start_level=0, import_path=None):
         pygame.init()
         pygame.display.set_caption("Thrust Level Editor")
         self.screen = pygame.display.set_mode((WINDOW_W, WINDOW_H), pygame.RESIZABLE)
@@ -420,7 +521,11 @@ class Editor:
         self.font = pygame.font.SysFont("consolas", 14)
         self.font_small = pygame.font.SysFont("consolas", 12)
 
-        self.levels = [LevelData.from_game_data(i) for i in range(6)]
+        if import_path:
+            self.levels = import_beebasm(import_path)
+            print(f"Imported level data from {import_path}")
+        else:
+            self.levels = [LevelData.from_game_data(i) for i in range(6)]
         self.current_level = start_level
         self.camera = Camera()
         self.sprite_cache = SpriteCache()
@@ -841,7 +946,7 @@ class Editor:
             left_x = lv.left_wall[row]
             right_x = lv.right_wall[row]
 
-            if left_x >= right_x:
+            if right_x - left_x <= 1:
                 continue
 
             # Left rock: world 0 to left_x
@@ -874,7 +979,7 @@ class Editor:
         last_cave = None
         min_len = min(len(lv.left_wall), len(lv.right_wall))
         for row in range(min_len):
-            if lv.left_wall[row] < lv.right_wall[row]:
+            if lv.right_wall[row] - lv.left_wall[row] > 1:
                 if first_cave is None:
                     first_cave = row
                 last_cave = row
@@ -888,7 +993,7 @@ class Editor:
 
             # Rock below cave
             _, below_sy = cam.world_to_screen(0, last_cave + 1)
-            _, bottom = cam.world_to_screen(0, min_len)
+            _, bottom = cam.world_to_screen(0, lv.num_rows)
             if below_sy < VIEWPORT_Y + cam.viewport_h:
                 pygame.draw.rect(screen, rock_rgb,
                                  (rock_sx, int(below_sy), rock_w, int(bottom - below_sy) + 1))
@@ -897,7 +1002,7 @@ class Editor:
             for row in range(max(y_min, first_cave), min(y_max, last_cave + 1)):
                 if row >= len(lv.left_wall) or row >= len(lv.right_wall):
                     continue
-                if lv.left_wall[row] >= lv.right_wall[row]:
+                if lv.right_wall[row] - lv.left_wall[row] <= 1:
                     _, sy = cam.world_to_screen(0, row)
                     _, sy_next = cam.world_to_screen(0, row + 1)
                     row_h = max(1, int(sy_next - sy))
@@ -1114,9 +1219,11 @@ def main():
     parser = argparse.ArgumentParser(description="Thrust Level Editor")
     parser.add_argument("--level", type=int, choices=range(1, 7), default=1,
                         help="Starting level (1-6)")
+    parser.add_argument("--import", dest="import_path", type=str, default=None,
+                        help="Import level data from an exported .asm file")
     args = parser.parse_args()
 
-    editor = Editor(start_level=args.level - 1)
+    editor = Editor(start_level=args.level - 1, import_path=args.import_path)
     editor.run()
 
 
