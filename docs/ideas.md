@@ -99,6 +99,40 @@ The particle system's `particles_type` field ($07A0) could be extended with new 
 
 ---
 
+## Gameplay / level concepts
+
+### Metroidvania structure
+
+One large interconnected map rather than discrete levels. The player starts with basic thrust and weapons, gradually acquiring upgrades that open up previously inaccessible areas:
+
+- **Ship upgrades:** stronger thrust (navigate tighter shafts against gravity), improved shield (survive new hazard types), tractor beam range extension, new weapon types
+- **Gate mechanics:** areas blocked by terrain or hazards that require specific upgrades — e.g., a narrow vertical shaft too deep to escape without upgraded thrust, a corridor lined with turrets that require a shield upgrade to survive
+- **Bosses:** large gun emplacements or enemy ships guarding key upgrades. Could be multi-phase — destroy shield generators around a core, then hit the core
+- **Secrets:** hidden passages behind destructible walls, reward rooms with extra fuel or bonus upgrades. False walls that look solid but can be flown through
+- **Save points / fuel stations:** the generator (type $06) could double as a checkpoint. Respawn at the last generator visited rather than restarting the whole map
+- **Map progression:** start at a surface base, descend into increasingly hostile cave systems. Each major section has a distinct visual theme (palette swap per region) and introduces new enemy types
+
+The existing level data format could support this — one very deep level with many objects. The main challenge is memory: a large interconnected map needs more RLE terrain data and more objects than the current per-level arrays allow. Could use banked memory or stream terrain data from disc.
+
+### Escape the flooding mine
+
+Start at the bottom of a deep vertical mine and race upward. A rising water level chases the player — touch the water and it's game over.
+
+**Water rendering:** two approaches:
+
+1. **Timer-based palette switch (Exile style):** set up a raster interrupt that fires at the water line's screen position. Below the interrupt, swap the palette so all colours shift to blue/dark variants. Cheap in CPU — just a palette write in the IRQ handler. The water line advances by moving the timer trigger point up by a few scanlines each frame. Limitation: only works for a horizontal water line, no waves or splashing.
+
+2. **Software rendering:** EOR-draw a horizontal band of colour across the screen below the water line. Since the water rises slowly (a few rows per frame), only the newly-flooded rows need drawing each frame — similar to how the terrain delta rendering works. More flexible (could add wave effects at the surface) but costs more CPU.
+
+**Gameplay mechanics:**
+- Water rises at a steady rate, creating constant upward pressure
+- Horizontal doors (already supported as types $07/$08) act as barriers that temporarily hold back the water, buying the player time — but they eventually burst or leak
+- Fuel management becomes critical: thrust hard to stay ahead but risk running dry
+- Optional side chambers with fuel pickups, accessible only by briefly diving below the main path and racing back up
+- The mine gets narrower and more complex as the player ascends, requiring precise navigation under time pressure
+
+---
+
 ## Advanced landscape features
 
 ### Current architecture
