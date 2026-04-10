@@ -893,7 +893,7 @@ class Editor:
             obj_type = types[idx]
             self.undo.save(self.level)
             wx, wy = self.obj_menu_world
-            self.level.objects.append({"x": wx, "y": wy, "type": obj_type})
+            self.level.objects.append({"x": wx, "y": wy, "type": obj_type, "gun_param": 0x00})
             self.level.dirty = True
             self.selected_object = len(self.level.objects) - 1
         self.show_obj_menu = False
