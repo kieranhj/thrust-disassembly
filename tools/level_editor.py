@@ -298,7 +298,9 @@ def export_beebasm(levels):
 
     for lv in levels:
         n = lv.level_num
-        obj = lv.objects
+        # Pod (type $05) must be first object — game hardcodes index 0
+        # for tractor beam interaction (level_obj_flags without ,X index)
+        obj = sorted(lv.objects, key=lambda o: (0 if o['type'] == 0x05 else 1))
         if obj:
             lines.append(f".level_{n}_obj_pos_X")
             lines.append(f"        EQUB    {format_bytes([o['x'] for o in obj])}")
