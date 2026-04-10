@@ -27,6 +27,7 @@
 \ *****************************************************************************
 \ *****************************************************************************
 
+_CUSTOM_LEVELS     = TRUE
 
 NATIVE_ADDR        = &A60        ; address at which code will run
 RELOAD_ADDR        = &1A00       ; address at which code will load
@@ -62,6 +63,20 @@ INKEY_escape                        = $8F       ; negative INKEY value for ESCAP
 INKEY_copy                          = $96       ; negative INKEY value for COPY
 INKEY_Q                             = $EF       ; negative INKEY value for Q
 INKEY_S                             = $AE       ; negative INKEY value for S
+INKEY_Z                             = $9E       ; negative INKEY value for Z
+INKEY_X                             = $BD       ; negative INKEY value for X
+
+IF _CUSTOM_LEVELS
+KEY_ROTATE_left                     = INKEY_Z
+KEY_ROTATE_right                    = INKEY_X
+ELSE
+KEY_ROTATE_left                     = INKEY_capslock
+KEY_ROTATE_right                    = INKEY_ctrl
+ENDIF
+
+KEY_FIRE                            = INKEY_return
+KEY_THRUST                          = INKEY_shift
+KEY_SHIELD                          = INKEY_spacebar
 
 OBJECT_gun_up_right                 = $0        ; gun emplacement facing up-right
 OBJECT_gun_down_right               = $1        ; gun emplacement facing down-right
@@ -3712,7 +3727,7 @@ ORG     NATIVE_ADDR
         LDA     fuel_just_ran_out_flag
         BNE     no_thrust
 
-        LDX     #INKEY_shift
+        LDX     #KEY_THRUST
         JSR     test_inkey
 
         BEQ     thrust_was_pressed
@@ -4064,7 +4079,7 @@ ORG     NATIVE_ADDR
         LDA     fuel_just_ran_out_flag
         BNE     no_sheild_tractor
 
-        LDX     #INKEY_spacebar
+        LDX     #KEY_SHIELD
         JSR     test_inkey
 
         STX     shield_tractor_pressed
@@ -5380,14 +5395,14 @@ ORG     NATIVE_ADDR
         AND     #$03
         BEQ     return
 
-        LDX     #INKEY_capslock
+        LDX     #KEY_ROTATE_left
         JSR     test_inkey
         BNE     rotate_left_not_pressed
 
         DEC     ship_angle
         
     .rotate_left_not_pressed
-        LDX     #INKEY_ctrl
+        LDX     #KEY_ROTATE_right
         JSR     test_inkey
         BNE     rotate_right_not_pressed
 
@@ -5751,7 +5766,9 @@ ORG     NATIVE_ADDR
         RTS
 }
 
-INCLUDE "tools/output/thrust_levels_export.asm"
+IF _CUSTOM_LEVELS==FALSE
+INCLUDE "level_data.6502"
+ENDIF
 
 .level_obj_flags                                        ; initialised to $02 at start of level
 {
@@ -6748,7 +6765,7 @@ INCLUDE "tools/output/thrust_levels_export.asm"
 
 .test_fire_key
 {
-        LDX     #INKEY_return
+        LDX     #KEY_FIRE
         JSR     test_inkey
 
         CPX     #$FF
@@ -9669,6 +9686,10 @@ INCLUDE "tools/output/thrust_levels_export.asm"
 \ ******************************************************************************
 \ ******************************************************************************
 
+IF P%>SCREEN_BASE_ADDR
+ERROR "Base code overruns available space!"
+ENDIF
+
 \ ******************************************************************************
 \ * Function: main_entry
 \ * Description: Program entry: inits zero page, builds tables, hooks WRCHV, sets up HW
@@ -9785,23 +9806,23 @@ INCLUDE "tools/output/thrust_levels_export.asm"
         BNE     relocate_0400_loop            ; copy 3 pages from $3DB3 to $0400
 
         LDA     #$08
-        LDX     #$62
-        LDY     #$3E
+        LDX     #LO(envelope_1)
+        LDY     #HI(envelope_1)
         JSR     OSWORD                        ; ENVELOPE at $3E62
 
         LDA     #$08
-        LDX     #$70
-        LDY     #$3E
+        LDX     #LO(envelope_2)
+        LDY     #HI(envelope_2)
         JSR     OSWORD                        ; ENVELOPE at $3E70
 
         LDA     #$08
-        LDX     #$7D
-        LDY     #$3E
+        LDX     #LO(envelope_3)
+        LDY     #HI(envelope_3)
         JSR     OSWORD                        ; ENVELOPE at $3E7D
 
         LDA     #$08
-        LDX     #$8B
-        LDY     #$3E
+        LDX     #LO(envelope_4)
+        LDY     #HI(envelope_4)
         JSR     OSWORD                        ; ENVELOPE at $3E8B
 
         LDX     #$00
@@ -10482,14 +10503,14 @@ INCLUDE "tools/output/thrust_levels_export.asm"
         STA     BRKV
         LDA     old_brkv+1
         STA     BRKV+1                    ; restore old BRKV
-        LDA     #$00                    ; is $01 in original source as relocates from $1A01
+        LDA     #LO(RELOAD_ADDR)          ; is $01 in original source as relocates from $1A01
         STA     boot_read_ptr
-        LDA     #$1A
-        STA     boot_read_ptr+1            ; set boot_read_ptr to &1A01
-        LDA     #$60
+        LDA     #HI(RELOAD_ADDR)
+        STA     boot_read_ptr+1           ; set boot_read_ptr to &1A01
+        LDA     #LO(NATIVE_ADDR)
         STA     boot_write_ptr
-        LDA     #$0A
-        STA     boot_write_ptr+1        ; set boot_write_ptr to &0A60
+        LDA     #HI(NATIVE_ADDR)
+        STA     boot_write_ptr+1          ; set boot_write_ptr to &0A60
         LDX     #$3D
         
     .relocate
@@ -10506,7 +10527,11 @@ INCLUDE "tools/output/thrust_levels_export.asm"
         DEX
         BNE     relocate                ; relocate &3D pages (~16k) from &1A01 to &0A60
 
+        IF _CUSTOM_LEVELS
+        JMP     custom_level_reloc
+        ELSE
         JMP     main_entry                ; jump to entry
+        ENDIF
 }
 
 \ ******************************************************************************
@@ -10542,7 +10567,143 @@ INCLUDE "tools/output/thrust_levels_export.asm"
 \ ******************************************************************************
 \ ******************************************************************************
 
+IF _CUSTOM_LEVELS
+CUSTOM_BANK     = 4
+CUSTOM_ADDR     = &8000
+
+.custom_level_reloc
+{
+        LDA     #CUSTOM_BANK
+        STA     &F4
+        STA     &FE30
+
+\ Relocate level data to SWRAM.
+
+        LDA     #LO(CUSTOM_RELOC_START)
+        STA     boot_read_ptr
+        LDA     #HI(CUSTOM_RELOC_START)
+        STA     boot_read_ptr+1
+        LDA     #LO(CUSTOM_ADDR)
+        STA     boot_write_ptr
+        LDA     #HI(CUSTOM_ADDR)
+        STA     boot_write_ptr+1
+        LDX     #HI(CUSTOM_SIZE+&FF)
+        
+    .relocate
+        LDY     #$00
+        
+    .relocate_loop
+        LDA     (boot_read_ptr),Y
+        STA     (boot_write_ptr),Y
+        DEY
+        BNE     relocate_loop
+
+        INC     boot_read_ptr+1
+        INC     boot_write_ptr+1
+        DEX
+        BNE     relocate
+
+\ Now patch up the level ptrs.
+        LDX     #LO(terrain_left_wall_counter_ptrs_LO)
+        LDY     #HI(terrain_left_wall_counter_ptrs_LO)
+        JSR     custom_patch_level_ptrs
+        LDX     #LO(terrain_left_wall_increment_ptrs_LO)
+        LDY     #HI(terrain_left_wall_increment_ptrs_LO)
+        JSR     custom_patch_level_ptrs
+        LDX     #LO(terrain_right_wall_counter_ptrs_LO)
+        LDY     #HI(terrain_right_wall_counter_ptrs_LO)
+        JSR     custom_patch_level_ptrs
+        LDX     #LO(terrain_right_wall_increment_ptrs_LO)
+        LDY     #HI(terrain_right_wall_increment_ptrs_LO)
+        JSR     custom_patch_level_ptrs
+
+\ And the object data ptrs.
+        LDX     #LO(level_obj_pos_X_lookup_LO)
+        LDY     #HI(level_obj_pos_X_lookup_LO)
+        JSR     custom_patch_obj_ptrs
+
+        JMP     main_entry                ; jump to entry
+}
+
+.custom_patch_obj_ptrs
+{
+        STX     boot_read_ptr+0
+        STY     boot_read_ptr+1
+
+\ Patch up LO, HI pairs by CUSTOM_OFFSET.
+
+        LDY     #0
+        LDX     #0
+    .patch_loop
+        CLC
+        LDA     (boot_read_ptr), Y
+        ADC     #LO(CUSTOM_OFFSET)
+        STA     (boot_read_ptr), Y
+        INY
+        LDA     (boot_read_ptr), Y
+        ADC     #HI(CUSTOM_OFFSET)
+        STA     (boot_read_ptr), Y
+        INY
+
+        INX
+        CPX     #6*5
+        BNE     patch_loop
+
+        RTS
+}
+
+.custom_patch_level_ptrs
+{
+\ Store ptrs to LO table.
+        STX patch_load_lo+1:STY patch_load_lo+2
+        STX patch_store_lo+1:STY patch_store_lo+2
+
+\ Calc ptrs to HI table.
+        CLC
+        TXA
+        ADC #6
+        STA patch_load_hi+1
+        STA patch_store_hi+1
+        TYA
+        ADC #0
+        STA patch_load_hi+2
+        STA patch_store_hi+2
+
+\ Update 6 entries in these tables.
+        LDX #0
+    .patch_loop
+        CLC
+        .patch_load_lo
+        LDA terrain_left_wall_counter_ptrs_LO, X
+        ADC #LO(CUSTOM_OFFSET)
+        .patch_store_lo
+        STA terrain_left_wall_counter_ptrs_LO, X
+        .patch_load_hi
+        LDA terrain_left_wall_counter_ptrs_HI, X
+        ADC #HI(CUSTOM_OFFSET)
+        .patch_store_hi
+        STA terrain_left_wall_counter_ptrs_HI, X
+        INX
+        CPX #6
+        BNE patch_loop
+
+        RTS
+}
+
+.CUSTOM_RELOC_START
+;INCLUDE "level_data.6502"       ; for now!
+INCLUDE "tools/output/thrust_levels_export.asm"
+ENDIF
+
 .RELOC_END
+
+IF _CUSTOM_LEVELS
+CUSTOM_OFFSET   = CUSTOM_ADDR-CUSTOM_RELOC_START
+CUSTOM_SIZE     = RELOC_END-CUSTOM_RELOC_START
+
+PRINT "CUSTOM LEVEL DATA!"
+PRINT "Relocate ", ~CUSTOM_SIZE, " bytes (", ~HI(CUSTOM_SIZE+&FF), " pages) from ", ~CUSTOM_RELOC_START, " to ", ~CUSTOM_ADDR, " (offset=", ~CUSTOM_OFFSET,")"
+ENDIF
 
 \ ******************************************************************************
 \ ******************************************************************************
