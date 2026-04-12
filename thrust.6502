@@ -28,6 +28,27 @@
 \ *****************************************************************************
 
 _CUSTOM_LEVELS     = TRUE
+_DEBUG_RASTERS     = (_CUSTOM_LEVELS AND FALSE)
+
+\\ Palette values for ULA
+PAL_black	= (0 EOR 7)
+PAL_blue	= (4 EOR 7)
+PAL_red		= (1 EOR 7)
+PAL_magenta     = (5 EOR 7)
+PAL_green	= (2 EOR 7)
+PAL_cyan	= (6 EOR 7)
+PAL_yellow	= (3 EOR 7)
+PAL_white	= (7 EOR 7)
+
+MACRO SET_BG_COL col
+IF _DEBUG_RASTERS
+{
+        LDA #col:JSR raster_set_bg
+}
+ELSE
+{}
+ENDIF
+ENDMACRO
 
 NATIVE_ADDR        = &A60        ; address at which code will run
 RELOAD_ADDR        = &1A00       ; address at which code will load
@@ -40,7 +61,7 @@ OFFSET             = RELOAD_ADDR - NATIVE_ADDR  ; difference between load and ru
 \ ******************************************************************************
 \ ******************************************************************************
 
-SCREEN_BASE_ADDR                    = $3C80     ; MODE 5 screen memory base
+SCREEN_BASE_ADDR                    = $3C80     ; MODE 1 screen memory base
 SCREEN_WIDTH_CHARS                  = 72        ; screen width in character columns
 SCREEN_CHAR_ROW_BYTES               = (SCREEN_WIDTH_CHARS * 8) ; bytes per character row
 SCREEN_START_ADDR                   = SCREEN_BASE_ADDR + SCREEN_CHAR_ROW_BYTES * 2        ; first two rows are status bar
@@ -1209,6 +1230,11 @@ ORG     NATIVE_ADDR
 \ * Description: Draws a horizontal terrain line across columns using EOR plotting 
 \ ******************************************************************************
 
+; TODO: Unroll 28 character rows of max 72 columns each. ~12K :)
+;       Use beeb-niccc approach of double duty for index and start column.
+;       Jump into the unrolled code at the appropriate spot. :)
+;       Need to find a way to write code in the relo section without manual patch up.
+
 .draw_terrain
 {
         LDA     mult_by_8_LO,Y
@@ -1431,7 +1457,7 @@ ORG     NATIVE_ADDR
         STA     level_obj_flags,X
         
     .L0E29
-        CPY     #$06
+        CPY     #OBJECT_generator
         BNE     L0E4C
 
         LDA     planet_countdown_timer
@@ -8593,22 +8619,32 @@ ENDIF
 \\ This is the main tick loop that performs all game logic and rendering:
 
         JSR     demo_mode_tick
+
+SET_BG_COL PAL_yellow
         JSR     hide_landscape
         JSR     ship_input_rotate
         JSR     midpoint_add_force_vector
         JSR     update_window_and_terrain_tables
+SET_BG_COL PAL_black
         JSR     draw_player_timed_to_vsync
         JSR     update_player_and_pod_states
+SET_BG_COL PAL_blue
         JSR     update_and_draw_all_objects
+SET_BG_COL PAL_magenta
         JSR     landscape_draw
+SET_BG_COL PAL_black
+
         JSR     tick_fuel_pickup_draw_beams
         JSR     ship_input_fire
+SET_BG_COL PAL_cyan
         JSR     particles_update_and_draw
+SET_BG_COL PAL_green
         JSR     test_for_pause
         JSR     calculate_player_position_from_midpoint
         JSR     plot_fuel_value
         JSR     update_sound_timer
         JSR     ship_input_thrust_calculate_force
+SET_BG_COL PAL_black
         
         JSR     test_player_escaped_to_orbit
         BCS     test_level_ended_else_tick_loop
@@ -9138,21 +9174,23 @@ ENDIF
 .draw_player_timed_to_vsync
 {
         LDA     #$00
-        STA     system_clock_MSB
+        STA     player_sprite_drawn_flag
 
     .loop
         LDA     irq1_timer1_signal
-        BEQ     skip_set_system_clock_MSB
+        BEQ     wait_for_system_clock     ; timer 1 not fired yet
 
-        LDA     system_clock_MSB
-        BNE     skip_set_system_clock_MSB
+        LDA     player_sprite_drawn_flag
+        BNE     wait_for_system_clock     ; player already drawn
 
-        JSR     draw_ship_line_and_pod
+SET_BG_COL PAL_red
+        JSR     draw_ship_line_and_pod    ; draw player sprite immediately
+SET_BG_COL PAL_black
 
         LDA     #$FF
-        STA     system_clock_MSB
-        
-    .skip_set_system_clock_MSB
+        STA     player_sprite_drawn_flag  ; Flag player drawn
+
+    .wait_for_system_clock
         LDY     #HI(system_clock_value)
         LDX     #LO(system_clock_value)
         LDA     #$01
@@ -9160,20 +9198,22 @@ ENDIF
 
         LDA     system_clock_value
         CMP     #$03
-        BCC     loop
+        BCC     loop                      ; wait minimum 0.03s
 
         LDA     #$00
-        STA     system_clock_value
+        STA     system_clock_value        ; reset system clock.
         
         LDY     #HI(system_clock_value)
         LDX     #LO(system_clock_value)
         LDA     #$02
         JSR     OSWORD                    ; write system clock
 
-        LDA     system_clock_MSB
+        LDA     player_sprite_drawn_flag
         BNE     return
 
-        JSR     draw_ship_line_and_pod
+SET_BG_COL PAL_red
+        JSR     draw_ship_line_and_pod    ; draw player if not done already
+SET_BG_COL PAL_black
 
     .return
         RTS
@@ -9214,7 +9254,7 @@ ENDIF
 .system_clock_value
         EQUB    $00,$00,$00,$00,$00        ; LSB to MSB (5 bytes)
 
-.system_clock_MSB
+.player_sprite_drawn_flag
         EQUB    $00
         EQUB    $00                        ; unused?
 
@@ -9311,11 +9351,11 @@ ENDIF
 \ ******************************************************************************
 
 .demo_inkey_table                                    ; 5x possible keypresses
-        EQUB    INKEY_capslock
-        EQUB    INKEY_ctrl
-        EQUB    INKEY_return
-        EQUB    INKEY_shift
-        EQUB    INKEY_spacebar
+        EQUB    KEY_ROTATE_left
+        EQUB    KEY_ROTATE_right
+        EQUB    KEY_FIRE
+        EQUB    KEY_THRUST
+        EQUB    KEY_SHIELD
 
 .lookup_index_to_bit
         EQUB    $01,$02,$04,$08,$10                    ; 5x possible keypresses - make enums
@@ -9678,6 +9718,17 @@ ENDIF
 .L3C77
         EQUB    $1E,$A5,$7E,$C9,$02,$90,$18,$C9,$07
 
+IF _CUSTOM_LEVELS
+.raster_set_bg
+{
+        STA &FE21
+        eor #&10:STA &FE21
+        eor #&50:STA &FE21
+        eor #&10:STA &FE21
+        RTS
+}
+ENDIF
+
 \ ******************************************************************************
 \ ******************************************************************************
 \ *
@@ -9997,20 +10048,20 @@ ENDIF
 
 .crtc_regs_relocated
 {
-        EQUB    $7F
-        EQUB    SCREEN_WIDTH_CHARS
-        EQUB    $5E
-        EQUB    $28
-        EQUB    $26
-        EQUB    $00
-        EQUB    $1E
-        EQUB    $21
-        EQUB    $01
-        EQUB    $07
-        EQUB    $67
-        EQUB    $08
-        EQUB    HI(SCREEN_BASE_ADDR/8)
-        EQUB    LO(SCREEN_BASE_ADDR/8)
+        EQUB    127                     ; R0=Horizontal total-1
+        EQUB    SCREEN_WIDTH_CHARS      ; R1=Horizontal displayed
+        EQUB    94                      ; R2=Hsync pos
+        EQUB    $28                     ; R3=Hsync width
+        EQUB    38                      ; R4=Vertical total-1
+        EQUB    $00                     ; R5=Vertical total adjust
+        EQUB    30                      ; R6=Vertical displayed
+        EQUB    33                      ; R7=Vertical sync pos
+        EQUB    $01                     ; R8=Interlace on
+        EQUB    7                       ; R9=Scanlines per character
+        EQUB    $67                     ; R10=Cursor start
+        EQUB    $08                     ; R11=Cursor end
+        EQUB    HI(SCREEN_BASE_ADDR/8)  ; R12=Screen start high
+        EQUB    LO(SCREEN_BASE_ADDR/8)  ; R13=Screen start low
         EQUB    $FF
 }
 
@@ -10569,7 +10620,9 @@ ENDIF
 
 IF _CUSTOM_LEVELS
 CUSTOM_BANK     = 4
-CUSTOM_ADDR     = &8000
+CUSTOM_ADDR     = &8900         ; avoid first 32 lines below screen buffer
+                                ; as sprites are deliberately drawn into ROM
+                                ; address space to avoid culling...
 
 .custom_level_reloc
 {
