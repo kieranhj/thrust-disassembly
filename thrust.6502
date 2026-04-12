@@ -2554,7 +2554,7 @@ ORG     NATIVE_ADDR
 \ ******************************************************************************
 
 ; ******************************************************************************
-; Function: attach_pod_calculate_UNKNOWN
+; Function: attach_pod_calculate_signed_multiply
 ;
 ; Purpose:
 ;   Perform a signed 8‑bit × 8‑bit multiplication, producing a 16‑bit
@@ -2591,7 +2591,7 @@ ORG     NATIVE_ADDR
 ;
 ; ******************************************************************************
 
-.attach_pod_calculate_UNKNOWN
+.attach_pod_calculate_signed_multiply
 {
         STA     multiply_operand_b        ; save multiplicand (operand B)
 
@@ -4010,8 +4010,8 @@ ORG     NATIVE_ADDR
 ;
 ; At this point:
 ;   - Linear thrust has already been applied.
-;   - Pod is attached.
 ;   - This is a tick where torque is allowed.
+;   - Pod may or may not be attached (but torque calculation is done anyway).
 ;
 ; The following code prepares the angular difference between ship angle
 ; and tether angle for computing a tangential thrust component.
@@ -4056,7 +4056,27 @@ ORG     NATIVE_ADDR
 ; This loop computes the tangential component of thrust relative to the
 ; tether direction. It performs a nibble‑based interpolation over the
 ; angle lookup tables, identical in structure to calculate_attached_pod_vector,
-; but applied to angular difference rather than absolute angle.
+; but applied to the angular difference between ship heading and tether.
+;
+; Let f(k) = 1.25 · sin(k·2π/32).
+; With N = floor(16 · thrust_angle_sub_frac / 256),
+; this code computes:
+;
+;   ship_thrust_x = ((16 − N)·f(θ₀) + N·f(θ₀ + 1)) / 2
+;
+; where θ₀ is the integer angular difference index.
+;
+; This weighted sum approximates the continuous function:
+;
+;   ship_thrust_x ≈ 1.25 · sin((θ₀ + α)·2π/32)
+;
+; where:
+;   α = thrust_angle_sub_frac / 256.
+;
+; The result is a piecewise‑linear approximation obtained by integer
+; accumulation of 16 table samples rather than a true trigonometric
+; evaluation. The final divide‑by‑2 normalises the fixed‑point sum
+; into the angular‑velocity scale used by the physics.
 ; ===========================================================================
 
     .L1C38
@@ -4933,15 +4953,15 @@ ORG     NATIVE_ADDR
         STA     pod_attached_flag_2
         STA     level_reset_with_pod_flag
 
-; ---------------------------------------------------------------------------
-; Compute midpoint between ship and pod.
-;
-; This midpoint is the SEARCH TARGET.  We are looking for the tether vector
-; from the midpoint to the ship.
-;
-; X midpoint is computed as a fixed‑point average (INT+FRAC).
-; Y midpoint uses extended precision (Q10.8 via INT_HI).
-; ---------------------------------------------------------------------------
+        ; ---------------------------------------------------------------------------
+        ; Compute midpoint between ship and pod.
+        ;
+        ; This midpoint is the SEARCH TARGET.  We are looking for the tether vector
+        ; from the midpoint to the ship.
+        ;
+        ; X midpoint is computed as a fixed‑point average (INT+FRAC).
+        ; Y midpoint uses extended precision (Q10.8 via INT_HI).
+        ; ---------------------------------------------------------------------------
 
         CLC
         LDA     player_xpos_FRAC
@@ -4967,11 +4987,11 @@ ORG     NATIVE_ADDR
         ROR     midpoint_ypos_INT
         ROR     midpoint_ypos_FRAC
 
-; ---------------------------------------------------------------------------
-; Halve ship force vectors.
-;
-; This conserves momentum: after attachment, ship + pod move as one body.
-; ---------------------------------------------------------------------------
+        ; ---------------------------------------------------------------------------
+        ; Halve ship force vectors.
+        ;
+        ; This conserves momentum: after attachment, ship + pod move as one body.
+        ; ---------------------------------------------------------------------------
 
         LDA     force_vectory_INT
         ROL     A
@@ -4984,16 +5004,16 @@ ORG     NATIVE_ADDR
         ROR     force_vectorx_FRAC
         ROR     force_vectorx_FRAC_LO        ; X uses extra precision (Q7.16)
 
-; ---------------------------------------------------------------------------
-; Compute target vector = ship − midpoint.
-;
-; Axes are intentionally scaled asymmetrically so they match the scale
-; of the tether vectors produced by calculate_attached_pod_vector:
-;   - X scaled ×4
-;   - Y scaled ×2
-;
-; This compensates for the different X/Y magnitudes (1.25 vs 2.5).
-; ---------------------------------------------------------------------------
+        ; ---------------------------------------------------------------------------
+        ; Compute target vector = ship − midpoint.
+        ;
+        ; Axes are intentionally scaled asymmetrically so they match the scale
+        ; of the tether vectors produced by calculate_attached_pod_vector:
+        ;   - X scaled ×4
+        ;   - Y scaled ×2
+        ;
+        ; This compensates for the different X/Y magnitudes (1.25 vs 2.5).
+        ; ---------------------------------------------------------------------------
 
         LDA     player_xpos_FRAC
         SBC     midpoint_xpos_FRAC
@@ -5019,32 +5039,32 @@ ORG     NATIVE_ADDR
         LDA     delta_y_shifted
         STA     attach_pod_delta_y_scaled       ; store target dY int
 
-; ---------------------------------------------------------------------------
-; Now perform a search of which angle will produce a tractor beam 
-; vector which most closely matches target dX and target dY
-; 
-; This routine computes the midpoint between the ship and pod, then performs
-; a 7‑pass coarse‑to‑fine angular search to determine the tether angle
-; (integer + fractional) whose tether vector best matches the ship→pod axis.
-;
-; Conceptually, the nested loops are performing a single atan2‑like operation:
-; The objective of these 2 nested loops is to calculate:
-;   angle ≈ atan2(targetDx / 1.25, targetDy / -2.5) * (32 / 2π)
-;
-; The 6502 implementation avoids trig by:
-;   - generating candidate tether vectors
-;   - comparing them to the target direction
-;   - minimising a Manhattan distance metric
-;
-; Each pass tests 3 candidate angles and then halves the search step size.
-;
-; Initialise angular search parameters.
-;
-; stepHi:stepLo form a Q8.8 angle step.
-; Initial step ≈ 32 / 3, dividing the full angular range into thirds.
-;
-; The search runs for 7 passes, halving the step size each time.
-; ---------------------------------------------------------------------------
+        ; ---------------------------------------------------------------------------
+        ; Now perform a search of which angle will produce a tractor beam 
+        ; vector which most closely matches target dX and target dY
+        ; 
+        ; This routine computes the midpoint between the ship and pod, then performs
+        ; a 7‑pass coarse‑to‑fine angular search to determine the tether angle
+        ; (integer + fractional) whose tether vector best matches the ship→pod axis.
+        ;
+        ; Conceptually, the nested loops are performing a single atan2‑like operation:
+        ; The objective of these 2 nested loops is to calculate:
+        ;   angle ≈ atan2(targetDx / 1.25, targetDy / -2.5) * (32 / 2π)
+        ;
+        ; The 6502 implementation avoids trig by:
+        ;   - generating candidate tether vectors
+        ;   - comparing them to the target direction
+        ;   - minimising a Manhattan distance metric
+        ;
+        ; Each pass tests 3 candidate angles and then halves the search step size.
+        ;
+        ; Initialise angular search parameters.
+        ;
+        ; stepHi:stepLo form a Q8.8 angle step.
+        ; Initial step ≈ 32 / 3, dividing the full angular range into thirds.
+        ;
+        ; The search runs for 7 passes, halving the step size each time.
+        ; ---------------------------------------------------------------------------
 
         LDA     #$0A
         STA     angle_step_int                  ; stepHi
@@ -5056,9 +5076,9 @@ ORG     NATIVE_ADDR
         STA     tether_angle_FRAC               ; starting angleFrac
         STA     angle_ship_to_pod               ; starting integer angle
         
-; ===========================================================================
-; OUTER LOOP: 7‑PASS COARSE‑TO‑FINE ANGLE SEARCH
-; ===========================================================================
+        ; ===========================================================================
+        ; OUTER LOOP: 7‑PASS COARSE‑TO‑FINE ANGLE SEARCH
+        ; ===========================================================================
 
     .L207E
         LDA     #$FF
@@ -5066,11 +5086,11 @@ ORG     NATIVE_ADDR
         LDX     #$03
         STX     search_inner_count              ; 3 candidate angles
         
-; ---------------------------------------------------------------------------
-; INNER LOOP: test 3 candidate angles at current step size
-;
-; These candidates divide the current angular search window into thirds.
-; ---------------------------------------------------------------------------
+        ; ---------------------------------------------------------------------------
+        ; INNER LOOP: test 3 candidate angles at current step size
+        ;
+        ; These candidates divide the current angular search window into thirds.
+        ; ---------------------------------------------------------------------------
 
     .L2086
         JSR     calculate_attached_pod_vector   ; compute candidate tether vector
@@ -5082,7 +5102,7 @@ ORG     NATIVE_ADDR
         ROL     midpoint_deltay_FRAC
         ROL     midpoint_deltay_INT            ; Y scaled ×2
 
-; Compute |dx − target_dx|
+        ; Compute |dx − target_dx|
 
         SEC
         LDA     midpoint_deltax_INT
@@ -5094,7 +5114,7 @@ ORG     NATIVE_ADDR
     .L20A0
         STA     multiply_operand_a              ; |ΔX|
 
-; Compute |dy − target_dy|
+        ; Compute |dy − target_dy|
 
         SEC
         LDA     midpoint_deltay_INT
@@ -5106,14 +5126,14 @@ ORG     NATIVE_ADDR
     .L20AD
         STA     multiply_result_lo              ; |ΔY|
 
-; Combine |ΔX| and |ΔY| into a Manhattan distance metric.
-;
-; X contributes twice the weight of Y implicitly due to scaling above.
-; ---------------------------------------------------------------------------
+        ; Combine |ΔX| and |ΔY| into a Manhattan distance metric.
+        ;
+        ; X contributes twice the weight of Y implicitly due to scaling above.
+        ; ---------------------------------------------------------------------------
 
         JSR     get_distance_ship_to_pod_tractor_ext
 
-; Keep the best candidate this pass
+        ; Keep the best candidate this pass
 
         CMP     best_distance
         BCS     L20C0
@@ -5124,8 +5144,8 @@ ORG     NATIVE_ADDR
         LDA     angle_ship_to_pod
         STA     temp_angle_ship_to_pod          ; save best int
         
-; Advance angle to next candidate: angle += step (Q8.8)
-; Carry from fractional addition propagates into integer angle.
+        ; Advance angle to next candidate: angle += step (Q8.8)
+        ; Carry from fractional addition propagates into integer angle.
 
     .L20C0
         CLC
@@ -5149,10 +5169,10 @@ ORG     NATIVE_ADDR
         ROR     angle_step_int                  ; step >> 1 (Q8.8)
         ROR     angle_step_frac
 
-; ---------------------------------------------------------------------------
-; Prepare for next pass.
-; Rewind angle by half a step so the new search window is centered.
-; ---------------------------------------------------------------------------
+        ; ---------------------------------------------------------------------------
+        ; Prepare for next pass.
+        ; Rewind angle by half a step so the new search window is centered.
+        ; ---------------------------------------------------------------------------
 
         DEC     search_iterations
         BEQ     L20F6                           ; after 7 passes, done
@@ -5166,9 +5186,9 @@ ORG     NATIVE_ADDR
         AND     #ANGLE_MASK
         STA     angle_ship_to_pod
         JMP     L207E
-; ---------------------------------------------------------------------------
-; Atan2 calculation is now finished.
-; ---------------------------------------------------------------------------
+        ; ---------------------------------------------------------------------------
+        ; Atan2 calculation is now finished.
+        ; ---------------------------------------------------------------------------
 
 
 ; ===========================================================================
@@ -5241,7 +5261,7 @@ ORG     NATIVE_ADDR
         ROL     multiply_operand_a              ; velX × 16 (scale‑alignment)
 
         LDA     attach_pod_delta_y_scaled        ; dy (midpoint → ship, pre‑scaled)
-        JSR     attach_pod_calculate_UNKNOWN    ; signed multiply: velX * dy
+        JSR     attach_pod_calculate_signed_multiply    ; signed multiply: velX * dy
 
         ; Save this term so we can subtract it later
         LDA     multiply_result_lo
@@ -5270,18 +5290,18 @@ ORG     NATIVE_ADDR
         ROL     multiply_operand_a              ; velY × 16 (scale‑alignment)
 
         LDA     delta_x_scaled                  ; dx (midpoint → ship, pre‑scaled)
-        JSR     attach_pod_calculate_UNKNOWN    ; signed multiply: velY * dx
+        JSR     attach_pod_calculate_signed_multiply    ; signed multiply: velY * dx
 
-; ---------------------------------------------------------------------------
-; Compute net angular impulse:
-;
-;   angularVelocity ∝ (velY * dx) − (velX * dy)
-;
-; At this point, the important information is primarily in the *high*
-; bytes of the multiplication results. The following subtract and
-; sign‑preserving shifts normalise the fixed‑point value into the final
-; angular velocity accumulator.
-; ---------------------------------------------------------------------------
+        ; ---------------------------------------------------------------------------
+        ; Compute net angular impulse:
+        ;
+        ;   angularVelocity ∝ (velY * dx) − (velX * dy)
+        ;
+        ; At this point, the important information is primarily in the *high*
+        ; bytes of the multiplication results. The following subtract and
+        ; sign‑preserving shifts normalise the fixed‑point value into the final
+        ; angular velocity accumulator.
+        ; ---------------------------------------------------------------------------
 
         SEC
         LDA     multiply_result_lo
@@ -5311,6 +5331,7 @@ ORG     NATIVE_ADDR
         JSR     collect_pod_fuel_sound
         RTS
 }
+
 \ ******************************************************************************
 \ * Function: generate_stars_to_start
 \ * Description: Draw ship sprite and animate star particles until counter wraps to zero
