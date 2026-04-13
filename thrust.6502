@@ -27,34 +27,20 @@
 \ *****************************************************************************
 \ *****************************************************************************
 
-_SWRAM_BUILD    = TRUE
-_DEBUG_RASTERS  = (_SWRAM_BUILD AND FALSE)
-_UNROLL_TERRAIN = (_SWRAM_BUILD AND TRUE)
+_SWRAM_BUILD       = TRUE
+_DEBUG_RASTERS     = (_SWRAM_BUILD AND FALSE)   ; Raster timing
+_UNROLL_TERRAIN    = (_SWRAM_BUILD AND TRUE)    ; Faster terrain plotting
+_FRIENDLY_KEYS     = (_SWRAM_BUILD AND TRUE)    ; Emulator friendly key map
 
-\\ Palette values for ULA
-PAL_black	= (0 EOR 7)
-PAL_blue	= (4 EOR 7)
-PAL_red		= (1 EOR 7)
-PAL_magenta     = (5 EOR 7)
-PAL_green	= (2 EOR 7)
-PAL_cyan	= (6 EOR 7)
-PAL_yellow	= (3 EOR 7)
-PAL_white	= (7 EOR 7)
+\ ******************************************************************************
+\ ******************************************************************************
+\ * Useful game defines.
+\ ******************************************************************************
+\ ******************************************************************************
 
-MACRO SET_BG_COL col
-IF _DEBUG_RASTERS
-{
-        LDA #col:JSR raster_set_bg
-}
-ELSE
-{}
-ENDIF
-ENDMACRO
-
-NATIVE_ADDR        = &A60        ; address at which code will run
-RELOAD_ADDR        = &1A00       ; address at which code will load
-
-OFFSET             = RELOAD_ADDR - NATIVE_ADDR  ; difference between load and run addresses
+INITIAL_LEVEL                       = $01       ; staring level
+INITIAL_LIVES                       = $04       ; starting number of lives
+INITIAL_FUEL                        = $10       ; starting fuel value (BCD 1000)
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -66,6 +52,7 @@ SCREEN_BASE_ADDR                    = $3C80     ; MODE 1 screen memory base
 SCREEN_WIDTH_CHARS                  = 72        ; screen width in character columns
 SCREEN_HEIGHT_ROWS                  = 30        ; total screen height in rows
 SCREEN_STATUS_ROWS                  = 2         ; first two rows are status bar
+
 SCREEN_CHAR_ROW_BYTES               = (SCREEN_WIDTH_CHARS * 8) ; bytes per character row
 SCREEN_PLAY_HEIGHT                  = SCREEN_HEIGHT_ROWS-SCREEN_STATUS_ROWS
 SCREEN_START_ADDR                   = SCREEN_BASE_ADDR + SCREEN_CHAR_ROW_BYTES * SCREEN_STATUS_ROWS
@@ -91,7 +78,7 @@ INKEY_S                             = $AE       ; negative INKEY value for S
 INKEY_Z                             = $9E       ; negative INKEY value for Z
 INKEY_X                             = $BD       ; negative INKEY value for X
 
-IF _SWRAM_BUILD
+IF _FRIENDLY_KEYS
 KEY_ROTATE_left                     = INKEY_Z
 KEY_ROTATE_right                    = INKEY_X
 ELSE
@@ -136,8 +123,6 @@ PLAYER_CENTRE_X_OFFSET              = $04       ; X offset to centre of player s
 PLAYER_CENTRE_Y_OFFSET              = $05       ; Y offset to centre of player sprite
 SHIELD_SPRITE_INDEX                 = $11       ; sprite index for shield (after 17 rotation frames)
 LEVEL_MAX_OBJECTS                   = $1F       ; max object index per level (32 objects)
-INITIAL_LIVES                       = $04       ; starting number of lives
-INITIAL_FUEL                        = $10       ; starting fuel value (BCD 1000)
 PLANET_COUNTDOWN_SECONDS            = $0A       ; planet countdown timer in seconds
 POD_DESTROY_TIMER_INIT              = $3C       ; pod destroying player timer initial value (60 ticks)
 TRACTOR_BEAM_ACTIVATE_DIST          = $75       ; distance threshold to activate tractor beam
@@ -675,11 +660,41 @@ OSBYTE                              = $FFF4     ; OS byte-length call
 OSCLI                               = $FFF7     ; OS command line interpreter
 LFFFF                               = $FFFF     ; placeholder for self-modifying code
 
+\\ Palette values for ULA
+PAL_black	                    = (0 EOR 7)
+PAL_blue	                    = (4 EOR 7)
+PAL_red		                    = (1 EOR 7)
+PAL_magenta                         = (5 EOR 7)
+PAL_green	                    = (2 EOR 7)
+PAL_cyan	                    = (6 EOR 7)
+PAL_yellow	                    = (3 EOR 7)
+PAL_white	                    = (7 EOR 7)
+
+\ ******************************************************************************
+\ ******************************************************************************
+\ * Macros
+\ ******************************************************************************
+\ ******************************************************************************
+
+MACRO SET_BG_COL col
+IF _DEBUG_RASTERS
+{
+        LDA #col:JSR raster_set_bg
+}
+ELSE
+{}
+ENDIF
+ENDMACRO
+
 \ ******************************************************************************
 \ ******************************************************************************
 \ * Start of code
 \ ******************************************************************************
 \ ******************************************************************************
+
+NATIVE_ADDR        = &A60        ; address at which code will run
+LOAD_ADDR          = &1A00       ; address at which code will load
+OFFSET             = LOAD_ADDR - NATIVE_ADDR  ; difference between load and run addresses
 
 ORG     NATIVE_ADDR
 
@@ -8378,12 +8393,12 @@ ENDIF
 .start_new_game
 {
         LDX     #$01
-        STX     level_hostile_gun_probability            ; set level_hostile_gun_probability to 1
+        STX     level_hostile_gun_probability           ; set level_hostile_gun_probability to 1
         DEX
-        STX     planet_destroyed_hostile_gun_modifier    ; set planet_destroyed_hostile_gun_modifier to 0
-        STX     reverse_gravity_msg_shown                ; set reverse_gravity_msg_shown to 0
-        STX     invisible_landscape_msg_shown            ; set invisible_landscape_msg_shown to 0
-        STX     extra_string_index                        ; set extra_string_index to 0
+        STX     planet_destroyed_hostile_gun_modifier   ; set planet_destroyed_hostile_gun_modifier to 0
+        STX     reverse_gravity_msg_shown               ; set reverse_gravity_msg_shown to 0
+        STX     invisible_landscape_msg_shown           ; set invisible_landscape_msg_shown to 0
+        STX     extra_string_index                      ; set extra_string_index to 0
         STX     extra_string_counter                    ; set extra_string_counter to 0
 
         LDX     #$03
@@ -8391,7 +8406,7 @@ ENDIF
     .zero_fuel_and_score
         LDA     #$00
         STA     fuel_A,X                                ; set fuel_A to zero
-        STA     score_A,X                                ; set score_A to zero
+        STA     score_A,X                               ; set score_A to zero
         DEX
         BPL     zero_fuel_and_score
 
@@ -8399,32 +8414,32 @@ ENDIF
         
     .store_32_loop
         LDA     #$20
-        STA     score_C,X                                ; store $20 (32) at L0183 for 13 bytes
+        STA     score_C,X                               ; store $20 (32) at L0183 for 13 bytes
         DEX
         BNE     store_32_loop
 
         LDA     #$00                                    ; set initial score_A
         JSR     add_A_to_score
 
-        LDA     #INITIAL_LIVES                                    ; set initial number of lives
+        LDA     #INITIAL_LIVES                          ; set initial number of lives
         STA     lives
         JSR     lose_a_life
 
         LDA     #INITIAL_FUEL
-        STA     fuel_B                                    ; set initial fuel value (1000)
+        STA     fuel_B                                  ; set initial fuel value (1000)
         
         LDA     #$FF
-        STA     total_levels_played                        ; set total_levels_played to 255 (-1)
+        STA     total_levels_played                     ; set total_levels_played to 255 (-1)
         
-        LDA     #$FF
+        LDA     #LO(INITIAL_LEVEL-2)
         STA     level_number                            ; set level_number to 255 (-1)
 
         LDA     #$00
-        STA     mission_number                            ; zero mission number
-        STA     level_modifier_flag                        ; zero level modifier flag (reverse gravity etc.)
+        STA     mission_number                          ; zero mission number
+        STA     level_modifier_flag                     ; zero level modifier flag (reverse gravity etc.)
         STA     invisible_landscape_flag                ; set invisible_landscape_flag to 0
         STA     reverse_gravity_flag                    ; set reverse_gravity_flag to 0
-        STA     fuel_empty_flag                            ; zero fuel flag
+        STA     fuel_empty_flag                         ; zero fuel flag
         JSR     plot_fuel_value
 }
 \\ Fall through!
@@ -10544,9 +10559,9 @@ ENDIF
         LDA     old_brkv+1
         STA     BRKV+1                    ; restore old BRKV
 
-        LDA     #LO(RELOAD_ADDR)          ; is $01 in original source as relocates from $1A01
+        LDA     #LO(LOAD_ADDR)            ; is $01 in original source as relocates from $1A01
         STA     boot_read_ptr
-        LDA     #HI(RELOAD_ADDR)
+        LDA     #HI(LOAD_ADDR)
         STA     boot_read_ptr+1           ; set boot_read_ptr to &1A01
         LDA     #LO(NATIVE_ADDR)
         STA     boot_write_ptr
@@ -10760,7 +10775,7 @@ IF _UNROLL_TERRAIN
         ; Plot up to 32 columns in one go.
         .jump_to
         JMP     terrain_unrolled_plot_one_page  ; 3c
-        ; 66c setup + 40c per loop + 20c per col.
+        ; 66c setup + 40c per loop + 19c per col.
         .^draw_terrain_unrolled_return
 
         ; Check how many are left.
@@ -10796,7 +10811,7 @@ NEXT
 {
         FOR col, 0, 31, 1
                 LDA     #LANDSCAPE_COLOUR_BYTE          ; 2c          ; solid line colour 2
-                EOR     (terrain_draw_ptr),Y            ; 6c
+                EOR     (terrain_draw_ptr),Y            ; 5c
                 STA     (terrain_draw_ptr),Y            ; 6c
                 TYA                                     ; 2c
                 ADC     #$08                            ; 2c          ; next column
@@ -10835,7 +10850,7 @@ ENDIF
 \ ******************************************************************************
 \ ******************************************************************************
 
-SAVE "Thrust", NATIVE_START, NATIVE_END+SWRAM_SIZE, RELOC_START+OFFSET, RELOAD_ADDR
+SAVE "Thrust", NATIVE_START, NATIVE_END+SWRAM_SIZE, RELOC_START+OFFSET, LOAD_ADDR
 
 \ ******************************************************************************
 \ ******************************************************************************
