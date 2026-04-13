@@ -29,6 +29,7 @@
 
 _SWRAM_BUILD    = TRUE
 _DEBUG_RASTERS  = (_SWRAM_BUILD AND FALSE)
+_UNROLL_TERRAIN = (_SWRAM_BUILD AND TRUE)
 
 \\ Palette values for ULA
 PAL_black	= (0 EOR 7)
@@ -1232,7 +1233,7 @@ ORG     NATIVE_ADDR
 \ * Description: Draws a horizontal terrain line across columns using EOR plotting 
 \ ******************************************************************************
 
-IF _SWRAM_BUILD=FALSE
+IF _UNROLL_TERRAIN==FALSE
 .draw_terrain
 {
         LDA     mult_by_8_LO,Y
@@ -10690,18 +10691,9 @@ ENDIF
 \ * Description: Draws a horizontal terrain line across columns using EOR plotting 
 \ ******************************************************************************
 
-; TODO: Unroll 28 character rows of max 72 columns each. ~12K :)
-;       Use beeb-niccc approach of double duty for index and start column.
-;       NB. Can't do this as the row is >256 bytes wide (72*8=576)
-;       Jump into the unrolled code at the appropriate spot. :)
-;       Need to find a way to write code in the relo section without manual patch up.
-
-; terrain_draw_addr_HI, terrain_draw_addr_LO = start of scanline.
-; terrain_draw_wall_index = line being drawn.
-
+IF _UNROLL_TERRAIN
 .draw_terrain
 {
-IF 0
         LDA     mult_by_8_LO,Y                  ; 4c
         STA     terrain_draw_ptr                ; 3c
 
@@ -10715,6 +10707,10 @@ IF 0
         STA     (terrain_draw_ptr),Y            ; 6c
         DEX                                     ; 2c
         BEQ     draw_terrain_return             ; 2c
+        ; 38c
+
+        CPX     #16                              ; not worth doing it for <16 columns
+        BCS     draw_terrain_unrolled
 
     .draw_terrain_loop
         TYA                                     ; 2c
@@ -10731,148 +10727,87 @@ IF 0
         STA     (terrain_draw_ptr),Y            ; 6c
         DEX                                     ; 2c
         BNE     draw_terrain_loop               ; 3c
-        ; 17c + 28c per col
+        ; 27c per col
 
     .draw_terrain_return
         RTS                                     ; 6c
-ELSE
-        STX     terrain_draw_ptr                ; 3c          ; width
 
-        LDX     terrain_draw_table_index        ; 3c
+    .draw_terrain_unrolled
+        ; Reset base ptr to next column.
         CLC                                     ; 2c
-        LDA     terrain_index_to_row_code_LO, X ; 4c
-        ADC     mult6_LO, Y                     ; 4c          ; start col
+        TYA                                     ; 2c
+        LDY     #0                              ; 2c
+        ADC     #8                              ; 2c
+        BCC     next_col                        ; 3c
+        INC     terrain_draw_ptr+1              ; 5c
+        CLC                                     ; 2c
+        .next_col
+        ADC     terrain_draw_ptr                ; 3c
+        STA     terrain_draw_ptr                ; 3c
+        BCC     no_carry                        ; 3c
+
+        .next_page
+        INC     terrain_draw_ptr+1              ; 5c
+        CLC                                     ; 2c
+        .no_carry
+
+        ; X=remaining columns
+        LDA     width_to_plot_LO, X             ; 4c
         STA     jump_to+1                       ; 4c
-        LDA     terrain_index_to_row_code_HI, X ; 4c
-        ADC     mult6_HI, Y                     ; 4c          ; start col
+        LDA     width_to_plot_HI, X             ; 4c
         STA     jump_to+2                       ; 4c
 
-        LDY     terrain_draw_ptr                ; 3c
-        CLC                                     ; 2c
-        LDA     jump_to+1                       ; 4c
-        ADC     mult6_LO, Y                     ; 4c          ; width
-        STA     poke_in+1                       ; 4c
-        STA     poke_out+1                      ; 4c
-        LDA     jump_to+2                       ; 3c
-        ADC     mult6_HI, Y                     ; 4c          ; width
-        STA     poke_in+2                       ; 4c
-        STA     poke_out+2                      ; 4c
-
-        LDY     terrain_index_to_scanline, X    ; 4c
-
-        LDA     #&60                            ; 2c          ; RTS
-        .poke_in
-        STA     row0_unrolled                   ; 4c
-
-        LDA     #LANDSCAPE_COLOUR_BYTE          ; 2c          ; solid line colour 2
+        ; Plot up to 32 columns in one go.
         .jump_to
-        JSR     row0_unrolled                   ; 6c
-        
-        LDA     #&59                            ; 2c          ; EOR abs, Y
-        .poke_out
-        STA     row0_unrolled                   ; 4c
+        JMP     terrain_unrolled_plot_one_page  ; 3c
+        ; 66c setup + 40c per loop + 20c per col.
+        .^draw_terrain_unrolled_return
 
-        RTS                                     ; c6
-        ; 126c + 8c per col.
-ENDIF
+        ; Check how many are left.
+        SEC                                     ; 2c
+        TXA                                     ; 2c
+        SBC     #32                             ; 2c          ; we just did 32 cols max
+        TAX                                     ; 2c
+        BCS     next_page                       ; 3c          ; or we finished
+        RTS
 }
 
-.terrain_index_to_scanline
-FOR i,0,110,1
-scanline=2*(i+1)
-EQUB scanline MOD 8
+.width_to_plot_LO
+FOR width,0,72,1
+IF width>31
+        w=0             ; plots 32
+ELSE
+        w=32-width      ; plots N (jump to N from the end)
+ENDIF
+EQUB LO(terrain_unrolled_plot_one_page+w*UNROLLED_PLOT_SIZE)
 NEXT
 
-.terrain_index_to_row_code_LO
-FOR i,0,110,1
-scanline=2*(i+1)
-row=scanline DIV 8
-EQUB LO(row0_unrolled + row*UNROLLED_ROW_CODE_SIZE)
+.width_to_plot_HI
+FOR width,0,72,1
+IF width>31
+        w=0             ; plots 32
+ELSE
+        w=32-width      ; plots N (jump to N from the end)
+ENDIF
+EQUB HI(terrain_unrolled_plot_one_page+w*UNROLLED_PLOT_SIZE)
 NEXT
 
-.terrain_index_to_row_code_HI
-FOR i,0,110,1
-scanline=2*(i+1)
-row=scanline DIV 8
-EQUB HI(row0_unrolled + row*UNROLLED_ROW_CODE_SIZE)
-NEXT
-
-.mult6_LO
-FOR i,0,SCREEN_WIDTH_CHARS-1,1
-EQUB LO(i*6)
-NEXT
-
-.mult6_HI
-FOR i,0,SCREEN_WIDTH_CHARS-1,1
-EQUB HI(i*6)
-NEXT
-
-MACRO UNROLL_ROW row
-        FOR col, 0, SCREEN_WIDTH_CHARS-1, 1
-                EOR     SCREEN_START_ADDR+row*SCREEN_CHAR_ROW_BYTES+col*8, Y              ; 3b/4c
-                STA     SCREEN_START_ADDR+row*SCREEN_CHAR_ROW_BYTES+col*8, Y              ; 3b/4c
+.terrain_unrolled_plot_one_page
+{
+        FOR col, 0, 31, 1
+                LDA     #LANDSCAPE_COLOUR_BYTE          ; 2c          ; solid line colour 2
+                EOR     (terrain_draw_ptr),Y            ; 6c
+                STA     (terrain_draw_ptr),Y            ; 6c
+                TYA                                     ; 2c
+                ADC     #$08                            ; 2c          ; next column
+                TAY                                     ; 2c
+                ; 20c per col.
         NEXT
-        RTS
-ENDMACRO
+        JMP     draw_terrain_unrolled_return            ; 3c
+}
 
-UNROLLED_ROW_CODE_SIZE=1+SCREEN_WIDTH_CHARS*6
-
-.row0_unrolled
-UNROLL_ROW 0
-.row1_unrolled
-UNROLL_ROW 1
-.row2_unrolled
-UNROLL_ROW 2
-.row3_unrolled
-UNROLL_ROW 3
-.row4_unrolled
-UNROLL_ROW 4
-.row5_unrolled
-UNROLL_ROW 5
-.row6_unrolled
-UNROLL_ROW 6
-.row7_unrolled
-UNROLL_ROW 7
-.row8_unrolled
-UNROLL_ROW 8
-.row9_unrolled
-UNROLL_ROW 9
-.row10_unrolled
-UNROLL_ROW 10
-.row11_unrolled
-UNROLL_ROW 11
-.row12_unrolled
-UNROLL_ROW 12
-.row13_unrolled
-UNROLL_ROW 13
-.row14_unrolled
-UNROLL_ROW 14
-.row15_unrolled
-UNROLL_ROW 15
-.row16_unrolled
-UNROLL_ROW 16
-.row17_unrolled
-UNROLL_ROW 17
-.row18_unrolled
-UNROLL_ROW 18
-.row19_unrolled
-UNROLL_ROW 19
-.row20_unrolled
-UNROLL_ROW 20
-.row21_unrolled
-UNROLL_ROW 21
-.row22_unrolled
-UNROLL_ROW 22
-.row23_unrolled
-UNROLL_ROW 23
-.row24_unrolled
-UNROLL_ROW 24
-.row25_unrolled
-UNROLL_ROW 25
-.row26_unrolled
-UNROLL_ROW 26
-.row27_unrolled
-UNROLL_ROW 27
+UNROLLED_PLOT_SIZE=10
+ENDIF
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -10883,6 +10818,7 @@ UNROLL_ROW 27
 SWRAM_SIZE      = P%-SWRAM_ADDR
 SWRAM_PAGES     = HI(SWRAM_SIZE+&FF)
 
+PRINT "~~~"
 PRINT "SWRAM BUILD!"
 PRINT "~~~"
 PRINT "COPYBLOCK FROM=", ~SWRAM_ADDR, " TO=", ~SWRAM_RELOC_START, " SIZE=", ~SWRAM_SIZE, " bytes (", ~SWRAM_PAGES, " pages)"
