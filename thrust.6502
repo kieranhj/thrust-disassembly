@@ -63,8 +63,11 @@ OFFSET             = RELOAD_ADDR - NATIVE_ADDR  ; difference between load and ru
 
 SCREEN_BASE_ADDR                    = $3C80     ; MODE 1 screen memory base
 SCREEN_WIDTH_CHARS                  = 72        ; screen width in character columns
+SCREEN_HEIGHT_ROWS                  = 30        ; total screen height in rows
+SCREEN_STATUS_ROWS                  = 2         ; first two rows are status bar
 SCREEN_CHAR_ROW_BYTES               = (SCREEN_WIDTH_CHARS * 8) ; bytes per character row
-SCREEN_START_ADDR                   = SCREEN_BASE_ADDR + SCREEN_CHAR_ROW_BYTES * 2        ; first two rows are status bar
+SCREEN_PLAY_HEIGHT                  = SCREEN_HEIGHT_ROWS-SCREEN_STATUS_ROWS
+SCREEN_START_ADDR                   = SCREEN_BASE_ADDR + SCREEN_CHAR_ROW_BYTES * SCREEN_STATUS_ROWS
 
 ASCII_beep                          = $07       ; BEL character
 ASCII_space                         = $20       ; space character
@@ -1229,12 +1232,7 @@ ORG     NATIVE_ADDR
 \ * Description: Draws a horizontal terrain line across columns using EOR plotting 
 \ ******************************************************************************
 
-; TODO: Unroll 28 character rows of max 72 columns each. ~12K :)
-;       Use beeb-niccc approach of double duty for index and start column.
-;       NB. Can't do this as the row is >256 bytes wide (72*8=576)
-;       Jump into the unrolled code at the appropriate spot. :)
-;       Need to find a way to write code in the relo section without manual patch up.
-
+IF _SWRAM_BUILD=FALSE
 .draw_terrain
 {
         LDA     mult_by_8_LO,Y
@@ -1270,6 +1268,7 @@ ORG     NATIVE_ADDR
     .draw_terrain_return
         RTS
 }
+ENDIF
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -10043,7 +10042,7 @@ ENDIF
         EQUB    $28                     ; R3=Hsync width
         EQUB    38                      ; R4=Vertical total-1
         EQUB    $00                     ; R5=Vertical total adjust
-        EQUB    30                      ; R6=Vertical displayed
+        EQUB    SCREEN_HEIGHT_ROWS      ; R6=Vertical displayed
         EQUB    33                      ; R7=Vertical sync pos
         EQUB    $01                     ; R8=Interlace on
         EQUB    7                       ; R9=Scanlines per character
@@ -10664,9 +10663,9 @@ IF _SWRAM_BUILD
 .SWRAM_RELOC_START
 
 ORG SWRAM_ADDR
-GUARD SWRAM_ADDR+&8000-NATIVE_END
+;GUARD SWRAM_ADDR+&8000-(NATIVE_END+OFFSET)
 
-; avoid first 32 lines below screen buffer
+; Avoid the first 16 lines below screen buffer
 ; as sprites are deliberately drawn into ROM
 ; address space to avoid culling...
 skip &480
@@ -10683,6 +10682,197 @@ IF _DEBUG_RASTERS
         RTS
 }
 ENDIF
+
+\ ******************************************************************************
+\ * Function: draw_terrain
+\ * Params: Y = start column, X = width to draw in columns
+\ * Returns: none
+\ * Description: Draws a horizontal terrain line across columns using EOR plotting 
+\ ******************************************************************************
+
+; TODO: Unroll 28 character rows of max 72 columns each. ~12K :)
+;       Use beeb-niccc approach of double duty for index and start column.
+;       NB. Can't do this as the row is >256 bytes wide (72*8=576)
+;       Jump into the unrolled code at the appropriate spot. :)
+;       Need to find a way to write code in the relo section without manual patch up.
+
+; terrain_draw_addr_HI, terrain_draw_addr_LO = start of scanline.
+; terrain_draw_wall_index = line being drawn.
+
+.draw_terrain
+{
+IF 0
+        LDA     mult_by_8_LO,Y                  ; 4c
+        STA     terrain_draw_ptr                ; 3c
+
+        LDA     mult_by_8_HI,Y                  ; 4c
+        ADC     terrain_draw_addr_HI            ; 3c
+        STA     terrain_draw_ptr+1              ; 3c
+        
+        LDY     terrain_draw_addr_LO            ; 3c
+        LDA     #LANDSCAPE_COLOUR_BYTE          ; 2c          ; solid line colour 2
+        EOR     (terrain_draw_ptr),Y            ; 6c
+        STA     (terrain_draw_ptr),Y            ; 6c
+        DEX                                     ; 2c
+        BEQ     draw_terrain_return             ; 2c
+
+    .draw_terrain_loop
+        TYA                                     ; 2c
+        ADC     #$08                            ; 2c          ; next column
+        TAY                                     ; 2c
+        BCC     inc_terrain_draw_ptr_no_carry   ; 2/3c
+
+        CLC                                     ; 2c
+        INC     terrain_draw_ptr+1              ; 5c
+        
+    .inc_terrain_draw_ptr_no_carry
+        LDA     #LANDSCAPE_COLOUR_BYTE          ; 2c          ; solid line colour 2
+        EOR     (terrain_draw_ptr),Y            ; 6c
+        STA     (terrain_draw_ptr),Y            ; 6c
+        DEX                                     ; 2c
+        BNE     draw_terrain_loop               ; 3c
+        ; 17c + 28c per col
+
+    .draw_terrain_return
+        RTS                                     ; 6c
+ELSE
+        STX     terrain_draw_ptr                ; 3c          ; width
+
+        LDX     terrain_draw_table_index        ; 3c
+        CLC                                     ; 2c
+        LDA     terrain_index_to_row_code_LO, X ; 4c
+        ADC     mult6_LO, Y                     ; 4c          ; start col
+        STA     jump_to+1                       ; 4c
+        LDA     terrain_index_to_row_code_HI, X ; 4c
+        ADC     mult6_HI, Y                     ; 4c          ; start col
+        STA     jump_to+2                       ; 4c
+
+        LDY     terrain_draw_ptr                ; 3c
+        CLC                                     ; 2c
+        LDA     jump_to+1                       ; 4c
+        ADC     mult6_LO, Y                     ; 4c          ; width
+        STA     poke_in+1                       ; 4c
+        STA     poke_out+1                      ; 4c
+        LDA     jump_to+2                       ; 3c
+        ADC     mult6_HI, Y                     ; 4c          ; width
+        STA     poke_in+2                       ; 4c
+        STA     poke_out+2                      ; 4c
+
+        LDY     terrain_index_to_scanline, X    ; 4c
+
+        LDA     #&60                            ; 2c          ; RTS
+        .poke_in
+        STA     row0_unrolled                   ; 4c
+
+        LDA     #LANDSCAPE_COLOUR_BYTE          ; 2c          ; solid line colour 2
+        .jump_to
+        JSR     row0_unrolled                   ; 6c
+        
+        LDA     #&59                            ; 2c          ; EOR abs, Y
+        .poke_out
+        STA     row0_unrolled                   ; 4c
+
+        RTS                                     ; c6
+        ; 126c + 8c per col.
+ENDIF
+}
+
+.terrain_index_to_scanline
+FOR i,0,110,1
+scanline=2*(i+1)
+EQUB scanline MOD 8
+NEXT
+
+.terrain_index_to_row_code_LO
+FOR i,0,110,1
+scanline=2*(i+1)
+row=scanline DIV 8
+EQUB LO(row0_unrolled + row*UNROLLED_ROW_CODE_SIZE)
+NEXT
+
+.terrain_index_to_row_code_HI
+FOR i,0,110,1
+scanline=2*(i+1)
+row=scanline DIV 8
+EQUB HI(row0_unrolled + row*UNROLLED_ROW_CODE_SIZE)
+NEXT
+
+.mult6_LO
+FOR i,0,SCREEN_WIDTH_CHARS-1,1
+EQUB LO(i*6)
+NEXT
+
+.mult6_HI
+FOR i,0,SCREEN_WIDTH_CHARS-1,1
+EQUB HI(i*6)
+NEXT
+
+MACRO UNROLL_ROW row
+        FOR col, 0, SCREEN_WIDTH_CHARS-1, 1
+                EOR     SCREEN_START_ADDR+row*SCREEN_CHAR_ROW_BYTES+col*8, Y              ; 3b/4c
+                STA     SCREEN_START_ADDR+row*SCREEN_CHAR_ROW_BYTES+col*8, Y              ; 3b/4c
+        NEXT
+        RTS
+ENDMACRO
+
+UNROLLED_ROW_CODE_SIZE=1+SCREEN_WIDTH_CHARS*6
+
+.row0_unrolled
+UNROLL_ROW 0
+.row1_unrolled
+UNROLL_ROW 1
+.row2_unrolled
+UNROLL_ROW 2
+.row3_unrolled
+UNROLL_ROW 3
+.row4_unrolled
+UNROLL_ROW 4
+.row5_unrolled
+UNROLL_ROW 5
+.row6_unrolled
+UNROLL_ROW 6
+.row7_unrolled
+UNROLL_ROW 7
+.row8_unrolled
+UNROLL_ROW 8
+.row9_unrolled
+UNROLL_ROW 9
+.row10_unrolled
+UNROLL_ROW 10
+.row11_unrolled
+UNROLL_ROW 11
+.row12_unrolled
+UNROLL_ROW 12
+.row13_unrolled
+UNROLL_ROW 13
+.row14_unrolled
+UNROLL_ROW 14
+.row15_unrolled
+UNROLL_ROW 15
+.row16_unrolled
+UNROLL_ROW 16
+.row17_unrolled
+UNROLL_ROW 17
+.row18_unrolled
+UNROLL_ROW 18
+.row19_unrolled
+UNROLL_ROW 19
+.row20_unrolled
+UNROLL_ROW 20
+.row21_unrolled
+UNROLL_ROW 21
+.row22_unrolled
+UNROLL_ROW 22
+.row23_unrolled
+UNROLL_ROW 23
+.row24_unrolled
+UNROLL_ROW 24
+.row25_unrolled
+UNROLL_ROW 25
+.row26_unrolled
+UNROLL_ROW 26
+.row27_unrolled
+UNROLL_ROW 27
 
 \ ******************************************************************************
 \ ******************************************************************************
