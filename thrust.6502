@@ -28,7 +28,7 @@
 \ *****************************************************************************
 
 _SWRAM_BUILD    = TRUE
-_DEBUG_RASTERS  = (_SWRAM_BUILD AND TRUE)
+_DEBUG_RASTERS  = (_SWRAM_BUILD AND FALSE)
 
 \\ Palette values for ULA
 PAL_black	= (0 EOR 7)
@@ -10608,7 +10608,7 @@ ENDIF
 
 \ ******************************************************************************
 \ ******************************************************************************
-\ * End of all code
+\ * End of original code
 \ ******************************************************************************
 \ ******************************************************************************
 
@@ -10622,7 +10622,7 @@ SWRAM_ADDR      = &8000
         STA     &F4
         STA     &FE30
 
-\ Relocate level data to SWRAM.
+\ Relocate new data & code block to SWRAM.
 
         LDA     #LO(SWRAM_RELOC_START+OFFSET)
         STA     boot_read_ptr
@@ -10656,7 +10656,7 @@ ENDIF
 
 \ ******************************************************************************
 \ ******************************************************************************
-\ * SWRAM data and code.
+\ * SWRAM new data and code.
 \ ******************************************************************************
 \ ******************************************************************************
 
@@ -10669,7 +10669,7 @@ GUARD SWRAM_ADDR+&8000-NATIVE_END
 ; avoid first 32 lines below screen buffer
 ; as sprites are deliberately drawn into ROM
 ; address space to avoid culling...
-skip &900
+skip &480
 
 INCLUDE "tools/output/thrust_levels_export.asm"
 
