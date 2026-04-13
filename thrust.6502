@@ -27,8 +27,8 @@
 \ *****************************************************************************
 \ *****************************************************************************
 
-_CUSTOM_LEVELS     = TRUE
-_DEBUG_RASTERS     = (_CUSTOM_LEVELS AND FALSE)
+_SWRAM_BUILD    = TRUE
+_DEBUG_RASTERS  = (_SWRAM_BUILD AND TRUE)
 
 \\ Palette values for ULA
 PAL_black	= (0 EOR 7)
@@ -87,7 +87,7 @@ INKEY_S                             = $AE       ; negative INKEY value for S
 INKEY_Z                             = $9E       ; negative INKEY value for Z
 INKEY_X                             = $BD       ; negative INKEY value for X
 
-IF _CUSTOM_LEVELS
+IF _SWRAM_BUILD
 KEY_ROTATE_left                     = INKEY_Z
 KEY_ROTATE_right                    = INKEY_X
 ELSE
@@ -678,9 +678,8 @@ LFFFF                               = $FFFF     ; placeholder for self-modifying
 \ ******************************************************************************
 
 ORG     NATIVE_ADDR
-;GUARD    SCREEN_BASE_ADDR
 
-.START
+.NATIVE_START
 
 \ ******************************************************************************
 \ * Message strings
@@ -1232,6 +1231,7 @@ ORG     NATIVE_ADDR
 
 ; TODO: Unroll 28 character rows of max 72 columns each. ~12K :)
 ;       Use beeb-niccc approach of double duty for index and start column.
+;       NB. Can't do this as the row is >256 bytes wide (72*8=576)
 ;       Jump into the unrolled code at the appropriate spot. :)
 ;       Need to find a way to write code in the relo section without manual patch up.
 
@@ -5792,7 +5792,7 @@ ORG     NATIVE_ADDR
         RTS
 }
 
-IF _CUSTOM_LEVELS==FALSE
+IF _SWRAM_BUILD==FALSE
 INCLUDE "level_data.6502"
 ENDIF
 
@@ -9718,17 +9718,6 @@ SET_BG_COL PAL_black
 .L3C77
         EQUB    $1E,$A5,$7E,$C9,$02,$90,$18,$C9,$07
 
-IF _CUSTOM_LEVELS
-.raster_set_bg
-{
-        STA &FE21
-        eor #&10:STA &FE21
-        eor #&50:STA &FE21
-        eor #&10:STA &FE21
-        RTS
-}
-ENDIF
-
 \ ******************************************************************************
 \ ******************************************************************************
 \ *
@@ -10554,6 +10543,7 @@ ENDIF
         STA     BRKV
         LDA     old_brkv+1
         STA     BRKV+1                    ; restore old BRKV
+
         LDA     #LO(RELOAD_ADDR)          ; is $01 in original source as relocates from $1A01
         STA     boot_read_ptr
         LDA     #HI(RELOAD_ADDR)
@@ -10562,8 +10552,12 @@ ENDIF
         STA     boot_write_ptr
         LDA     #HI(NATIVE_ADDR)
         STA     boot_write_ptr+1          ; set boot_write_ptr to &0A60
+        IF _SWRAM_BUILD
+        LDX     #HI(NATIVE_END+&FF)-HI(NATIVE_START)
+        ELSE
         LDX     #$3D
-        
+        ENDIF
+
     .relocate
         LDY     #$00
         
@@ -10578,8 +10572,8 @@ ENDIF
         DEX
         BNE     relocate                ; relocate &3D pages (~16k) from &1A01 to &0A60
 
-        IF _CUSTOM_LEVELS
-        JMP     custom_level_reloc
+        IF _SWRAM_BUILD
+        JMP     copy_up_swram
         ELSE
         JMP     main_entry                ; jump to entry
         ENDIF
@@ -10618,29 +10612,27 @@ ENDIF
 \ ******************************************************************************
 \ ******************************************************************************
 
-IF _CUSTOM_LEVELS
-CUSTOM_BANK     = 4
-CUSTOM_ADDR     = &8900         ; avoid first 32 lines below screen buffer
-                                ; as sprites are deliberately drawn into ROM
-                                ; address space to avoid culling...
+IF _SWRAM_BUILD
+SWRAM_BANK      = 4
+SWRAM_ADDR      = &8000
 
-.custom_level_reloc
+.copy_up_swram
 {
-        LDA     #CUSTOM_BANK
+        LDA     #SWRAM_BANK
         STA     &F4
         STA     &FE30
 
 \ Relocate level data to SWRAM.
 
-        LDA     #LO(CUSTOM_RELOC_START)
+        LDA     #LO(SWRAM_RELOC_START+OFFSET)
         STA     boot_read_ptr
-        LDA     #HI(CUSTOM_RELOC_START)
+        LDA     #HI(SWRAM_RELOC_START+OFFSET)
         STA     boot_read_ptr+1
-        LDA     #LO(CUSTOM_ADDR)
+        LDA     #LO(SWRAM_ADDR)
         STA     boot_write_ptr
-        LDA     #HI(CUSTOM_ADDR)
+        LDA     #HI(SWRAM_ADDR)
         STA     boot_write_ptr+1
-        LDX     #HI(CUSTOM_SIZE+&FF)
+        LDX     #SWRAM_PAGES
         
     .relocate
         LDY     #$00
@@ -10656,106 +10648,59 @@ CUSTOM_ADDR     = &8900         ; avoid first 32 lines below screen buffer
         DEX
         BNE     relocate
 
-\ Now patch up the level ptrs.
-        LDX     #LO(terrain_left_wall_counter_ptrs_LO)
-        LDY     #HI(terrain_left_wall_counter_ptrs_LO)
-        JSR     custom_patch_level_ptrs
-        LDX     #LO(terrain_left_wall_increment_ptrs_LO)
-        LDY     #HI(terrain_left_wall_increment_ptrs_LO)
-        JSR     custom_patch_level_ptrs
-        LDX     #LO(terrain_right_wall_counter_ptrs_LO)
-        LDY     #HI(terrain_right_wall_counter_ptrs_LO)
-        JSR     custom_patch_level_ptrs
-        LDX     #LO(terrain_right_wall_increment_ptrs_LO)
-        LDY     #HI(terrain_right_wall_increment_ptrs_LO)
-        JSR     custom_patch_level_ptrs
-
-\ And the object data ptrs.
-        LDX     #LO(level_obj_pos_X_lookup_LO)
-        LDY     #HI(level_obj_pos_X_lookup_LO)
-        JSR     custom_patch_obj_ptrs
-
         JMP     main_entry                ; jump to entry
 }
-
-.custom_patch_obj_ptrs
-{
-        STX     boot_read_ptr+0
-        STY     boot_read_ptr+1
-
-\ Patch up LO, HI pairs by CUSTOM_OFFSET.
-
-        LDY     #0
-        LDX     #0
-    .patch_loop
-        CLC
-        LDA     (boot_read_ptr), Y
-        ADC     #LO(CUSTOM_OFFSET)
-        STA     (boot_read_ptr), Y
-        INY
-        LDA     (boot_read_ptr), Y
-        ADC     #HI(CUSTOM_OFFSET)
-        STA     (boot_read_ptr), Y
-        INY
-
-        INX
-        CPX     #6*5
-        BNE     patch_loop
-
-        RTS
-}
-
-.custom_patch_level_ptrs
-{
-\ Store ptrs to LO table.
-        STX patch_load_lo+1:STY patch_load_lo+2
-        STX patch_store_lo+1:STY patch_store_lo+2
-
-\ Calc ptrs to HI table.
-        CLC
-        TXA
-        ADC #6
-        STA patch_load_hi+1
-        STA patch_store_hi+1
-        TYA
-        ADC #0
-        STA patch_load_hi+2
-        STA patch_store_hi+2
-
-\ Update 6 entries in these tables.
-        LDX #0
-    .patch_loop
-        CLC
-        .patch_load_lo
-        LDA terrain_left_wall_counter_ptrs_LO, X
-        ADC #LO(CUSTOM_OFFSET)
-        .patch_store_lo
-        STA terrain_left_wall_counter_ptrs_LO, X
-        .patch_load_hi
-        LDA terrain_left_wall_counter_ptrs_HI, X
-        ADC #HI(CUSTOM_OFFSET)
-        .patch_store_hi
-        STA terrain_left_wall_counter_ptrs_HI, X
-        INX
-        CPX #6
-        BNE patch_loop
-
-        RTS
-}
-
-.CUSTOM_RELOC_START
-;INCLUDE "level_data.6502"       ; for now!
-INCLUDE "tools/output/thrust_levels_export.asm"
 ENDIF
 
-.RELOC_END
+.NATIVE_END
 
-IF _CUSTOM_LEVELS
-CUSTOM_OFFSET   = CUSTOM_ADDR-CUSTOM_RELOC_START
-CUSTOM_SIZE     = RELOC_END-CUSTOM_RELOC_START
+\ ******************************************************************************
+\ ******************************************************************************
+\ * SWRAM data and code.
+\ ******************************************************************************
+\ ******************************************************************************
 
-PRINT "CUSTOM LEVEL DATA!"
-PRINT "Relocate ", ~CUSTOM_SIZE, " bytes (", ~HI(CUSTOM_SIZE+&FF), " pages) from ", ~CUSTOM_RELOC_START, " to ", ~CUSTOM_ADDR, " (offset=", ~CUSTOM_OFFSET,")"
+IF _SWRAM_BUILD
+.SWRAM_RELOC_START
+
+ORG SWRAM_ADDR
+GUARD SWRAM_ADDR+&8000-NATIVE_END
+
+; avoid first 32 lines below screen buffer
+; as sprites are deliberately drawn into ROM
+; address space to avoid culling...
+skip &900
+
+INCLUDE "tools/output/thrust_levels_export.asm"
+
+IF _DEBUG_RASTERS
+.raster_set_bg
+{
+        STA &FE21
+        eor #&10:STA &FE21
+        eor #&50:STA &FE21
+        eor #&10:STA &FE21
+        RTS
+}
+ENDIF
+
+\ ******************************************************************************
+\ ******************************************************************************
+\ * Copy down the SWRAM block to lower RAM for the executable.
+\ ******************************************************************************
+\ ******************************************************************************
+
+SWRAM_SIZE      = P%-SWRAM_ADDR
+SWRAM_PAGES     = HI(SWRAM_SIZE+&FF)
+
+PRINT "SWRAM BUILD!"
+PRINT "~~~"
+PRINT "COPYBLOCK FROM=", ~SWRAM_ADDR, " TO=", ~SWRAM_RELOC_START, " SIZE=", ~SWRAM_SIZE, " bytes (", ~SWRAM_PAGES, " pages)"
+
+COPYBLOCK SWRAM_ADDR, P%, SWRAM_RELOC_START
+
+ELSE
+SWRAM_SIZE      = 0
 ENDIF
 
 \ ******************************************************************************
@@ -10764,7 +10709,7 @@ ENDIF
 \ ******************************************************************************
 \ ******************************************************************************
 
-SAVE "Thrust", START, RELOC_END, RELOC_START+OFFSET, RELOAD_ADDR
+SAVE "Thrust", NATIVE_START, NATIVE_END+SWRAM_SIZE, RELOC_START+OFFSET, RELOAD_ADDR
 
 \ ******************************************************************************
 \ ******************************************************************************
