@@ -55,6 +55,9 @@ GUN_PARAM_DATA = {
     5: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1A, 0x06, 0x09, 0x12, 0x06, 0x16, 0x12, 0x1B, 0x12, 0x05, 0x0E],
 }
 
+# Per-level gravity (fractional part, extracted from thrust.6502:6625)
+LEVEL_GRAVITY_FRAC = [0x05, 0x07, 0x09, 0x0B, 0x0C, 0x0D]
+
 # Level reset / checkpoint data (extracted from thrust.6502:6542-6581)
 # Each entry: {"spawn_x", "spawn_y", "window_x", "window_y"}
 # spawn_y doubles as the Y threshold for zone matching.
@@ -294,8 +297,12 @@ def import_beebasm(path):
                         "window_y": (reset_data[3*s + i] << 8) | reset_data[4*s + i],
                     })
 
+        # Gravity (may not be present in older exports)
+        gravity_table = labels.get("level_gravity_FRAC_table", [])
+        grav = gravity_table[n] if n < len(gravity_table) else None
+
         lv = LevelData(n, list(left_wall), list(right_wall), objects,
-                        terrain_rle, land_col, obj_col, checkpoints)
+                        terrain_rle, land_col, obj_col, checkpoints, grav)
         levels.append(lv)
 
     return levels
@@ -441,6 +448,15 @@ def export_beebasm(levels):
             lines.append(f"        EQUB    {format_bytes([o.get('gun_param', 0x00) for o in obj])}")
             lines.append("")
 
+    # Gravity table
+    lines.append("\\ ******************************************************************************")
+    lines.append("\\ * Gravity values per level")
+    lines.append("\\ ******************************************************************************")
+    lines.append("")
+    lines.append(".level_gravity_FRAC_table")
+    lines.append(f"        EQUB    {format_bytes([lv.gravity for lv in levels])}")
+    lines.append("")
+
     # Colour tables
     lines.append("\\ ******************************************************************************")
     lines.append("\\ * Level colours")
@@ -515,7 +531,7 @@ class LevelData:
 
     def __init__(self, level_num, left_wall, right_wall, objects,
                  terrain_rle=None, landscape_colour=None, object_colour=None,
-                 checkpoints=None):
+                 checkpoints=None, gravity=None):
         self.level_num = level_num
         self.left_wall = left_wall   # list[int] X per Y row
         self.right_wall = right_wall
@@ -527,6 +543,8 @@ class LevelData:
             else LEVEL_OBJECT_COLOUR[level_num]      # BBC physical colour 0-7
         self.checkpoints = checkpoints if checkpoints is not None \
             else [dict(cp) for cp in LEVEL_RESET_DATA[level_num]]
+        self.gravity = gravity if gravity is not None \
+            else LEVEL_GRAVITY_FRAC[level_num]       # Q0.8 fractional gravity
         self.dirty = False
         self.terrain_dirty = False    # True when walls have been edited
 
@@ -1321,6 +1339,21 @@ class Editor:
             name_w = self.font_small.size(BBC_COLOUR_NAMES[phys_col])[0]
             col_x = swatch_x + 28 + name_w + 12
 
+        # Gravity +/- buttons
+        grav_x = col_x
+        grav_label_w = self.font.size("Grav")[0]
+        val_x = grav_x + grav_label_w + 4
+        if val_x <= mx < val_x + 18:  # minus button
+            lv.gravity = max(0, lv.gravity - 1)
+            lv.dirty = True
+            return
+        val_txt_w = self.font.size(f"${lv.gravity:02X}")[0]
+        plus_x = val_x + 22 + val_txt_w + 4
+        if plus_x <= mx < plus_x + 18:  # plus button
+            lv.gravity = min(0xFF, lv.gravity + 1)
+            lv.dirty = True
+            return
+
         # Import button
         import_x = self.screen.get_width() - 200
         if import_x <= mx < import_x + 90:
@@ -1788,6 +1821,28 @@ class Editor:
                                               COL_TOOLBAR_TEXT)
             screen.blit(name_txt, (swatch_x + 28, 14))
             col_x = swatch_x + 28 + name_txt.get_width() + 12
+
+        # Gravity control
+        grav_x = col_x
+        txt = self.font.render("Grav", True, COL_TOOLBAR_TEXT)
+        screen.blit(txt, (grav_x, 12))
+        val_x = grav_x + txt.get_width() + 4
+        # - button
+        rect = pygame.Rect(val_x, 8, 18, 24)
+        pygame.draw.rect(screen, (50, 50, 50), rect, border_radius=3)
+        pygame.draw.rect(screen, (80, 80, 80), rect, 1, border_radius=3)
+        txt = self.font.render("-", True, COL_TOOLBAR_TEXT)
+        screen.blit(txt, (val_x + 5, 10))
+        # value
+        val_txt = self.font.render(f"${lv.gravity:02X}", True, COL_TOOLBAR_TEXT)
+        screen.blit(val_txt, (val_x + 22, 12))
+        # + button
+        plus_x = val_x + 22 + val_txt.get_width() + 4
+        rect = pygame.Rect(plus_x, 8, 18, 24)
+        pygame.draw.rect(screen, (50, 50, 50), rect, border_radius=3)
+        pygame.draw.rect(screen, (80, 80, 80), rect, 1, border_radius=3)
+        txt = self.font.render("+", True, COL_TOOLBAR_TEXT)
+        screen.blit(txt, (plus_x + 4, 10))
 
         # Import button
         import_x = sw - 200
