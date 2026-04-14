@@ -6614,7 +6614,6 @@ IF _SWRAM_BUILD=FALSE
         EQUB    HI(level_3_reset_data + 3)
         EQUB    HI(level_4_reset_data + 4)
         EQUB    HI(level_5_reset_data + 5)
-ENDIF
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -6624,6 +6623,7 @@ ENDIF
 
 .level_gravity_FRAC_table
         EQUB    $05,$07,$09,$0B,$0C,$0D            ; initialises gravity_FRAC per level
+ENDIF
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -10703,7 +10703,7 @@ ORG SWRAM_ADDR
 ; address space to avoid culling...
 skip &480
 
-INCLUDE "tools/output/thrust_levels_export2.asm"
+INCLUDE "tools/output/thrust_levels_export.asm"
 
 IF _DEBUG_RASTERS
 .raster_set_bg
