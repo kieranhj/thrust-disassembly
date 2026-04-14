@@ -628,6 +628,8 @@ class Editor:
         self.dragging_object = False
         self.hovered_wall = None      # ("left"|"right", row)
         self.hovered_object = None    # index
+        self.wall_tool = "draw"       # "draw" (freehand) or "line"
+        self.line_start = None        # ("left"|"right", row, x) for line tool
 
         # Panning state
         self.panning = False
@@ -723,9 +725,15 @@ class Editor:
             self.mode = "wall"
             self.selected_object = None
 
+        elif event.key == pygame.K_l:
+            if self.mode == "wall":
+                self.wall_tool = "line" if self.wall_tool != "line" else "draw"
+                self.line_start = None
+
         elif event.key == pygame.K_o:
             self.mode = "object"
             self.dragging_wall = None
+            self.line_start = None
 
         elif event.key == pygame.K_g:
             self.show_grid = not self.show_grid
@@ -757,6 +765,10 @@ class Editor:
 
         elif event.key == pygame.K_i and ctrl:
             self._import()
+
+        elif event.key == pygame.K_ESCAPE:
+            if self.line_start:
+                self.line_start = None
 
         elif event.key == pygame.K_DELETE:
             if self.selected_object is not None and self.mode == "object":
@@ -805,7 +817,9 @@ class Editor:
 
         # Left click
         if event.button == 1:
-            if self.mode == "wall":
+            if self.mode == "wall" and self.wall_tool == "line":
+                self._handle_line_tool_click(mx, my)
+            elif self.mode == "wall":
                 hit = self._hit_test_wall(mx, my)
                 if hit:
                     side, row = hit
@@ -911,6 +925,50 @@ class Editor:
 
         return None
 
+    def _handle_line_tool_click(self, mx, my):
+        """Handle a click in line tool mode."""
+        wx, wy = self.camera.screen_to_world(mx, my)
+        row = int(wy)
+        lv = self.level
+
+        if self.line_start is None:
+            # First click: set start point (must be near a wall)
+            hit = self._hit_test_wall(mx, my)
+            if hit:
+                side, r = hit
+                wall = lv.left_wall if side == "left" else lv.right_wall
+                self.line_start = (side, r, wall[r])
+            else:
+                # Click in empty space - start panning
+                self.panning = True
+                self.pan_start = (mx, my)
+        else:
+            # Second click: apply the line
+            side = self.line_start[0]
+            wall = lv.left_wall if side == "left" else lv.right_wall
+            end_row = max(0, min(int(wy), len(wall) - 1))
+            end_x = max(0, min(255, int(wx)))
+            self.undo.save(lv)
+            self._apply_line(wall, self.line_start[1], self.line_start[2],
+                             end_row, end_x)
+            lv.terrain_dirty = True
+            lv.dirty = True
+            self.line_start = None
+
+    def _apply_line(self, wall, r0, x0, r1, x1):
+        """Set wall positions along a straight line from (r0, x0) to (r1, x1)."""
+        if r0 == r1:
+            if 0 <= r0 < len(wall):
+                wall[r0] = max(0, min(255, x1))
+            return
+        dr = r1 - r0
+        step = 1 if dr > 0 else -1
+        for r in range(r0, r1 + step, step):
+            if 0 <= r < len(wall):
+                t = (r - r0) / dr
+                x = int(round(x0 + t * (x1 - x0)))
+                wall[r] = max(0, min(255, x))
+
     def _hit_test_object(self, mx, my):
         """Test if screen position hits an object sprite. Returns index or None."""
         lv = self.level
@@ -950,6 +1008,17 @@ class Editor:
         elif mode_x + 65 <= mx < mode_x + 130:
             self.mode = "object"
             self.dragging_wall = None
+            self.line_start = None
+
+        # Wall tool buttons (Draw / Line)
+        tool_x = 520
+        if self.mode == "wall":
+            if tool_x <= mx < tool_x + 50:
+                self.wall_tool = "draw"
+                self.line_start = None
+            elif tool_x + 55 <= mx < tool_x + 105:
+                self.wall_tool = "line"
+                self.line_start = None
 
         # Import button
         import_x = self.screen.get_width() - 200
@@ -1221,6 +1290,37 @@ class Editor:
         cam = self.camera
         screen = self.screen
 
+        # Line tool: show start marker and preview line
+        if self.wall_tool == "line" and self.line_start:
+            side, r0, x0 = self.line_start
+            # Draw start point marker
+            sx0, sy0 = cam.world_to_screen(x0, r0)
+            _, sy0_next = cam.world_to_screen(0, r0 + 1)
+            h0 = max(1, int(sy0_next - sy0))
+            pygame.draw.rect(screen, (0, 255, 128),
+                             (int(sx0) - 4, int(sy0), 8, h0))
+
+            # Draw preview line to mouse position
+            mx, my = pygame.mouse.get_pos()
+            wx, wy = cam.screen_to_world(mx, my)
+            wall = self.level.left_wall if side == "left" else self.level.right_wall
+            r1 = max(0, min(int(wy), len(wall) - 1))
+            x1 = max(0, min(255, int(wx)))
+            if r0 != r1:
+                dr = r1 - r0
+                step = 1 if dr > 0 else -1
+                for r in range(r0, r1 + step, step):
+                    if 0 <= r < len(wall):
+                        t = (r - r0) / dr
+                        x = int(round(x0 + t * (x1 - x0)))
+                        x = max(0, min(255, x))
+                        sx, sy = cam.world_to_screen(x, r)
+                        _, sy_next = cam.world_to_screen(0, r + 1)
+                        h = max(1, int(sy_next - sy))
+                        pygame.draw.rect(screen, (0, 200, 100),
+                                         (int(sx) - 2, int(sy), 4, h))
+            return
+
         highlight = self.hovered_wall or (self.dragging_wall[:2] if self.dragging_wall else None)
         if not highlight:
             return
@@ -1271,6 +1371,17 @@ class Editor:
             txt = self.font.render(mode_name, True, COL_TOOLBAR_TEXT)
             screen.blit(txt, (mode_x + offset + 8, 12))
 
+        # Wall tool buttons (Draw / Line) - only shown in wall mode
+        if self.mode == "wall":
+            tool_x = 520
+            for tool_name, offset in [("Draw", 0), ("Line", 55)]:
+                col = COL_TOOLBAR_ACTIVE if self.wall_tool == tool_name.lower() else COL_TOOLBAR
+                rect = pygame.Rect(tool_x + offset, 5, 50, 30)
+                pygame.draw.rect(screen, col, rect, border_radius=4)
+                pygame.draw.rect(screen, (80, 80, 80), rect, 1, border_radius=4)
+                txt = self.font.render(tool_name, True, COL_TOOLBAR_TEXT)
+                screen.blit(txt, (tool_x + offset + 6, 12))
+
         # Import button
         import_x = sw - 200
         rect = pygame.Rect(import_x, 5, 90, 30)
@@ -1297,7 +1408,10 @@ class Editor:
         mx, my = pygame.mouse.get_pos()
         wx, wy = self.camera.screen_to_world(mx, my)
 
-        parts = [f"Mode: {self.mode.title()}"]
+        mode_label = self.mode.title()
+        if self.mode == "wall":
+            mode_label += f" ({self.wall_tool.title()})"
+        parts = [f"Mode: {mode_label}"]
         parts.append(f"X={int(wx)}  Y={int(wy)}")
 
         lv = self.level
@@ -1309,6 +1423,10 @@ class Editor:
                 parts.append(f"Left=${lx:02X}  Right=${rx:02X}")
 
         parts.append(f"Zoom: {self.camera.zoom:.1f}x")
+
+        if self.line_start:
+            side, r, x = self.line_start
+            parts.append(f"Line: {side} from row {r} x={x} -- click to set end")
 
         if self.selected_object is not None:
             obj = lv.objects[self.selected_object]
