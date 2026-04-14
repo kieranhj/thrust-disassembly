@@ -249,7 +249,14 @@ def import_beebasm(path):
                 "gun_param": gp,
             })
 
-        lv = LevelData(n, list(left_wall), list(right_wall), objects, terrain_rle)
+        # Colours (may not be present in older exports)
+        lc_colours = labels.get("level_landscape_colour", [])
+        oc_colours = labels.get("level_object_colour", [])
+        land_col = lc_colours[n] if n < len(lc_colours) else None
+        obj_col = oc_colours[n] if n < len(oc_colours) else None
+
+        lv = LevelData(n, list(left_wall), list(right_wall), objects,
+                        terrain_rle, land_col, obj_col)
         levels.append(lv)
 
     return levels
@@ -395,6 +402,17 @@ def export_beebasm(levels):
             lines.append(f"        EQUB    {format_bytes([o.get('gun_param', 0x00) for o in obj])}")
             lines.append("")
 
+    # Colour tables
+    lines.append("\\ ******************************************************************************")
+    lines.append("\\ * Level colours")
+    lines.append("\\ ******************************************************************************")
+    lines.append("")
+    lines.append(".level_landscape_colour")
+    lines.append(f"        EQUB    {format_bytes([lv.landscape_colour for lv in levels])}")
+    lines.append(".level_object_colour")
+    lines.append(f"        EQUB    {format_bytes([lv.object_colour for lv in levels])}")
+    lines.append("")
+
     return "\n".join(lines)
 
 
@@ -402,16 +420,26 @@ def export_beebasm(levels):
 # Level Data Model
 # ---------------------------------------------------------------------------
 
+BBC_COLOUR_NAMES = {
+    0: "Black", 1: "Red", 2: "Green", 3: "Yellow",
+    4: "Blue", 5: "Magenta", 6: "Cyan", 7: "White",
+}
+
+
 class LevelData:
     """Mutable level state: decoded walls + object list."""
 
     def __init__(self, level_num, left_wall, right_wall, objects,
-                 terrain_rle=None):
+                 terrain_rle=None, landscape_colour=None, object_colour=None):
         self.level_num = level_num
         self.left_wall = left_wall   # list[int] X per Y row
         self.right_wall = right_wall
         self.objects = objects        # list[dict] with x, y, type, gun_param keys
         self.terrain_rle = terrain_rle  # original RLE arrays {"A","B","C","D"}
+        self.landscape_colour = landscape_colour if landscape_colour is not None \
+            else LEVEL_LANDSCAPE_COLOUR[level_num]  # BBC physical colour 0-7
+        self.object_colour = object_colour if object_colour is not None \
+            else LEVEL_OBJECT_COLOUR[level_num]      # BBC physical colour 0-7
         self.dirty = False
         self.terrain_dirty = False    # True when walls have been edited
 
@@ -507,21 +535,22 @@ class Camera:
 # ---------------------------------------------------------------------------
 
 class SpriteCache:
-    """Caches decoded sprites as PyGame surfaces per (obj_type, level_num)."""
+    """Caches decoded sprites as PyGame surfaces per (obj_type, landscape_col, object_col)."""
 
     def __init__(self):
         self._cache = {}
 
-    def get(self, obj_type, level_num):
-        key = (obj_type, level_num)
+    def get(self, obj_type, level):
+        """Get cached sprite. level is a LevelData instance."""
+        key = (obj_type, level.landscape_colour, level.object_colour)
         if key not in self._cache:
-            self._cache[key] = self._render(obj_type, level_num)
+            self._cache[key] = self._render(obj_type, level)
         return self._cache[key]
 
     def clear(self):
         self._cache.clear()
 
-    def _render(self, obj_type, level_num):
+    def _render(self, obj_type, level):
         if obj_type not in SPRITE_DATA:
             return None
         pixel_array = decode_sprite(obj_type)
@@ -530,8 +559,8 @@ class SpriteCache:
         palette = {
             0: (0, 0, 0, 0),
             1: (255, 255, 0, 255),
-            2: hex_to_rgb(BBC_COLOURS[LEVEL_LANDSCAPE_COLOUR[level_num]]) + (255,),
-            3: hex_to_rgb(BBC_COLOURS[LEVEL_OBJECT_COLOUR[level_num]]) + (255,),
+            2: hex_to_rgb(BBC_COLOURS[level.landscape_colour]) + (255,),
+            3: hex_to_rgb(BBC_COLOURS[level.object_colour]) + (255,),
         }
 
         surf = pygame.Surface((w, h), pygame.SRCALPHA)
@@ -973,7 +1002,7 @@ class Editor:
         """Test if screen position hits an object sprite. Returns index or None."""
         lv = self.level
         for i, obj in enumerate(lv.objects):
-            sprite = self.sprite_cache.get(obj["type"], lv.level_num)
+            sprite = self.sprite_cache.get(obj["type"], lv)
             if sprite is None:
                 continue
             ox, oy = obj["x"], obj["y"]
@@ -1019,6 +1048,25 @@ class Editor:
             elif tool_x + 55 <= mx < tool_x + 105:
                 self.wall_tool = "line"
                 self.line_start = None
+
+        # Colour swatches - hit test on swatch rectangles
+        col_x = 640
+        lv = self.level
+        for attr in ("landscape_colour", "object_colour"):
+            label = "Land" if attr == "landscape_colour" else "Obj"
+            label_w = self.font.size(label)[0]
+            swatch_x = col_x + label_w + 4
+            if swatch_x <= mx < swatch_x + 24:
+                cur = getattr(lv, attr)
+                # Cycle through 1-7 (skip 0/black)
+                new_col = (cur % 7) + 1
+                setattr(lv, attr, new_col)
+                lv.dirty = True
+                self.sprite_cache.clear()
+                return
+            phys_col = getattr(lv, attr)
+            name_w = self.font_small.size(BBC_COLOUR_NAMES[phys_col])[0]
+            col_x = swatch_x + 28 + name_w + 12
 
         # Import button
         import_x = self.screen.get_width() - 200
@@ -1118,7 +1166,7 @@ class Editor:
         screen = self.screen
         sw = screen.get_width()
 
-        landscape_rgb = hex_to_rgb(BBC_COLOURS[LEVEL_LANDSCAPE_COLOUR[lv.level_num]])
+        landscape_rgb = hex_to_rgb(BBC_COLOURS[lv.landscape_colour])
         rock_rgb = darken(landscape_rgb)
 
         y_min, y_max = cam.visible_y_range()
@@ -1253,7 +1301,7 @@ class Editor:
         screen.set_clip(clip_rect)
 
         for i, obj in enumerate(lv.objects):
-            sprite = self.sprite_cache.get(obj["type"], lv.level_num)
+            sprite = self.sprite_cache.get(obj["type"], lv)
             if sprite is None:
                 continue
 
@@ -1381,6 +1429,23 @@ class Editor:
                 pygame.draw.rect(screen, (80, 80, 80), rect, 1, border_radius=4)
                 txt = self.font.render(tool_name, True, COL_TOOLBAR_TEXT)
                 screen.blit(txt, (tool_x + offset + 6, 12))
+
+        # Colour swatches
+        col_x = 640
+        lv = self.level
+        for label, phys_col in [("Land", lv.landscape_colour),
+                                ("Obj", lv.object_colour)]:
+            txt = self.font.render(label, True, COL_TOOLBAR_TEXT)
+            screen.blit(txt, (col_x, 12))
+            swatch_x = col_x + txt.get_width() + 4
+            swatch_rgb = hex_to_rgb(BBC_COLOURS[phys_col])
+            rect = pygame.Rect(swatch_x, 8, 24, 24)
+            pygame.draw.rect(screen, swatch_rgb, rect, border_radius=3)
+            pygame.draw.rect(screen, (120, 120, 120), rect, 1, border_radius=3)
+            name_txt = self.font_small.render(BBC_COLOUR_NAMES[phys_col], True,
+                                              COL_TOOLBAR_TEXT)
+            screen.blit(name_txt, (swatch_x + 28, 14))
+            col_x = swatch_x + 28 + name_txt.get_width() + 12
 
         # Import button
         import_x = sw - 200
