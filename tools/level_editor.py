@@ -55,6 +55,29 @@ GUN_PARAM_DATA = {
     5: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1A, 0x06, 0x09, 0x12, 0x06, 0x16, 0x12, 0x1B, 0x12, 0x05, 0x0E],
 }
 
+# Level reset / checkpoint data (extracted from thrust.6502:6542-6581)
+# Each entry: {"spawn_x", "spawn_y", "window_x", "window_y"}
+# spawn_y doubles as the Y threshold for zone matching.
+LEVEL_RESET_DATA = {
+    0: [{"spawn_x": 0x6C, "spawn_y": 0x0191, "window_x": 0x56, "window_y": 0x0124}],
+    1: [{"spawn_x": 0x6C, "spawn_y": 0x0191, "window_x": 0x56, "window_y": 0x0124}],
+    2: [{"spawn_x": 0x6C, "spawn_y": 0x0191, "window_x": 0x56, "window_y": 0x0124},
+        {"spawn_x": 0x86, "spawn_y": 0x022D, "window_x": 0x6F, "window_y": 0x01AA},
+        {"spawn_x": 0x48, "spawn_y": 0x0296, "window_x": 0x32, "window_y": 0x0223}],
+    3: [{"spawn_x": 0x6C, "spawn_y": 0x0191, "window_x": 0x56, "window_y": 0x0124},
+        {"spawn_x": 0x7B, "spawn_y": 0x01E6, "window_x": 0x57, "window_y": 0x0160},
+        {"spawn_x": 0xA1, "spawn_y": 0x024A, "window_x": 0x76, "window_y": 0x01D8}],
+    4: [{"spawn_x": 0x6C, "spawn_y": 0x0191, "window_x": 0x56, "window_y": 0x0124},
+        {"spawn_x": 0x7B, "spawn_y": 0x0268, "window_x": 0x58, "window_y": 0x01EE},
+        {"spawn_x": 0x6B, "spawn_y": 0x02DC, "window_x": 0x43, "window_y": 0x0266},
+        {"spawn_x": 0x81, "spawn_y": 0x0315, "window_x": 0x64, "window_y": 0x029F}],
+    5: [{"spawn_x": 0x6C, "spawn_y": 0x0191, "window_x": 0x56, "window_y": 0x0124},
+        {"spawn_x": 0xA2, "spawn_y": 0x024B, "window_x": 0x8C, "window_y": 0x01D8},
+        {"spawn_x": 0x9A, "spawn_y": 0x02D4, "window_x": 0x82, "window_y": 0x025A},
+        {"spawn_x": 0x87, "spawn_y": 0x032A, "window_x": 0x6E, "window_y": 0x02B4},
+        {"spawn_x": 0xAE, "spawn_y": 0x0398, "window_x": 0x87, "window_y": 0x031B}],
+}
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -255,8 +278,24 @@ def import_beebasm(path):
         land_col = lc_colours[n] if n < len(lc_colours) else None
         obj_col = oc_colours[n] if n < len(oc_colours) else None
 
+        # Checkpoints (may not be present in older exports)
+        reset_sizes = labels.get("level_reset_data_sizes", [])
+        reset_data = labels.get(f"level_{n}_reset_data", [])
+        checkpoints = None
+        if n < len(reset_sizes) and reset_data:
+            s = reset_sizes[n]
+            if len(reset_data) >= s * 6:
+                checkpoints = []
+                for i in range(s):
+                    checkpoints.append({
+                        "spawn_x":  reset_data[5*s + i],
+                        "spawn_y":  (reset_data[0*s + i] << 8) | reset_data[1*s + i],
+                        "window_x": reset_data[2*s + i],
+                        "window_y": (reset_data[3*s + i] << 8) | reset_data[4*s + i],
+                    })
+
         lv = LevelData(n, list(left_wall), list(right_wall), objects,
-                        terrain_rle, land_col, obj_col)
+                        terrain_rle, land_col, obj_col, checkpoints)
         levels.append(lv)
 
     return levels
@@ -413,6 +452,51 @@ def export_beebasm(levels):
     lines.append(f"        EQUB    {format_bytes([lv.object_colour for lv in levels])}")
     lines.append("")
 
+    # Checkpoint / reset data
+    lines.append("\\ ******************************************************************************")
+    lines.append("\\ * Level reset data - respawn checkpoints")
+    lines.append("\\ * Struct-of-arrays: Y_HI, Y_LO, win_X, win_Y_EXT, win_Y, spawn_X")
+    lines.append("\\ ******************************************************************************")
+    lines.append("")
+    lines.append(".level_reset_data_sizes")
+    lines.append(f"        EQUB    {format_bytes([len(lv.checkpoints) for lv in levels])}")
+    lines.append("")
+    for lv in levels:
+        n = lv.level_num
+        cps = lv.checkpoints
+        s = len(cps)
+        # Encode as struct-of-arrays: 6 rows of 's' bytes each
+        y_hi =    [cp["spawn_y"] >> 8 for cp in cps]
+        y_lo =    [cp["spawn_y"] & 0xFF for cp in cps]
+        win_x =   [cp["window_x"] & 0xFF for cp in cps]
+        win_y_ext = [cp["window_y"] >> 8 for cp in cps]
+        win_y =   [cp["window_y"] & 0xFF for cp in cps]
+        spawn_x = [cp["spawn_x"] & 0xFF for cp in cps]
+        flat = y_hi + y_lo + win_x + win_y_ext + win_y + spawn_x
+        lines.append(f".level_{n}_reset_data")
+        # Format as rows of 's' bytes for readability
+        for row_start in range(0, len(flat), s):
+            lines.append(f"        EQUB    {format_bytes(flat[row_start:row_start+s])}")
+        lines.append("")
+
+    # Pointer tables
+    lines.append(".level_reset_ptr_table_LO")
+    for n in range(6):
+        lines.append(f"        EQUB    LO(level_{n}_reset_data)")
+    lines.append(".level_reset_ptr_table_HI")
+    for n in range(6):
+        lines.append(f"        EQUB    HI(level_{n}_reset_data)")
+    lines.append("")
+    lines.append(".level_reset_ptr2_table_LO")
+    for lv in levels:
+        s = len(lv.checkpoints)
+        lines.append(f"        EQUB    LO(level_{lv.level_num}_reset_data + {s})")
+    lines.append(".level_reset_ptr2_table_HI")
+    for lv in levels:
+        s = len(lv.checkpoints)
+        lines.append(f"        EQUB    HI(level_{lv.level_num}_reset_data + {s})")
+    lines.append("")
+
     return "\n".join(lines)
 
 
@@ -430,7 +514,8 @@ class LevelData:
     """Mutable level state: decoded walls + object list."""
 
     def __init__(self, level_num, left_wall, right_wall, objects,
-                 terrain_rle=None, landscape_colour=None, object_colour=None):
+                 terrain_rle=None, landscape_colour=None, object_colour=None,
+                 checkpoints=None):
         self.level_num = level_num
         self.left_wall = left_wall   # list[int] X per Y row
         self.right_wall = right_wall
@@ -440,6 +525,8 @@ class LevelData:
             else LEVEL_LANDSCAPE_COLOUR[level_num]  # BBC physical colour 0-7
         self.object_colour = object_colour if object_colour is not None \
             else LEVEL_OBJECT_COLOUR[level_num]      # BBC physical colour 0-7
+        self.checkpoints = checkpoints if checkpoints is not None \
+            else [dict(cp) for cp in LEVEL_RESET_DATA[level_num]]
         self.dirty = False
         self.terrain_dirty = False    # True when walls have been edited
 
@@ -534,11 +621,37 @@ class Camera:
 # Sprite Cache
 # ---------------------------------------------------------------------------
 
+# Upright ship sprite (angle 0) decoded from ship_sprite_0_data in thrust.6502.
+# The ship uses XOR wireframe plotting in Mode 1; this is the actual pixel data.
+# Pixel x range in the decoded sprite is 9-23 (out of a 32-pixel plotting area).
+# The offset of 9 Mode 1 pixels = 2.25 world X units from the plotting origin.
+_SHIP_PIXEL_OFFSET_X = 9  # leftmost pixel column in the decoded sprite
+_SHIP_BITMAP = [
+    ".......#.......",
+    "......#.#......",
+    "......#.#......",
+    ".....#...#.....",
+    ".....#...#.....",
+    "....#.....#....",
+    "....#.....#....",
+    "...#.......#...",
+    "...#.......#...",
+    ".##.........##.",
+    "#.............#",
+    ".#...........#.",
+    "..#.........#..",
+    "..#...###...#..",
+    "...#.#...#.#...",
+    "....#.....#....",
+]
+
+
 class SpriteCache:
     """Caches decoded sprites as PyGame surfaces per (obj_type, landscape_col, object_col)."""
 
     def __init__(self):
         self._cache = {}
+        self._ship_surf = None
 
     def get(self, obj_type, level):
         """Get cached sprite. level is a LevelData instance."""
@@ -547,8 +660,22 @@ class SpriteCache:
             self._cache[key] = self._render(obj_type, level)
         return self._cache[key]
 
+    def get_ship(self):
+        """Get the upright ship sprite surface (always yellow)."""
+        if self._ship_surf is None:
+            w = len(_SHIP_BITMAP[0])
+            h = len(_SHIP_BITMAP)
+            surf = pygame.Surface((w, h), pygame.SRCALPHA)
+            for y, row in enumerate(_SHIP_BITMAP):
+                for x, ch in enumerate(row):
+                    if ch == '#':
+                        surf.set_at((x, y), (255, 255, 0, 200))
+            self._ship_surf = surf
+        return self._ship_surf
+
     def clear(self):
         self._cache.clear()
+        self._ship_surf = None
 
     def _render(self, obj_type, level):
         if obj_type not in SPRITE_DATA:
@@ -646,7 +773,7 @@ class Editor:
         self.sprite_cache = SpriteCache()
         self.undo = UndoManager()
 
-        self.mode = "wall"   # "wall" or "object"
+        self.mode = "wall"   # "wall", "object", or "checkpoint"
         self.show_grid = False
         self.running = True
 
@@ -659,6 +786,8 @@ class Editor:
         self.hovered_object = None    # index
         self.wall_tool = "draw"       # "draw" (freehand) or "line"
         self.line_start = None        # ("left"|"right", row, x) for line tool
+        self.selected_checkpoint = None  # index into checkpoints list
+        self.dragging_checkpoint = None  # ("spawn"|"window", index)
 
         # Panning state
         self.panning = False
@@ -753,16 +882,24 @@ class Editor:
         elif event.key == pygame.K_w:
             self.mode = "wall"
             self.selected_object = None
+            self.selected_checkpoint = None
 
         elif event.key == pygame.K_l:
             if self.mode == "wall":
                 self.wall_tool = "line" if self.wall_tool != "line" else "draw"
                 self.line_start = None
 
+        elif event.key == pygame.K_c:
+            self.mode = "checkpoint"
+            self.dragging_wall = None
+            self.line_start = None
+            self.selected_object = None
+
         elif event.key == pygame.K_o:
             self.mode = "object"
             self.dragging_wall = None
             self.line_start = None
+            self.selected_checkpoint = None
 
         elif event.key == pygame.K_g:
             self.show_grid = not self.show_grid
@@ -805,9 +942,16 @@ class Editor:
                 self.level.objects.pop(self.selected_object)
                 self.level.dirty = True
                 self.selected_object = None
+            elif self.selected_checkpoint is not None and self.mode == "checkpoint":
+                if len(self.level.checkpoints) > 1:
+                    self.undo.save(self.level)
+                    self.level.checkpoints.pop(self.selected_checkpoint)
+                    self.level.dirty = True
+                    self.selected_checkpoint = None
 
         elif event.key == pygame.K_ESCAPE:
             self.selected_object = None
+            self.selected_checkpoint = None
             self.dragging_wall = None
             self.show_obj_menu = False
 
@@ -842,6 +986,8 @@ class Editor:
                 self.show_obj_menu = True
                 self.obj_menu_pos = (mx, my)
                 self.obj_menu_world = (int(wx), int(wy))
+            elif self.mode == "checkpoint":
+                self._handle_checkpoint_right_click(mx, my)
             return
 
         # Left click
@@ -857,6 +1003,28 @@ class Editor:
                     self.drag_start_y = row
                 else:
                     # Start panning if clicking in empty space
+                    self.panning = True
+                    self.pan_start = (mx, my)
+
+            elif self.mode == "checkpoint":
+                hit = self._hit_test_checkpoint(mx, my)
+                if hit:
+                    part, idx = hit
+                    self.selected_checkpoint = idx
+                    # Store grab offset: mouse world pos minus stored origin
+                    cp = self.level.checkpoints[idx]
+                    if part == "spawn":
+                        ox = cp["spawn_x"]
+                        oy = cp["spawn_y"]
+                    else:
+                        ox = cp["window_x"]
+                        oy = cp["window_y"] + 73  # viewport displays at +73
+                    grab_dx = wx - ox
+                    grab_dy = wy - oy
+                    self.dragging_checkpoint = (part, idx, grab_dx, grab_dy)
+                    self.undo.save(self.level)
+                else:
+                    self.selected_checkpoint = None
                     self.panning = True
                     self.pan_start = (mx, my)
 
@@ -883,6 +1051,9 @@ class Editor:
             if self.dragging_object:
                 self.level.dirty = True
                 self.dragging_object = False
+            if self.dragging_checkpoint:
+                self.level.dirty = True
+                self.dragging_checkpoint = None
 
     def _handle_mouse_move(self, event):
         mx, my = event.pos
@@ -915,6 +1086,18 @@ class Editor:
                         if 0 <= r < len(wall):
                             wall[r] = new_x
                 self.drag_start_y = row
+            return
+
+        if self.dragging_checkpoint:
+            wx, wy = self.camera.screen_to_world(mx, my)
+            part, idx, grab_dx, grab_dy = self.dragging_checkpoint
+            cp = self.level.checkpoints[idx]
+            if part == "spawn":
+                cp["spawn_x"] = max(0, min(255, int(wx - grab_dx)))
+                cp["spawn_y"] = max(0, min(0xFFFF, int(wy - grab_dy)))
+            else:  # "window"
+                cp["window_x"] = max(0, min(255, int(wx - grab_dx)))
+                cp["window_y"] = max(0, min(0xFFFF, int(wy - grab_dy - 73)))
             return
 
         if self.dragging_object and self.selected_object is not None:
@@ -998,6 +1181,69 @@ class Editor:
                 x = int(round(x0 + t * (x1 - x0)))
                 wall[r] = max(0, min(255, x))
 
+    def _hit_test_checkpoint(self, mx, my):
+        """Test if screen position hits a checkpoint marker.
+        Returns ("spawn"|"window", index) or None."""
+        lv = self.level
+        cam = self.camera
+        ship_surf = self.sprite_cache.get_ship()
+        ship_world_w = ship_surf.get_width() / 4
+        ship_world_h = ship_surf.get_height() / 2
+        ship_offset_x = _SHIP_PIXEL_OFFSET_X / 4
+        for i, cp in enumerate(lv.checkpoints):
+            # Check spawn marker (ship sprite bounding box)
+            sx, sy = cam.world_to_screen(cp["spawn_x"] + ship_offset_x,
+                                         cp["spawn_y"])
+            ex, ey = cam.world_to_screen(cp["spawn_x"] + ship_offset_x + ship_world_w,
+                                         cp["spawn_y"] + ship_world_h)
+            if sx <= mx < ex and sy <= my < ey:
+                return ("spawn", i)
+            # Check viewport rectangle edges (72x111, offset 73 from window_y)
+            vp_top = cp["window_y"] + 73
+            vp_x0, vp_y0 = cam.world_to_screen(cp["window_x"], vp_top)
+            vp_x1, vp_y1 = cam.world_to_screen(cp["window_x"] + 72,
+                                                 vp_top + 111)
+            near_edge = 8  # pixel tolerance
+            in_x = vp_x0 - near_edge <= mx <= vp_x1 + near_edge
+            in_y = vp_y0 - near_edge <= my <= vp_y1 + near_edge
+            near_left = abs(mx - vp_x0) < near_edge
+            near_right = abs(mx - vp_x1) < near_edge
+            near_top = abs(my - vp_y0) < near_edge
+            near_bottom = abs(my - vp_y1) < near_edge
+            if (in_y and (near_left or near_right)) or \
+               (in_x and (near_top or near_bottom)):
+                return ("window", i)
+        return None
+
+    def _handle_checkpoint_right_click(self, mx, my):
+        """Right-click in checkpoint mode: add or delete checkpoint."""
+        hit = self._hit_test_checkpoint(mx, my)
+        if hit:
+            # Delete checkpoint (but keep at least one)
+            _, idx = hit
+            if len(self.level.checkpoints) > 1:
+                self.undo.save(self.level)
+                self.level.checkpoints.pop(idx)
+                self.level.dirty = True
+                self.selected_checkpoint = None
+        else:
+            # Add new checkpoint at click position
+            wx, wy = self.camera.screen_to_world(mx, my)
+            spawn_x = max(0, min(255, int(wx)))
+            spawn_y = max(0, min(0xFFFF, int(wy)))
+            # Window position offset: camera centred roughly 110 rows above spawn
+            window_y = max(0, spawn_y - 110)
+            window_x = max(0, min(255, spawn_x - 22))
+            self.undo.save(self.level)
+            self.level.checkpoints.append({
+                "spawn_x": spawn_x, "spawn_y": spawn_y,
+                "window_x": window_x, "window_y": window_y,
+            })
+            # Sort by spawn_y ascending (game scans top to bottom)
+            self.level.checkpoints.sort(key=lambda c: c["spawn_y"])
+            self.level.dirty = True
+            self.selected_checkpoint = len(self.level.checkpoints) - 1
+
     def _hit_test_object(self, mx, my):
         """Test if screen position hits an object sprite. Returns index or None."""
         lv = self.level
@@ -1034,13 +1280,20 @@ class Editor:
         if mode_x <= mx < mode_x + 60:
             self.mode = "wall"
             self.selected_object = None
+            self.selected_checkpoint = None
         elif mode_x + 65 <= mx < mode_x + 130:
             self.mode = "object"
             self.dragging_wall = None
             self.line_start = None
+            self.selected_checkpoint = None
+        elif mode_x + 135 <= mx < mode_x + 195:
+            self.mode = "checkpoint"
+            self.dragging_wall = None
+            self.line_start = None
+            self.selected_object = None
 
         # Wall tool buttons (Draw / Line)
-        tool_x = 520
+        tool_x = 590
         if self.mode == "wall":
             if tool_x <= mx < tool_x + 50:
                 self.wall_tool = "draw"
@@ -1050,7 +1303,7 @@ class Editor:
                 self.line_start = None
 
         # Colour swatches - hit test on swatch rectangles
-        col_x = 640
+        col_x = 710
         lv = self.level
         for attr in ("landscape_colour", "object_colour"):
             label = "Land" if attr == "landscape_colour" else "Obj"
@@ -1151,6 +1404,7 @@ class Editor:
         if self.show_grid:
             self._render_grid()
         self._render_objects()
+        self._render_checkpoints()
         self._render_wall_highlights()
         self._render_toolbar()
         self._render_status()
@@ -1310,8 +1564,8 @@ class Editor:
             sw = sprite.get_width() / 4  # 4 pixels per world X unit
             sh = sprite.get_height() / 2  # 2 pixels per world Y unit
 
-            sx, sy = cam.world_to_screen(ox, oy - 1)
-            ex, ey = cam.world_to_screen(ox + sw, oy - 1 + sh)
+            sx, sy = cam.world_to_screen(ox, oy)
+            ex, ey = cam.world_to_screen(ox + sw, oy + sh)
             draw_w = max(1, int(ex - sx))
             draw_h = max(1, int(ey - sy))
 
@@ -1327,6 +1581,93 @@ class Editor:
             elif i == self.hovered_object and self.mode == "object":
                 pygame.draw.rect(screen, (200, 200, 200),
                                  (int(sx) - 1, int(sy) - 1, draw_w + 2, draw_h + 2), 1)
+
+        screen.set_clip(None)
+
+    def _render_checkpoints(self):
+        """Draw checkpoint markers as horizontal lines with spawn position dots."""
+        lv = self.level
+        cam = self.camera
+        screen = self.screen
+        sw = screen.get_width()
+
+        clip_rect = pygame.Rect(0, VIEWPORT_Y, sw, cam.viewport_h)
+        screen.set_clip(clip_rect)
+
+        ship_surf = self.sprite_cache.get_ship()
+        # Ship world dimensions (same convention as object sprites)
+        ship_world_w = ship_surf.get_width() / 4   # 4 Mode 1 pixels per world X
+        ship_world_h = ship_surf.get_height() / 2  # half-res vertical rendering
+        ship_offset_x = _SHIP_PIXEL_OFFSET_X / 4   # plotting origin to first pixel
+
+        for i, cp in enumerate(lv.checkpoints):
+            # Sprite is plotted at top-left origin + inherent pixel offset
+            sx_tl, sy_tl = cam.world_to_screen(
+                cp["spawn_x"] + ship_offset_x, cp["spawn_y"])
+            sx_win, sy_win = cam.world_to_screen(cp["window_x"], cp["window_y"])
+
+            # Scale ship sprite to match current zoom
+            ex, ey = cam.world_to_screen(
+                cp["spawn_x"] + ship_offset_x + ship_world_w,
+                cp["spawn_y"] + ship_world_h)
+            draw_w = max(1, int(ex - sx_tl))
+            draw_h = max(1, int(ey - sy_tl))
+
+            if sy_tl + draw_h < VIEWPORT_Y - 20 or sy_tl > VIEWPORT_Y + cam.viewport_h + 20:
+                continue
+
+            # Dashed horizontal line at spawn Y
+            line_col = (100, 200, 255) if self.mode == "checkpoint" else (60, 120, 160)
+            dash_len = 8
+            for dx in range(0, sw, dash_len * 2):
+                pygame.draw.line(screen, line_col,
+                                 (dx, int(sy_tl)), (min(dx + dash_len, sw), int(sy_tl)))
+
+            # Draw ship sprite at top-left
+            highlight = (self.mode == "checkpoint" and
+                         self.selected_checkpoint == i)
+            scaled = pygame.transform.scale(ship_surf, (draw_w, draw_h))
+            if highlight:
+                bright = scaled.copy()
+                bright.fill((80, 80, 80, 0), special_flags=pygame.BLEND_RGBA_ADD)
+                screen.blit(bright, (int(sx_tl), int(sy_tl)))
+            else:
+                screen.blit(scaled, (int(sx_tl), int(sy_tl)))
+
+            # Selection outline
+            if highlight:
+                pygame.draw.rect(screen, (255, 255, 100),
+                                 (int(sx_tl) - 1, int(sy_tl) - 1,
+                                  draw_w + 2, draw_h + 2), 1)
+
+            # Label
+            label = f"CP{i}"
+            txt = self.font_small.render(label, True, line_col)
+            screen.blit(txt, (4, int(sy_tl) - 14))
+
+            # Game viewport rectangle (72 wide x 111 tall, offset 73 rows from window_y)
+            if self.mode == "checkpoint":
+                vp_top = cp["window_y"] + 73
+                vp_x0, vp_y0 = cam.world_to_screen(cp["window_x"], vp_top)
+                vp_x1, vp_y1 = cam.world_to_screen(cp["window_x"] + 72,
+                                                     vp_top + 111)
+                vp_w = int(vp_x1 - vp_x0)
+                vp_h = int(vp_y1 - vp_y0)
+                vp_col = (120, 180, 220) if highlight else (60, 100, 140)
+                # Dotted rectangle
+                dash = 6
+                for edge_x in range(int(vp_x0), int(vp_x1), dash * 2):
+                    ex = min(edge_x + dash, int(vp_x1))
+                    pygame.draw.line(screen, vp_col,
+                                     (edge_x, int(vp_y0)), (ex, int(vp_y0)))
+                    pygame.draw.line(screen, vp_col,
+                                     (edge_x, int(vp_y1)), (ex, int(vp_y1)))
+                for edge_y in range(int(vp_y0), int(vp_y1), dash * 2):
+                    ey = min(edge_y + dash, int(vp_y1))
+                    pygame.draw.line(screen, vp_col,
+                                     (int(vp_x0), edge_y), (int(vp_x0), ey))
+                    pygame.draw.line(screen, vp_col,
+                                     (int(vp_x1), edge_y), (int(vp_x1), ey))
 
         screen.set_clip(None)
 
@@ -1411,8 +1752,9 @@ class Editor:
 
         # Mode buttons
         mode_x = 380
-        for mode_name, offset in [("Wall", 0), ("Object", 65)]:
-            col = COL_TOOLBAR_ACTIVE if self.mode == mode_name.lower() else COL_TOOLBAR
+        for mode_name, offset in [("Wall", 0), ("Object", 65), ("Chkpt", 135)]:
+            col = COL_TOOLBAR_ACTIVE if self.mode == mode_name.lower() \
+                or (mode_name == "Chkpt" and self.mode == "checkpoint") else COL_TOOLBAR
             rect = pygame.Rect(mode_x + offset, 5, 60, 30)
             pygame.draw.rect(screen, col, rect, border_radius=4)
             pygame.draw.rect(screen, (80, 80, 80), rect, 1, border_radius=4)
@@ -1421,7 +1763,7 @@ class Editor:
 
         # Wall tool buttons (Draw / Line) - only shown in wall mode
         if self.mode == "wall":
-            tool_x = 520
+            tool_x = 590
             for tool_name, offset in [("Draw", 0), ("Line", 55)]:
                 col = COL_TOOLBAR_ACTIVE if self.wall_tool == tool_name.lower() else COL_TOOLBAR
                 rect = pygame.Rect(tool_x + offset, 5, 50, 30)
@@ -1431,7 +1773,7 @@ class Editor:
                 screen.blit(txt, (tool_x + offset + 6, 12))
 
         # Colour swatches
-        col_x = 640
+        col_x = 710
         lv = self.level
         for label, phys_col in [("Land", lv.landscape_colour),
                                 ("Obj", lv.object_colour)]:
@@ -1497,6 +1839,14 @@ class Editor:
             obj = lv.objects[self.selected_object]
             name = OBJECT_TYPE_NAMES.get(obj["type"], f"?{obj['type']}")
             parts.append(f"Selected: {name} @ ({obj['x']}, {obj['y']})")
+
+        if self.selected_checkpoint is not None and self.selected_checkpoint < len(lv.checkpoints):
+            cp = lv.checkpoints[self.selected_checkpoint]
+            parts.append(f"CP{self.selected_checkpoint}: spawn=({cp['spawn_x']}, {cp['spawn_y']})  "
+                         f"window=({cp['window_x']}, {cp['window_y']})")
+
+        if self.mode == "checkpoint":
+            parts.append(f"{len(lv.checkpoints)} checkpoint(s)")
 
         status = "  |  ".join(parts)
         txt = self.font_small.render(status, True, COL_STATUS_TEXT)
