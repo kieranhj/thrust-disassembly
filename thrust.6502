@@ -79,13 +79,18 @@ INKEY_Q                             = $EF       ; negative INKEY value for Q
 INKEY_S                             = $AE       ; negative INKEY value for S
 INKEY_Z                             = $9E       ; negative INKEY value for Z
 INKEY_X                             = $BD       ; negative INKEY value for X
+INKEY_P                             = $C8       ; negative INKEY value for P
 
 IF _FRIENDLY_KEYS
 KEY_ROTATE_left                     = INKEY_Z
 KEY_ROTATE_right                    = INKEY_X
+KEY_PAUSE                           = INKEY_P
+KEY_UNPAUSE                         = $4F       ; ASCII_O
 ELSE
 KEY_ROTATE_left                     = INKEY_capslock
 KEY_ROTATE_right                    = INKEY_ctrl
+KEY_PAUSE                           = INKEY_copy
+KEY_UNPAUSE                         = ASCII_delete
 ENDIF
 
 KEY_FIRE                            = INKEY_return
@@ -4041,7 +4046,7 @@ ENDIF
 
 .test_for_pause
 {
-        LDX        #INKEY_copy
+        LDX        #KEY_PAUSE
         JSR        test_inkey
         BNE     not_paused
 
@@ -4058,7 +4063,7 @@ ENDIF
 
         JSR     OSRDCH                    ; read character from input stream
 
-        CMP     #ASCII_delete            ; unpause key
+        CMP     #KEY_UNPAUSE            ; unpause key
         BNE     pause_loop
 
         JSR     reset_system_clock
@@ -10694,7 +10699,7 @@ ORG SWRAM_ADDR
 ; address space to avoid culling...
 skip &480
 
-INCLUDE "tools/output/thrust_levels_export.asm"
+INCLUDE "tools/output/thrust_levels_export2.asm"
 
 IF _DEBUG_RASTERS
 .raster_set_bg

@@ -116,22 +116,26 @@ def encode_wall_rle(positions, start_xpos):
     if not positions:
         return [0xFF, 0xFF], [0x00, 0x00]
 
-    # Compute deltas with unsigned 8-bit wrapping
-    deltas = []
-    prev = start_xpos
-    for x in positions:
+    # Segment 1 must be exactly 255 steps with a single increment.
+    # Use the delta of the first position for all 255 steps (game constraint).
+    seg1_inc = (positions[0] - start_xpos) & 0xFF if positions else 0x00
+
+    # After 255 steps of seg1_inc, the decoder's X position will be:
+    decoded_after_seg1 = (start_xpos + 255 * seg1_inc) & 0xFF
+
+    # Compute remaining deltas relative to where the decoder will actually be,
+    # NOT relative to positions[254]. These can differ when the first 255 rows
+    # have non-uniform deltas that seg1_inc can't represent.
+    remaining = []
+    prev = decoded_after_seg1
+    for x in positions[255:]:
         d = (x - prev) & 0xFF
-        deltas.append(d)
+        remaining.append(d)
         prev = x
 
-    # Segment 1 must be exactly 255 steps with a single increment.
-    # Use the first delta for all 255 steps (game constraint).
-    seg1_inc = deltas[0] if deltas else 0x00
-
-    # RLE compress remaining deltas (from position 255 onward)
+    # RLE compress remaining deltas
     counts = []
     increments = []
-    remaining = deltas[255:] if len(deltas) > 255 else []
     i = 0
     while i < len(remaining):
         current = remaining[i]
@@ -145,6 +149,16 @@ def encode_wall_rle(positions, start_xpos):
     # seg0 (triple 1 filler) + seg1 ($FF fixed) + seg2+ (remaining RLE)
     final_counts = [0xFF, 0xFF] + counts
     final_increments = [0x00, seg1_inc] + increments
+
+    # Ensure the data ends with a $FF-count, inc=0 terminator segment.
+    # This prevents the decoder from exhausting the last segment and
+    # reading past the end of the array. If the last segment already has
+    # inc=0, just cap its count; otherwise append a new terminator.
+    if final_increments[-1] == 0x00:
+        final_counts[-1] = 0xFF
+    else:
+        final_counts.append(0xFF)
+        final_increments.append(0x00)
 
     return final_counts, final_increments
 
@@ -241,6 +255,62 @@ def import_beebasm(path):
     return levels
 
 
+def _clamp_converging_walls(left, right):
+    """Clamp wall arrays for EOR-safe encoding, returning the truncation point.
+
+    The game draws terrain using EOR (exclusive-or) delta rendering: each
+    frame, only the columns that changed are toggled. Two issues arise when
+    walls converge:
+
+    1. If left[row] jumps past right[row-1] (or vice versa), the EOR draws
+       for both walls overlap on some columns. Those columns get toggled
+       twice and remain as black gaps instead of solid rock.
+
+    2. Once walls meet (gap=0), any variation in position creates wall edge
+       movement in what should be solid rock, causing further EOR artifacts.
+
+    Fix: limit each wall's per-row movement so it never crosses the other
+    wall's previous position. Returns the row index where the walls first
+    meet (gap <= 1), or None if they never meet. The caller should only
+    encode positions up to (and including) that row.
+
+    Operates on copies — does not truncate the source arrays.
+    """
+    min_len = min(len(left), len(right))
+
+    # Pass 1: prevent EOR overlap by limiting per-row wall movement.
+    # Left can't advance past previous row's right; right can't retreat
+    # past previous row's left.
+    for row in range(1, min_len):
+        if left[row] > right[row - 1]:
+            left[row] = right[row - 1]
+        if right[row] < left[row - 1]:
+            right[row] = left[row - 1]
+        if left[row] > right[row]:
+            mid = (left[row] + right[row]) // 2
+            left[row] = mid
+            right[row] = mid
+
+    # Pass 2: find where walls first meet (gap <= 1). Rows beyond this
+    # point are solid rock and should not be encoded — the encoder's $FF
+    # terminator segment will keep both walls frozen indefinitely.
+    for row in range(min_len):
+        if right[row] - left[row] <= 1:
+            frozen = (left[row] + right[row]) // 2
+            left[row] = frozen
+            right[row] = frozen
+            return row
+    return None
+
+
+def _has_wall_issues(left, right):
+    """Check if decoded wall data has wall crossings (left >= right)."""
+    for row in range(min(len(left), len(right))):
+        if left[row] >= right[row]:
+            return True
+    return False
+
+
 def export_beebasm(levels):
     """Generate BeebAsm assembly source for terrain and object data."""
     lines = []
@@ -260,24 +330,35 @@ def export_beebasm(levels):
     for lv in levels:
         n = lv.level_num
         if lv.terrain_dirty:
-            # Clamp walls so left never crosses right (game's EOR rendering
-            # creates visible gaps where walls overlap)
+            # Clamp walls for EOR rendering compatibility. The game's EOR
+            # renderer double-toggles pixels when left and right wall edges
+            # overlap during scrolling. To prevent artifacts:
+            # 1. Left must never exceed right
+            # 2. Once walls meet, freeze both at a fixed position so there
+            #    is no wall edge movement in the solid rock area
             left = list(lv.left_wall)
             right = list(lv.right_wall)
-            for row in range(min(len(left), len(right))):
-                if left[row] > right[row]:
-                    mid = (left[row] + right[row]) // 2
-                    left[row] = mid
-                    right[row] = mid
-            # Re-encode from edited wall positions
-            lc, li = encode_wall_rle(left, 0x00)
-            rc, ri = encode_wall_rle(right, 0xFF)
+            freeze_row = _clamp_converging_walls(left, right)
+            # Encode only up to the freeze point — the encoder's $FF
+            # terminator keeps walls frozen for all rows beyond it
+            end = freeze_row + 1 if freeze_row is not None else len(left)
+            lc, li = encode_wall_rle(left[:end], 0x00)
+            rc, ri = encode_wall_rle(right[:end], 0xFF)
         else:
-            # Use original RLE data
+            # Use original RLE data, but verify no wall crossings exist
+            # (could happen if imported from a previous buggy export)
             lc = lv.terrain_rle["left_count"]
             li = lv.terrain_rle["left_inc"]
             rc = lv.terrain_rle["right_count"]
             ri = lv.terrain_rle["right_inc"]
+            # Decode and check for crossings
+            left_check = decode_wall(lc, li, start_xpos=0x00, start_segment=1)
+            right_check = decode_wall(rc, ri, start_xpos=0xFF, start_segment=1)
+            if _has_wall_issues(left_check, right_check):
+                freeze_row = _clamp_converging_walls(left_check, right_check)
+                end = freeze_row + 1 if freeze_row is not None else len(left_check)
+                lc, li = encode_wall_rle(left_check[:end], 0x00)
+                rc, ri = encode_wall_rle(right_check[:end], 0xFF)
 
         lines.append(f".terrain_left_wall_count_{n}")
         lines.append(f"        EQUB    {format_bytes(lc)}")
