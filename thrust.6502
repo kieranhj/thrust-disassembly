@@ -28,9 +28,11 @@
 \ *****************************************************************************
 
 _SWRAM_BUILD       = TRUE
+
 _DEBUG_RASTERS     = (_SWRAM_BUILD AND FALSE)   ; Raster timing
 _UNROLL_TERRAIN    = (_SWRAM_BUILD AND TRUE)    ; Faster terrain plotting
 _FRIENDLY_KEYS     = (_SWRAM_BUILD AND TRUE)    ; Emulator friendly key map
+_THRUST_PARTICLES  = (_SWRAM_BUILD AND TRUE)    ; Generate thrust particles
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -104,6 +106,7 @@ PARTICLE_flag                       = $80       ; particle can be replaced
 PARTICLE_lifetime_bullet            = $28       ; bullet lifetime in ticks
 PARTICLE_lifetime_generator         = $0A       ; generator debris lifetime
 PARTICLE_lifetime_star              = $1E       ; star lifetime in ticks
+PARTICLE_lifetime_thrust            = $09       ; thrust lifetime in ticks
 PARTICLE_table_max                  = $1F       ; max index into particle table (32 slots)
 PARTICLE_type_player_bullet         = $00       ; player bullet particle type
 PARTICLE_type_debris                = $01       ; shoot generator
@@ -542,6 +545,7 @@ terrain_right_wall                  = $0500     ; right wall X positions indexed
 \ ******************************************************************************
 \ ******************************************************************************
 
+IF PARTICLE_table_max=$1F
 particles_xpos_FRAC                 = $0600     ; 32 entries, fractional X position
 particles_xpos_INT                  = $0620     ; 32 entries, integer X position
 particles_ypos_FRAC                 = $0640     ; 32 entries, fractional Y position
@@ -556,6 +560,7 @@ particles_scraddr_LO                = $0740     ; 32 entries, screen address low
 particles_scraddr_HI                = $0760     ; 32 entries, screen address high byte
 particles_pixels_byte               = $0780     ; 32 entries, pixel pattern for plotting
 particles_type                      = $07A0     ; 32 entries, particle type
+ENDIF
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -3779,6 +3784,9 @@ ENDIF
     .thrust_was_pressed
         JSR     use_fuel
         JSR     run_engine
+        IF _THRUST_PARTICLES
+        JSR     create_thrust_particle
+        ENDIF
 
         LDY     #$04
         LDA     pod_attached_flag_1
@@ -10697,6 +10705,90 @@ IF _DEBUG_RASTERS
         eor #&10:STA &FE21
         RTS
 }
+ENDIF
+
+IF _THRUST_PARTICLES
+.create_thrust_particle
+{
+        ; Only create particles every N frames?
+        ;LDA     level_tick_counter
+        ;AND     #$03
+        ;BNE     return
+
+        JSR     particle_return_free_slot_in_Y
+        TYA:TAX
+
+        ; Copy player position.
+        LDA     player_xpos_FRAC
+        STA     particles_xpos_FRAC,X
+        LDA     player_xpos_INT
+        CLC
+        ADC     #PLAYER_CENTRE_X_OFFSET                    ; player x position offset by $4 - start bullet in centre?
+        STA     particles_xpos_INT,X
+        LDA     player_ypos_FRAC
+        STA     particles_ypos_FRAC,X
+        CLC
+        LDA     player_ypos_INT
+        ADC     #PLAYER_CENTRE_Y_OFFSET                    ; player y position offset by $5 - start bullet in centre?
+        STA     particles_ypos_INT,X
+        LDA     player_ypos_INT_HI
+        ADC     #$00
+        STA     particles_ypos_INT_HI,X
+        
+        ; Particle angle opposite to ship's direction.
+
+        JSR     rnd
+        AND     #&03
+        CLC
+        ADC     ship_angle
+        ADC     #15                                        ; away from ship
+        AND     #ANGLE_MASK
+        TAY
+
+        LDA     angle_to_x_FRAC,Y
+        STA     particles_dx_FRAC,X
+        LDA     angle_to_x_INT,Y
+        STA     particles_dx_INT,X
+        ROL     A       ; sign into C
+        ROR     particles_dx_INT,X
+        ROR     particles_dx_FRAC,X
+
+        LDA     angle_to_y_FRAC,Y
+        STA     particles_dy_FRAC,X
+        LDA     angle_to_y_INT,Y
+        STA     particles_dy_INT,X
+        ROL     A       ; sign into C
+        ROR     particles_dy_INT,X
+        ROR     particles_dy_FRAC
+
+        ; Particle params.
+        LDA     particles_lifetime,X
+        AND     #PARTICLE_flag
+        ORA     #PARTICLE_lifetime_thrust
+        STA     particles_lifetime,X
+
+        LDA     #PARTICLE_type_debris
+        STA     particles_type,X
+    .return
+        RTS
+}
+ENDIF
+
+IF PARTICLE_table_max<>$1F
+.particles_xpos_FRAC    SKIP PARTICLE_table_max+1 ; 32 entries, fractional X position
+.particles_xpos_INT     SKIP PARTICLE_table_max+1 ; 32 entries, integer X position
+.particles_ypos_FRAC    SKIP PARTICLE_table_max+1 ; 32 entries, fractional Y position
+.particles_ypos_INT     SKIP PARTICLE_table_max+1 ; 32 entries, integer Y position
+.particles_ypos_INT_HI  SKIP PARTICLE_table_max+1 ; 32 entries, Y position high byte
+.particles_dx_FRAC      SKIP PARTICLE_table_max+1 ; 32 entries, fractional X velocity
+.particles_dx_INT       SKIP PARTICLE_table_max+1 ; 32 entries, integer X velocity
+.particles_dy_FRAC      SKIP PARTICLE_table_max+1 ; 32 entries, fractional Y velocity
+.particles_dy_INT       SKIP PARTICLE_table_max+1 ; 32 entries, integer Y velocity
+.particles_lifetime     SKIP PARTICLE_table_max+1 ; 32 entries, remaining lifetime
+.particles_scraddr_LO   SKIP PARTICLE_table_max+1 ; 32 entries, screen address low byte
+.particles_scraddr_HI   SKIP PARTICLE_table_max+1 ; 32 entries, screen address high byte
+.particles_pixels_byte  SKIP PARTICLE_table_max+1 ; 32 entries, pixel pattern for plotting
+.particles_type         SKIP PARTICLE_table_max+1 ; 32 entries, particle type
 ENDIF
 
 \ ******************************************************************************
