@@ -45,16 +45,9 @@ Likely candidates based on code structure:
 
 ## Particle effects
 
-### Thrust particles from ship exhaust
+### ~~Thrust particles from ship exhaust~~ — IMPLEMENTED (`_THRUST_PARTICLES`)
 
-The existing particle system supports 32 simultaneous particles across 5 types (player bullet, debris, star, hostile bullet, random debris) in pages $0600-$07BF. Each particle has position, velocity, lifetime, screen address, pixel pattern, and type.
-
-**Approach:** reuse the debris particle type. On each frame where thrust is active, spawn 1-2 particles at the ship's exhaust point (opposite the thrust direction) with velocity derived from the ship angle plus random spread. The particle allocation routine (`particle_return_free_slot_in_Y`, line 5733) already handles pool exhaustion by replacing low-priority particles (those with lifetime < generator debris lifetime).
-
-**Considerations:**
-- 32 particles are shared between bullets, debris, stars, and hostile fire — exhaust particles would compete for slots
-- Could use a short lifetime (5-10 frames) to keep the pool available
-- Exhaust spawn position needs to account for ship angle (use existing `angle_to_x/y` tables offset by 16 for the opposite direction)
+Implemented behind the `_THRUST_PARTICLES` build flag (SWRAM builds). Spawns debris particles at the ship exhaust point using angle-derived velocity with random spread.
 
 ---
 
