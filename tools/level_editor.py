@@ -31,7 +31,7 @@ import math
 import os
 import sys
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 from pathlib import Path
 
 import pygame
@@ -107,6 +107,8 @@ COL_HOVER = (255, 255, 100, 128)
 COL_WALL_HIGHLIGHT = (255, 255, 0)
 
 WALL_HIT_TOLERANCE = 5  # pixels
+BOTTOM_HIT_TOLERANCE = 6  # pixels for bottom boundary handle
+COL_BOTTOM_HANDLE = (100, 180, 255)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -362,6 +364,62 @@ def _has_wall_issues(left, right):
         if left[row] >= right[row]:
             return True
     return False
+
+
+def _is_bottom_open(left, right):
+    """Check if the landscape bottom is open (walls don't converge).
+
+    Returns True if the effective last row has a gap > 1 between
+    left and right walls, meaning the cave isn't sealed at the bottom.
+    When arrays differ in length, the shorter wall is frozen at its
+    last value for the remaining rows.
+    """
+    if not left or not right:
+        return False
+    max_len = max(len(left), len(right))
+    last_left = left[-1] if len(left) >= max_len else left[-1]
+    last_right = right[-1] if len(right) >= max_len else right[-1]
+    return last_right - last_left > 1
+
+
+def _close_bottom(left, right):
+    """Close an open landscape bottom by converging the walls.
+
+    Equalises array lengths first, then appends rows that linearly bring
+    the left and right walls together to a midpoint.
+    """
+    if not left or not right:
+        return
+
+    # Equalise lengths — extend the shorter array with its last value
+    max_len = max(len(left), len(right))
+    while len(left) < max_len:
+        left.append(left[-1])
+    while len(right) < max_len:
+        right.append(right[-1])
+
+    last_left = left[-1]
+    last_right = right[-1]
+    gap = last_right - last_left
+    if gap <= 1:
+        return  # already closed
+
+    # Converge over 'gap // 2' rows (roughly one column per row from each side)
+    mid = (last_left + last_right) // 2
+    steps = max(gap // 2, 1)
+    for i in range(1, steps + 1):
+        t = i / steps
+        lx = int(round(last_left + t * (mid - last_left)))
+        rx = int(round(last_right + t * (mid - last_right)))
+        # Ensure they don't cross
+        if lx > rx:
+            lx = rx = mid
+        left.append(lx)
+        right.append(rx)
+
+    # Freeze at midpoint for a final row
+    left.append(mid)
+    right.append(mid)
 
 
 def export_beebasm(levels):
@@ -781,8 +839,10 @@ class Editor:
         self.font = pygame.font.SysFont("consolas", 14)
         self.font_small = pygame.font.SysFont("consolas", 12)
 
+        self.last_file_path = None  # last imported/exported file path
         if import_path:
             self.levels = import_beebasm(import_path)
+            self.last_file_path = str(Path(import_path).resolve())
             print(f"Imported level data from {import_path}")
         else:
             self.levels = [LevelData.from_game_data(i) for i in range(6)]
@@ -806,6 +866,8 @@ class Editor:
         self.line_start = None        # ("left"|"right", row, x) for line tool
         self.selected_checkpoint = None  # index into checkpoints list
         self.dragging_checkpoint = None  # ("spawn"|"window", index)
+        self.dragging_bottom = False  # dragging the landscape bottom limit
+        self.hovered_bottom = False   # hovering over the bottom limit handle
 
         # Panning state
         self.panning = False
@@ -896,6 +958,7 @@ class Editor:
             self._centre_on_level()
             self.selected_object = None
             self.dragging_wall = None
+            self.dragging_bottom = False
 
         elif event.key == pygame.K_w:
             self.mode = "wall"
@@ -910,12 +973,14 @@ class Editor:
         elif event.key == pygame.K_c:
             self.mode = "checkpoint"
             self.dragging_wall = None
+            self.dragging_bottom = False
             self.line_start = None
             self.selected_object = None
 
         elif event.key == pygame.K_o:
             self.mode = "object"
             self.dragging_wall = None
+            self.dragging_bottom = False
             self.line_start = None
             self.selected_checkpoint = None
 
@@ -971,6 +1036,7 @@ class Editor:
             self.selected_object = None
             self.selected_checkpoint = None
             self.dragging_wall = None
+            self.dragging_bottom = False
             self.show_obj_menu = False
 
     def _handle_mouse_down(self, event):
@@ -1013,6 +1079,11 @@ class Editor:
             if self.mode == "wall" and self.wall_tool == "line":
                 self._handle_line_tool_click(mx, my)
             elif self.mode == "wall":
+                # Check bottom handle first
+                if self._hit_test_bottom(mx, my):
+                    self.undo.save(self.level)
+                    self.dragging_bottom = True
+                    return
                 hit = self._hit_test_wall(mx, my)
                 if hit:
                     side, row = hit
@@ -1066,6 +1137,9 @@ class Editor:
                 self.level.dirty = True
                 self.dragging_wall = None
                 self.drag_start_y = None
+            if self.dragging_bottom:
+                self.level.dirty = True
+                self.dragging_bottom = False
             if self.dragging_object:
                 self.level.dirty = True
                 self.dragging_object = False
@@ -1081,6 +1155,24 @@ class Editor:
             dy = self.pan_start[1] - my
             self.camera.pan(dx / self.camera.x_scale, dy / self.camera.y_scale)
             self.pan_start = (mx, my)
+            return
+
+        if self.dragging_bottom:
+            wx, wy = self.camera.screen_to_world(mx, my)
+            lv = self.level
+            new_rows = max(256, int(wy))  # minimum 256 (first 255 rows are fixed)
+            old_rows = lv.num_rows
+            if new_rows > old_rows:
+                # Extend walls by repeating last value
+                last_left = lv.left_wall[-1] if lv.left_wall else 0
+                last_right = lv.right_wall[-1] if lv.right_wall else 0xFF
+                lv.left_wall.extend([last_left] * (new_rows - len(lv.left_wall)))
+                lv.right_wall.extend([last_right] * (new_rows - len(lv.right_wall)))
+            elif new_rows < old_rows:
+                # Truncate walls
+                lv.left_wall = lv.left_wall[:new_rows]
+                lv.right_wall = lv.right_wall[:new_rows]
+            lv.terrain_dirty = True
             return
 
         if self.dragging_wall:
@@ -1128,6 +1220,7 @@ class Editor:
         # Hover detection
         if my > TOOLBAR_H and my < self.screen.get_height() - STATUS_H:
             if self.mode == "wall":
+                self.hovered_bottom = self._hit_test_bottom(mx, my)
                 self.hovered_wall = self._hit_test_wall(mx, my)
             elif self.mode == "object":
                 self.hovered_object = self._hit_test_object(mx, my)
@@ -1154,6 +1247,17 @@ class Editor:
                 return ("right", row)
 
         return None
+
+    def _hit_test_bottom(self, mx, my):
+        """Test if screen position is near the landscape bottom boundary."""
+        lv = self.level
+        _, bottom_sy = self.camera.world_to_screen(0, lv.num_rows)
+        # Check the full horizontal extent of the world
+        wx0, _ = self.camera.world_to_screen(0, 0)
+        wx256, _ = self.camera.world_to_screen(256, 0)
+        if mx >= wx0 and mx <= wx256 and abs(my - bottom_sy) < BOTTOM_HIT_TOLERANCE:
+            return True
+        return False
 
     def _handle_line_tool_click(self, mx, my):
         """Handle a click in line tool mode."""
@@ -1302,11 +1406,13 @@ class Editor:
         elif mode_x + 65 <= mx < mode_x + 130:
             self.mode = "object"
             self.dragging_wall = None
+            self.dragging_bottom = False
             self.line_start = None
             self.selected_checkpoint = None
         elif mode_x + 135 <= mx < mode_x + 195:
             self.mode = "checkpoint"
             self.dragging_wall = None
+            self.dragging_bottom = False
             self.line_start = None
             self.selected_object = None
 
@@ -1386,9 +1492,43 @@ class Editor:
 
     def _export(self):
         """Export level data to assembly file via file dialog."""
+        # Check for open landscape bottoms before exporting
+        open_levels = []
+        for lv in self.levels:
+            if _is_bottom_open(lv.left_wall, lv.right_wall):
+                open_levels.append(lv.level_num)
+
+        if open_levels:
+            names = ", ".join(str(n + 1) for n in open_levels)
+            root = tk.Tk()
+            root.withdraw()
+            result = messagebox.askyesnocancel(
+                "Open landscape bottom",
+                f"Level(s) {names} have open bottoms — the left and right "
+                f"walls don't converge at the bottom of the landscape.\n\n"
+                f"This will cause rendering artifacts in-game.\n\n"
+                f"Yes = auto-close and export\n"
+                f"No = export anyway\n"
+                f"Cancel = abort export",
+            )
+            root.destroy()
+            if result is None:
+                return  # Cancel
+            if result:
+                # Auto-close
+                for n in open_levels:
+                    lv = self.levels[n]
+                    _close_bottom(lv.left_wall, lv.right_wall)
+                    lv.terrain_dirty = True
+                    lv.dirty = True
+                print(f"Auto-closed landscape bottom on level(s) {names}")
+
+        if self.last_file_path:
+            default_path = Path(self.last_file_path)
+        else:
+            default_path = Path("tools/output/thrust_levels_export.asm").resolve()
         root = tk.Tk()
         root.withdraw()
-        default_path = Path("tools/output/thrust_levels_export.asm").resolve()
         path = filedialog.asksaveasfilename(
             title="Export level data",
             initialdir=str(default_path.parent),
@@ -1402,13 +1542,17 @@ class Editor:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         src = export_beebasm(self.levels)
         Path(path).write_text(src)
+        self.last_file_path = str(Path(path).resolve())
         print(f"Exported to {path}")
 
     def _import(self):
         """Import level data from assembly file via file dialog."""
+        if self.last_file_path:
+            default_path = Path(self.last_file_path)
+        else:
+            default_path = Path("tools/output/thrust_levels_export.asm").resolve()
         root = tk.Tk()
         root.withdraw()
-        default_path = Path("tools/output/thrust_levels_export.asm").resolve()
         path = filedialog.askopenfilename(
             title="Import level data",
             initialdir=str(default_path.parent),
@@ -1419,9 +1563,11 @@ class Editor:
         if not path:
             return
         self.levels = import_beebasm(path)
+        self.last_file_path = str(Path(path).resolve())
         self._centre_on_level()
         self.selected_object = None
         self.dragging_wall = None
+        self.dragging_bottom = False
         self.undo = UndoManager()
         print(f"Imported from {path}")
 
@@ -1539,6 +1685,29 @@ class Editor:
                     row_h = max(1, int(sy_next - sy))
                     pygame.draw.rect(screen, rock_rgb,
                                      (rock_sx, int(sy), rock_w, row_h))
+
+        # In wall mode, draw wall edge markers for converged rows (gap <= 1)
+        # on top of the rock fill so they're visible and editable
+        if self.mode == "wall":
+            edge_col = (landscape_rgb[0] // 2, landscape_rgb[1] // 2,
+                        landscape_rgb[2] // 2)
+            for row in range(y_min, y_max):
+                if row >= len(lv.left_wall) or row >= len(lv.right_wall):
+                    continue
+                if lv.right_wall[row] - lv.left_wall[row] > 1:
+                    continue
+                _, sy = cam.world_to_screen(0, row)
+                _, sy_next = cam.world_to_screen(0, row + 1)
+                row_h = max(1, int(sy_next - sy))
+                if sy + row_h < VIEWPORT_Y or sy > VIEWPORT_Y + cam.viewport_h:
+                    continue
+                lex, _ = cam.world_to_screen(lv.left_wall[row], row)
+                pygame.draw.rect(screen, edge_col,
+                                 (int(lex) - 1, int(sy), 2, row_h))
+                if lv.right_wall[row] != lv.left_wall[row]:
+                    rex, _ = cam.world_to_screen(lv.right_wall[row], row)
+                    pygame.draw.rect(screen, edge_col,
+                                     (int(rex) - 1, int(sy), 2, row_h))
 
         screen.set_clip(None)
 
@@ -1705,12 +1874,34 @@ class Editor:
         screen.set_clip(None)
 
     def _render_wall_highlights(self):
-        """Draw highlights on hovered/dragged wall edges."""
+        """Draw highlights on hovered/dragged wall edges and bottom handle."""
         if self.mode != "wall":
             return
 
         cam = self.camera
         screen = self.screen
+        sw = screen.get_width()
+
+        # Bottom boundary handle — always visible in wall mode
+        lv = self.level
+        wx0, _ = cam.world_to_screen(0, lv.num_rows)
+        wx256, _ = cam.world_to_screen(256, lv.num_rows)
+        _, bottom_sy = cam.world_to_screen(0, lv.num_rows)
+        x1 = max(0, int(wx0))
+        x2 = min(sw, int(wx256))
+        by = int(bottom_sy)
+        if VIEWPORT_Y <= by <= VIEWPORT_Y + cam.viewport_h and x2 > x1:
+            col = (150, 220, 255) if (self.hovered_bottom or self.dragging_bottom) \
+                else COL_BOTTOM_HANDLE
+            # Draw dashed line with small handle triangles
+            dash = 8
+            for dx in range(x1, x2, dash * 2):
+                ex = min(dx + dash, x2)
+                pygame.draw.line(screen, col, (dx, by), (ex, by), 2)
+            # Draw grab triangles at the edges
+            for tx in [x1 + 10, x2 - 10]:
+                pygame.draw.polygon(screen, col,
+                                    [(tx - 5, by - 4), (tx + 5, by - 4), (tx, by + 4)])
 
         # Line tool: show start marker and preview line
         if self.wall_tool == "line" and self.line_start:
@@ -1884,7 +2075,11 @@ class Editor:
             if lx is not None and rx is not None:
                 parts.append(f"Left=${lx:02X}  Right=${rx:02X}")
 
+        parts.append(f"Rows: {lv.num_rows}")
         parts.append(f"Zoom: {self.camera.zoom:.1f}x")
+
+        if self.dragging_bottom or self.hovered_bottom:
+            parts.append("Drag to resize landscape")
 
         if self.line_start:
             side, r, x = self.line_start
