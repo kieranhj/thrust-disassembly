@@ -328,11 +328,11 @@ The landscape draw alone consumes roughly **two thirds of the frame** during typ
 
 ## Optimisation Opportunities
 
-### 1. Unroll the draw_terrain inner loop
+### 1. Unroll the draw_terrain inner loop — IMPLEMENTED (`_UNROLL_TERRAIN`)
 
 The inner loop spends 27 cycles per column: 11 for the EOR read-modify-write, 6 for Y advancement (TYA; ADC #8; TAY), 5 for DEX/BNE, and 5 for BCC. Unrolling eliminates the loop overhead.
 
-**Fully unrolled (self-modified column count):** replace the loop with a straight-line sequence of `LDA #$F0; EOR addr,Y; STA addr,Y; INY8` blocks, jumping into the sequence at the right offset for the column count. This is the classic "unrolled loop entered via jump table" pattern.
+**Implementation:** The `_UNROLL_TERRAIN` flag (enabled when `_SWRAM_BUILD` is true) adds an unrolled path in SWRAM. The classic "jump into unrolled sequence" pattern processes up to 32 columns per batch (matching the 256-byte Y register range), entered via a jump table indexed by column count. Falls back to the original rolled loop for small draws.
 
 Per column (unrolled, indirect addressing):
 ```
@@ -346,96 +346,101 @@ Per column (unrolled, indirect addressing):
                                 ; 19 cycles (down from 27, saves 8 per column)
 ```
 
-**Savings:** 8 cycles per column. For typical scrolling (~55 scanlines drawing ~3 columns each = 165 columns): **~1,320 cycles/frame**.
+The unrolled path avoids Y-overflow handling entirely by design: Y is reset to 0 at the batch start and runs exactly 32 iterations (Y: 0→248), so the carry-handling branch (BCC/CLC/INC) is eliminated within the batch.
 
-For the X-wrap case (~111 scanlines x ~36 columns = 3,996 columns): **~32,000 cycles** — nearly a full frame faster.
+**Threshold analysis:** The current threshold is `CPX #16` (uses unrolled path for 16+ remaining columns). The unrolled path has ~58 cycles of setup+return overhead. Breakeven vs the rolled loop:
 
-### 2. Use self-modifying absolute addressing instead of indirect
+| X (remaining cols) | Rolled (47 + 27*X) | Unrolled (101 + 20*X) | Winner |
+|---|---|---|---|
+| 8 | 263 | 261 | Unrolled by 2 |
+| 9 | 290 | 281 | Unrolled by 9 |
+| 16 | 479 | 421 | Unrolled by 58 |
 
-Replace `EOR (terrain_draw_ptr),Y / STA (terrain_draw_ptr),Y` (5+6 = 11 cycles) with self-modified `EOR addr,Y / STA addr,Y` (4+5 = 9 cycles). The terrain_draw_ptr setup already computes the address — just write it into the instruction operands instead.
+Breakeven is at ~9 remaining columns. The `CPX #16` threshold is conservative but not wildly so — lowering to `CPX #9` would help medium-width draws. However, during typical scrolling most draw calls are 1–8 columns (small wall deltas), so the unrolled path primarily benefits the large-draw case (X-wrap, level init).
+
+**Actual savings:** ~7 cycles per column for draws of 16+ columns. For X-wrap (~111 scanlines × ~36 columns): **~28,000 cycles** (~0.7 frames faster).
+
+### ~~2. Use self-modifying absolute addressing instead of indirect~~ — NOT VIABLE
+
+Replace `EOR (terrain_draw_ptr),Y / STA (terrain_draw_ptr),Y` (5+6 = 11 cycles) with self-modified `EOR addr,Y / STA addr,Y` (4+5 = 9 cycles), saving 2 cycles per column.
+
+**Analysis showed this doesn't combine well with either approach:**
+
+**With unrolling:** All 32 EOR and 32 STA instructions need the same base address patched into their operand bytes. That's 128 STA instructions (64 address pairs × 2 bytes) = **~518 cycles of setup**. Breakeven: 518 / 3 = 173 columns. Maximum draw is 72 columns. **Never pays off.**
+
+**Without unrolling (self-mod loop):** Patches only 2 instructions (22 cycles setup), giving 25 cycles/column vs the rolled loop's 27 cycles/column. However, Y-overflow handling costs more for self-mod (must re-patch both instruction operands: +20 cycles) vs the rolled loop (single ZP pointer INC: +9 cycles). The self-mod loop also re-introduces the loop overhead (DEX/BNE) that unrolling eliminates. Full comparison:
+
+| X (total cols) | Rolled (47 + 27*(X-1)) | Self-mod loop (70 + 25*(X-1)) | Unrolled (101 + 20*(X-1)) |
+|---|---|---|---|
+| 8 | 236 | 245 | 241 |
+| 13 | 371 | 370 | 341 |
+| 16 | 452 | 445 | 401 |
+| 36 | 992 | 945 | 801 |
+
+The self-mod loop occupies an awkward middle ground — it barely beats rolled (only for X≥13), and the unrolled path beats both from X≈9 onward. Not worth the added complexity.
+
+### ~~3. Combined unrolled + self-modified inner loop~~ — NOT VIABLE
+
+Fully self-modified unrolled (no Y register, `EOR col_N_addr; STA col_N_addr` at 10 cycles/column) requires writing 72 different absolute addresses into the unrolled sequence every call. At ~8 cycles per address pair × 72 = ~576 cycles of setup. Only wins for draws >30 columns, which are rare outside X-wrap events. The setup cost for 32-column batches (518 cycles to patch 64 instruction operands) dwarfs the 2-3 cycle/column saving. **Not recommended.**
+
+### ~~4. Skip fully off-screen scanlines early~~ — MARGINAL, NOT RECOMMENDED
+
+When both walls are clamped to 0 or both to 72 (off-screen), the delta against the draw table is 0. The current code still performs the full clamp-compare-skip logic at ~102 cycles per scanline.
+
+**Analysis showed the detection overhead offsets the savings.** The cheapest safe skip detection requires reading both wall values AND both draw table entries (to confirm the tables already reflect the off-screen state — otherwise old terrain wouldn't be erased):
 
 ```
-    LDA #$F0                    ; 2
-    EOR addr,Y                  ; 4 (self-modified absolute)
-    STA addr,Y                  ; 5
-                                ; ----
-                                ; 11 cycles (down from 13 for the EOR/STA pair)
+Detection:  LDY + LDA wall + SBC + BCS +
+            LDA wall + SBC + BCS +
+            LDY + LDA tbl + ORA tbl + BNE  = ~35c
+State advance: INC + INC + ADC addr_LO     = ~25c
+Total per skipped scanline:                 = ~60c (vs ~102c normal = 42c saved)
 ```
 
-**Savings:** 2 cycles per column drawn. Combinable with unrolling.
-
-### 3. Combined unrolled + self-modified inner loop
-
-With both optimisations, the per-column cost becomes:
+But the detection cost on VISIBLE scanlines (where the first BCS bails out early) is ~12c of overhead added to every iteration. For a level with 20 off-screen scanlines:
 
 ```
-    LDA #$F0                    ; 2
-    EOR addr,Y                  ; 4
-    STA addr,Y                  ; 5
-    ; Y advancement inlined     ; 6 (TYA; ADC #8; TAY)
-                                ; ----
-                                ; 17 cycles (down from 27, saves 10 per column)
+Savings:  20 × 42c    = ~840c
+Overhead: 91 × 12c    = ~1,092c
+Net:                   = -252c (WORSE)
 ```
 
-Can also eliminate Y advancement by precomputing the screen offset per column and using a fixed Y=0 with self-modified absolute addresses per column. This requires more self-modifying code but removes the Y register manipulation entirely:
+Breakeven requires >26 off-screen scanlines out of 111. A contiguous pre-scan from top/bottom avoids the per-visible-scanline overhead but only catches edge regions and saves ~1,000-2,000 cycles in favourable level geometry (<5% of landscape cost). **Not worth the code complexity.**
 
-```
-    LDA #$F0                    ; 2
-    EOR col_N_addr              ; 4 (self-modified)
-    STA col_N_addr              ; 4
-                                ; ----
-                                ; 10 cycles per column (down from 27, saves 17)
-```
+### ~~5. Amortise the X-wrap redraw~~ — NOT VIABLE AS DESCRIBED
 
-**Savings (vs current):** 17 cycles per column. For typical frame: **~2,800 cycles**. For X-wrap: **~68,000 cycles** (1.7 frames faster).
+The X-wrap full redraw (~237,000 cycles) is by far the most expensive event.
 
-The downside is significant code size: 72 x ~10 bytes = ~720 bytes for the fully unrolled sequence, plus setup code to write the screen addresses. But this would bring the X-wrap case from ~5.9 frames down to ~4.2 frames.
+~~**Option B:** during X-wrap, adjust the draw table entries by the wrap delta ($49 or $B7) instead of resetting to 0/72. This converts the full-screen repaint into a delta update proportional to the actual wall movement at the wrap seam.~~
 
-### 4. Skip fully off-screen scanlines early
+**Analysis showed Option B is fundamentally flawed.** The wrap delta is `SCREEN_WIDTH_CHARS + 1` = 73 columns. The screen is 72 columns wide. After a wrap, the old and new viewports have **zero overlap** — this is by design, to prevent the player seeing the world seam. Adjusting table entries by ±73 clamps all values (0–72) to the same extreme (0 or SCREEN_WIDTH_CHARS), which is equivalent to a full reset. The delta between adjusted tables and new wall positions is still the entire visible terrain width. **No savings possible.**
 
-When both walls are clamped to 0 or both to 72 (entire scanline off-screen), the delta against the draw table will always be 0. The current code still performs the full clamp-compare-skip logic (37 cycles per wall).
+**Option A** (spread redraw across 4-6 frames) remains theoretically viable but requires significant restructuring of `landscape_draw` to track partial-redraw state across frames, and introduces visible "painting" artefacts. Given that X-wraps are infrequent (player must traverse the full world width), the 6-frame stall may be acceptable.
 
-An early-out: before entering the main loop, precompute the range of visible scanlines (those where at least one wall is on-screen). Skip directly from the last off-screen scanline to the first visible one by advancing the address and indices in bulk.
+### ~~6. Reduce per-scanline overhead with batched wall reads~~ — NOT VIABLE
 
-**Savings:** up to ~74 cycles per off-screen scanline (both walls). In levels with a large sky region or deep underground, this could save thousands of cycles.
+The second `LDY terrain_draw_wall_index` (line 917) appears redundant but is necessary: Y is overwritten to `terrain_draw_table_index` during left wall processing (line 887) and further clobbered as the start column in draw paths. The reload is required.
 
-### 5. Amortise the X-wrap redraw across frames
-
-The X-wrap full redraw (~237,000 cycles) is by far the most expensive event. Instead of redrawing the entire screen in one frame:
-
-- **Option A:** spread the redraw across 4-6 frames, redrawing ~20-28 scanlines per frame. The player would see the terrain "painting" downward, but each frame stays within budget.
-
-- **Option B:** during X-wrap, adjust the draw table entries by the wrap delta ($49 or $B7) instead of resetting to 0/72. This converts the full-screen repaint into a delta update proportional to the actual wall movement at the wrap seam, which is typically just a few columns.
-
-Option B is the more elegant solution and could reduce the X-wrap cost from ~237,000 cycles to the typical scrolling cost (~25,000 cycles).
-
-### 6. Reduce per-scanline overhead with batched wall reads
-
-The current code reads `terrain_left_wall,Y` and `terrain_right_wall,Y` separately with full clamp logic for each. Since both arrays are in pages $04 and $05, they could be read with a single Y index load. A restructured loop could:
-
-1. Load Y = wall index once
-2. Read both wall values (LDA $0400,Y / LDA $0500,Y)
-3. Process both walls before advancing
-
-This saves the second `LDY terrain_draw_wall_index` (3 cycles per scanline). Small but it's free.
+Pre-reading both wall values at the top of the loop requires stashing the right wall in a temp variable: `LDA terrain_right_wall,Y` (4c) + `STA temp` (3c) = 7c of extra cost, saving only 4c later (skip LDY 3c + LDA ZP 3c vs LDA abs,Y 4c). **Net: 3 cycles slower.** The original code is already optimal.
 
 ### 7. Move draw tables to zero page
 
 The draw tables (`terrain_draw_table_2` at $0300, `terrain_draw_table_4` at $036F) are accessed with absolute indexed addressing (4 cycles for read, 5 for write). Moving them to zero page would save 1 cycle per access. With 4 draw table accesses per scanline (2 reads + 2 writes), that's 4 cycles per scanline = **~444 cycles/frame**.
 
-However, zero page space is tight — the tables are 94 and 145 bytes respectively, far too large. A compromise: keep a small "active window" of draw table entries in zero page and swap them as the scanline advances.
+However, zero page space is tight — the tables are 94 and 145 bytes respectively, far too large. A compromise: keep a small "active window" of draw table entries in zero page and swap them as the scanline advance.
 
 ### Summary of potential savings
 
-| Optimisation | Cycles saved (typical frame) | Complexity |
+| Optimisation | Cycles saved (typical frame) | Status |
 |---|---|---|
-| Unrolled inner loop | ~1,320 | Medium |
-| Self-modified absolute EOR | ~660 | Low |
-| Combined unroll + self-mod | ~2,800 | High |
-| Fully self-modified (no Y reg) | ~4,600+ | High |
-| Skip off-screen scanlines | ~1,000-5,000 | Low |
-| Amortised X-wrap | ~212,000 (event) | Medium |
-| Batched wall reads | ~333 | Low |
-| Draw tables to ZP (partial) | ~444 | Medium |
+| Unrolled inner loop | ~1,320 (large draws only) | **Implemented** (`_UNROLL_TERRAIN`) |
+| Self-modified absolute EOR | — | ~~Not viable~~ (setup cost exceeds savings) |
+| Combined unroll + self-mod | — | ~~Not viable~~ (518c setup for 3c/col saving) |
+| Fully self-modified (no Y reg) | — | ~~Not viable~~ (576c+ setup per call) |
+| Skip off-screen scanlines | — | ~~Not viable~~ (detection overhead exceeds savings) |
+| Amortised X-wrap (Option B) | — | ~~Not viable~~ (wrap delta > screen width, no overlap) |
+| Amortised X-wrap (Option A) | ~212,000 (event) | Viable but complex, infrequent event |
+| Batched wall reads | — | ~~Not viable~~ (pre-read costs more than reload) |
+| Draw tables to ZP (partial) | ~444 | Viable, medium complexity |
 
-The highest-impact change is amortising the X-wrap. For steady-state performance, the combined unroll + self-modified inner loop offers the best return, potentially bringing typical scrolling from 64% to ~50% of the frame budget.
+The unrolled inner loop is implemented and provides the bulk of achievable savings for the `draw_terrain` hot path. The remaining viable optimisations (batched wall reads, ZP draw tables) offer modest per-frame savings (~333-444 cycles each). The landscape draw cost is dominated by the per-scanline overhead in `landscape_draw` itself (~74 cycles per wall × 111 scanlines = ~8,200 cycles even with zero column draws), which is inherent to the delta-tracking architecture.
