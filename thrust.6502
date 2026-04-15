@@ -33,6 +33,7 @@ _DEBUG_RASTERS     = (_SWRAM_BUILD AND FALSE)   ; Raster timing
 _UNROLL_TERRAIN    = (_SWRAM_BUILD AND TRUE)    ; Faster terrain plotting
 _FRIENDLY_KEYS     = (_SWRAM_BUILD AND TRUE)    ; Emulator friendly key map
 _THRUST_PARTICLES  = (_SWRAM_BUILD AND TRUE)    ; Generate thrust particles
+_FAST_SPRITES      = (_SWRAM_BUILD AND TRUE)    ; Pre-baked two-stream ship sprites
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -168,7 +169,7 @@ force_vectorx_FRAC_LO               = $0012     ; X force vector, extra low prec
 force_vectorx_FRAC                  = $0013     ; X force vector, fractional part
 force_vectorx_INT                   = $0014     ; X force vector, integer part
 force_vectory_FRAC                  = $0015     ; set to gravity_FRAC in ship_input_thrust_calculate_force
-force_vectory_INT                   = $0016     ; set to gravity_INT in ship_input_thrust_calculate_force
+force_vectory_INT                   = $0016     ; set to gravity_SIGN in ship_input_thrust_calculate_force
 pod_sprite_plotted_flag             = $0017     ; set to 1 as plot_pod_sprite is called
 ship_sprite_plotted_flag            = $0018     ; set to 1 when ship sprite has been plotted
 level_tick_counter                  = $0019     ; increments every tick loop
@@ -462,7 +463,7 @@ mute_sound_flag                     = $00A2     ; set to non-zero to mute sound
 hostile_gun_shoot_probability       = $00A3     ; probability that a gun will shoot
 total_levels_played                 = $00A4     ; total number of levels played in one game
 invisible_landscape_flag            = $00A5     ; game var init 0 - inverted start of each level
-gravity_INT                         = $00A6     ; gravity vector for level (integer part)
+gravity_SIGN                         = $00A6     ; gravity vector for level (integer part)
 gravity_FRAC                        = $00A7     ; " (fractional part)
 
 \ ******************************************************************************
@@ -694,6 +695,12 @@ IF _DEBUG_RASTERS
 ELSE
 {}
 ENDIF
+ENDMACRO
+
+MACRO SET_RAM_BANK bank
+        LDA     #bank
+        STA     &F4
+        STA     &FE30
 ENDMACRO
 
 \ ******************************************************************************
@@ -3769,7 +3776,7 @@ ENDIF
         ADC     gravity_FRAC
         STA     force_vectory_FRAC
         LDA     force_vectory_INT
-        ADC     gravity_INT
+        ADC     gravity_SIGN
         STA     force_vectory_INT
 
         LDA     pod_destroying_player_timer
@@ -4099,8 +4106,10 @@ ENDIF
 
 .ship_AND_pixel_mask_CODE
         AND     pixel_masks_1,X
+IF _FAST_SPRITES=FALSE
 .ship_SKIP_pixel_mask_CODE
         JMP     plot_ship_loop
+ENDIF
 
 \ ******************************************************************************
 \ * Function: update_shield_tractor_draw_ship_and_pod
@@ -4111,9 +4120,10 @@ ENDIF
 {
         JSR     calculate_attached_pod_vector
 
-        LDA     gravity_INT
+        LDA     gravity_SIGN
         BPL     L1D61
 
+        ; Reverse gravity.
         JSR     draw_pod_and_collision_test
 
     .L1D61
@@ -4153,14 +4163,27 @@ ENDIF
     .no_sheild_tractor
         LDA     #$00
         STA     ship_sprite_plotted_flag
-        
+
+IF _FAST_SPRITES
+        SET_RAM_BANK	SPRITE_BANK
+ENDIF
+
         LDX     #$02
-        
+
     .overwrite_ship_pixel_AND_CODE
+IF _FAST_SPRITES
+        LDA     ship_ts_AND_CODE,X
+        STA     ship_ts_collision_test,X                      ; **MODIFIES CODE**
+ELSE
         LDA     ship_AND_pixel_mask_CODE,X
         STA     ship_pixel_mask_test,X                        ; **MODIFIES CODE**
+ENDIF
         DEX
         BPL     overwrite_ship_pixel_AND_CODE
+
+IF _FAST_SPRITES
+        SET_RAM_BANK    SWRAM_BANK
+ENDIF
 
         LDA     old_plot_ship_at_ptr
         STA     plot_ship_at_ptr
@@ -4172,22 +4195,36 @@ ENDIF
         LDA     old_plot_ship_pixel_column
         STA     plot_ship_pixel_column
         
-        JSR     plot_ship_or_sheild
+IF _FAST_SPRITES
+        SET_RAM_BANK	SPRITE_BANK
+ENDIF
+        JSR     plot_ship_or_shield
 
     .L1DB3
         LDX     #$02
         
     .overwrite_ship_pixel_SKIP_CODE
+IF _FAST_SPRITES
+        LDA     ship_ts_SKIP_CODE,X
+        STA     ship_ts_collision_test,X                      ; **MODIFIES CODE**
+ELSE
         LDA     ship_SKIP_pixel_mask_CODE,X
         STA     ship_pixel_mask_test,X                        ; **MODIFIES CODE**
+ENDIF
         DEX
         BPL     overwrite_ship_pixel_SKIP_CODE
+
+IF _FAST_SPRITES
+        SET_RAM_BANK    SWRAM_BANK
+ENDIF
 
         LDA     ship_angle
         STA     plot_ship_sprite_number
         STA     old_plot_ship_sprite_number
         LDA     sheild_tractor_flag
         BEQ     L1DCE
+
+    ; Plot shield.
 
         LDA     #$FF
         STA     plot_ship_sprite_number
@@ -4301,11 +4338,19 @@ ENDIF
         ADC     plot_ship_at_ptr
         STA     plot_ship_at_ptr
         STA     old_plot_ship_at_ptr
-        JSR     plot_ship_or_sheild
+IF _FAST_SPRITES
+        SET_RAM_BANK	SPRITE_BANK
+ENDIF
+        JSR     plot_ship_or_shield
+IF _FAST_SPRITES
+        SET_RAM_BANK    SWRAM_BANK
+ENDIF
 
     .L1E88
-        LDA     gravity_INT
+        LDA     gravity_SIGN
         BMI     return
+
+    ; Normal gravity.
 
         JSR     draw_pod_and_collision_test
 
@@ -4313,14 +4358,15 @@ ENDIF
         RTS
 }
 
+IF _FAST_SPRITES=FALSE
 \ ******************************************************************************
-\ * Function: plot_ship_or_sheild
+\ * Function: plot_ship_or_shield
 \ * Params: plot_ship_at_ptr = screen address to plot sprite,
 \ * plot_ship_pixel_column, plot_ship_sprite_number = ?
 \ * Description: Plot ship or shield sprite at screen address using self-modifying code
 \ ******************************************************************************
 
-.plot_ship_or_sheild
+.plot_ship_or_shield
 {
         LDA     #LO(pixel_masks_3)
         STA     ship_pixel_mask_addr_LO                    ; **MODIFIES CODE**
@@ -4465,6 +4511,7 @@ ENDIF
     .plot_ship_return
         RTS
 \\ }
+ENDIF ; _FAST_SPRITES=FALSE
 
 ; ******************************************************************************
 ; Function: calculate_attached_pod_vector
@@ -5040,7 +5087,13 @@ ENDIF
         STA     window_xpos_INT
         STA     window_ypos_EXT
         STA     plot_ship_pixel_column
-        JSR     plot_ship_or_sheild
+IF _FAST_SPRITES
+        SET_RAM_BANK	SPRITE_BANK
+ENDIF
+        JSR     plot_ship_or_shield
+IF _FAST_SPRITES
+        SET_RAM_BANK    SWRAM_BANK
+ENDIF
 
     .loop
         JSR     particles_update_and_draw
@@ -6387,7 +6440,7 @@ ENDIF
         STX     pod_attached_flag_1
 
         LDX     #$01                        ; angle $01 - straight up (+1)
-        LDA     gravity_INT
+        LDA     gravity_SIGN
         BPL     L2BA5                        ; normal gravity
 
         LDX     #$11                        ; angle $11 - straight down (+1)
@@ -6396,7 +6449,7 @@ ENDIF
         STX     angle_ship_to_pod
         
     .dont_set_angle_to_pod
-        LDA     gravity_INT
+        LDA     gravity_SIGN
         BPL     L2BAF
 
         LDA     #ANGLE_DOWN                        ; angle $10 - straight down for reverse gravity
@@ -6472,7 +6525,7 @@ ENDIF
         LDY     #$FF
         
     .normal_gravity
-        STY     gravity_INT
+        STY     gravity_SIGN
         LDA     #LANDSCAPE_COLOUR_BYTE
         ORA     invisible_landscape_flag
         STA     level_line_pixels_byte
@@ -9760,6 +9813,10 @@ SET_BG_COL PAL_black
 
 IF P%>SCREEN_BASE_ADDR
 ERROR "Base code overruns available space!"
+ELSE
+PRINT "~~~~~~~~~~~~~~~~~~~~~~~"
+PRINT "MAIN CODE RAM REMAINING=", ~(SCREEN_BASE_ADDR-P%), "bytes (", HI(SCREEN_BASE_ADDR-P%+&FF), "pages )"
+PRINT "~~~~~~~~~~~~~~~~~~~~~~~"
 ENDIF
 
 \ ******************************************************************************
@@ -10646,13 +10703,12 @@ ENDIF
 
 IF _SWRAM_BUILD
 SWRAM_BANK      = 4
+SPRITE_BANK     = 5
 SWRAM_ADDR      = &8000
 
 .copy_up_swram
 {
-        LDA     #SWRAM_BANK
-        STA     &F4
-        STA     &FE30
+        SET_RAM_BANK    SWRAM_BANK
 
 \ Relocate new data & code block to SWRAM.
 
@@ -10693,10 +10749,15 @@ ENDIF
 \ ******************************************************************************
 
 IF _SWRAM_BUILD
+PRINT "~~~~~~~~~~~~"
+PRINT "SWRAM BUILD!"
+PRINT "~~~~~~~~~~~~"
+
 .SWRAM_RELOC_START
 
+; TODO: Just load SWRAM banks as part of the loader.
 ORG SWRAM_ADDR
-;GUARD SWRAM_ADDR+&8000-(NATIVE_END+OFFSET)
+GUARD SWRAM_ADDR+&8000-(NATIVE_END+OFFSET)
 
 ; Avoid the first 16 lines below screen buffer
 ; as sprites are deliberately drawn into ROM
@@ -10934,9 +10995,10 @@ ENDIF
 SWRAM_SIZE      = P%-SWRAM_ADDR
 SWRAM_PAGES     = HI(SWRAM_SIZE+&FF)
 
-PRINT "~~~"
-PRINT "SWRAM BUILD!"
-PRINT "~~~"
+PRINT "~~~~~~~~~~"
+PRINT "SWRAM BANK"
+PRINT "~~~~~~~~~~"
+PRINT "TOTAL SIZE=", ~SWRAM_SIZE, "bytes (", ~SWRAM_PAGES, " pages)"
 PRINT "COPYBLOCK FROM=", ~SWRAM_ADDR, " TO=", ~SWRAM_RELOC_START, " SIZE=", ~SWRAM_SIZE, " bytes (", ~SWRAM_PAGES, " pages)"
 
 COPYBLOCK SWRAM_ADDR, P%, SWRAM_RELOC_START
@@ -10958,3 +11020,166 @@ SAVE "Thrust", NATIVE_START, NATIVE_END+SWRAM_SIZE, RELOC_START+OFFSET, LOAD_ADD
 \ * EOF
 \ ******************************************************************************
 \ ******************************************************************************
+
+IF _FAST_SPRITES
+
+PRINT "~~~~~~~~~~~~~~~~~~~"
+PRINT "FAST SPRITES BUILD!"
+PRINT "~~~~~~~~~~~~~~~~~~~"
+
+CLEAR &8000, &C000
+ORG &8000
+GUARD &C000
+
+\ ******************************************************************************
+\ * Pre-baked two-stream ship sprite data and plotter (_FAST_SPRITES)
+\ ******************************************************************************
+
+INCLUDE "tools/output/ship_twostream_data.asm"
+
+\ ******************************************************************************
+\ * Collision test code templates (3 bytes each, copied into self-modifying site)
+\ * AND mode: test for collision during erase pass
+\ * SKIP mode: jump past collision test during draw pass
+\ ******************************************************************************
+
+.ship_ts_AND_CODE
+        AND     ship_ts_mask_temp                   ; $2D lo hi (3 bytes, absolute)
+.ship_ts_SKIP_CODE
+        JMP     plot_ship_ts_loop                   ; $4C lo hi (3 bytes)
+
+\ ******************************************************************************
+\ * Function: plot_ship_or_shield
+\ * Params: plot_ship_at_ptr = screen address, plot_ship_pixel_column = 0-3,
+\ *         plot_ship_sprite_number = angle (0-31) or $FF for shield
+\ * Description: Two-stream ship sprite plotter setup. Looks up pre-baked
+\ *              stream data for the given angle and pixel column, patches
+\ *              self-modifying code, and runs the two-stream plot loop.
+\ ******************************************************************************
+
+.plot_ship_or_shield
+{
+        LDA     plot_ship_sprite_number
+        BPL     ship_not_shield
+
+        ; Shield sprite: colour 3 = both bitplanes (no reduction)
+        LDA     #$FF
+        STA     ship_ts_colour_operand              ; AND #$FF = no-op
+        LDY     plot_ship_pixel_column
+        LDA     shield_ts_ptr_A_LO,Y
+        STA     ship_ts_stream_A_addr_LO            ; **MODIFIES CODE**
+        LDA     shield_ts_ptr_A_HI,Y
+        STA     ship_ts_stream_A_addr_HI            ; **MODIFIES CODE**
+        LDA     shield_ts_ptr_B_LO,Y
+        STA     ship_ts_stream_B_addr_LO            ; **MODIFIES CODE**
+        LDA     shield_ts_ptr_B_HI,Y
+        STA     ship_ts_stream_B_addr_HI            ; **MODIFIES CODE**
+        JMP     plot_ship_ts_setup_done
+
+    .ship_not_shield
+        ; Ship sprite: colour 1 = low bitplane only
+        LDA     #$0F
+        STA     ship_ts_colour_operand              ; AND #$0F = keep low bitplane
+        LDA     plot_ship_sprite_number
+        ASL     A                                   ; angle * 2
+        ASL     A                                   ; angle * 4
+        ORA     plot_ship_pixel_column              ; + pixel_column (0-3)
+        TAY
+        LDA     ship_ts_ptr_A_LO,Y
+        STA     ship_ts_stream_A_addr_LO            ; **MODIFIES CODE**
+        LDA     ship_ts_ptr_A_HI,Y
+        STA     ship_ts_stream_A_addr_HI            ; **MODIFIES CODE**
+        LDA     ship_ts_ptr_B_LO,Y
+        STA     ship_ts_stream_B_addr_LO            ; **MODIFIES CODE**
+        LDA     ship_ts_ptr_B_HI,Y
+        STA     ship_ts_stream_B_addr_HI            ; **MODIFIES CODE**
+
+    .plot_ship_ts_setup_done
+        ; Initialise row counter: rows remaining before char row boundary
+        LDA     plot_ship_at_ptr
+        AND     #$07
+        EOR     #$07
+        STA     plot_ship_row_counter
+        LDX     #$00
+        JMP     plot_ship_ts_entry
+}
+
+\ ******************************************************************************
+\ * Function: plot_ship_ts_loop / plot_ship_ts_entry
+\ * Description: Two-stream ship sprite plot loop. Stream A provides screen
+\ *              byte offsets (bit 7 = row advance, $FF = end). Stream B
+\ *              provides pre-computed pixel mask bytes for XOR plotting.
+\ *              Collision detection via self-modified AND/JMP at test site.
+\ ******************************************************************************
+
+.plot_ship_ts_loop
+        INX
+
+.plot_ship_ts_entry
+    .ship_ts_stream_A_load
+        LDY     $FFFF,X                             ; **SELF-MODIFIED CODE**
+        ship_ts_stream_A_addr_LO = ship_ts_stream_A_load+1
+        ship_ts_stream_A_addr_HI = ship_ts_stream_A_load+2
+        BPL     plot_ship_ts_pixel
+
+        ; Row advance or end of sprite
+        CPY     #$FF
+        BEQ     plot_ship_ts_done
+
+        ; Advance to next pixel row
+        DEC     plot_ship_row_counter
+        BMI     plot_ship_ts_char_crossing
+
+        INC     plot_ship_at_ptr
+        TYA
+        AND     #$7F
+        TAY
+        JMP     plot_ship_ts_pixel
+
+    .plot_ship_ts_char_crossing
+        LDA     #$07
+        STA     plot_ship_row_counter
+        CLC
+        LDA     plot_ship_at_ptr
+        ADC     #$39
+        STA     plot_ship_at_ptr
+        LDA     plot_ship_at_ptr+1
+        ADC     #$02
+        STA     plot_ship_at_ptr+1
+        TYA
+        AND     #$7F
+        TAY
+
+.plot_ship_ts_pixel
+    .ship_ts_stream_B_load
+        LDA     $FFFF,X                             ; **SELF-MODIFIED CODE**
+        ship_ts_stream_B_addr_LO = ship_ts_stream_B_load+1
+        ship_ts_stream_B_addr_HI = ship_ts_stream_B_load+2
+        STA     ship_ts_mask_temp                   ; save full mask for collision test
+    .ship_ts_colour_reduce
+        AND     #$0F                                ; **SELF-MODIFIED CODE** ship=0F shield=FF
+        ship_ts_colour_operand = ship_ts_colour_reduce+1
+        EOR     (plot_ship_at_ptr),Y
+        STA     (plot_ship_at_ptr),Y
+
+    .ship_ts_collision_test                          ; **SELF-MODIFIED CODE**
+        AND     ship_ts_mask_temp                   ; erase mode: test collision
+        BEQ     plot_ship_ts_loop                   ; no collision: next pixel
+
+        LDA     #$FF
+        STA     plot_ship_collision_detected
+        JMP     plot_ship_ts_loop
+
+.plot_ship_ts_done
+        RTS
+
+SPRITES_SIZE    = P%-&8000
+SPRITES_PAGES   = HI(SPRITES_SIZE+&FF)
+
+PRINT "~~~~~~~~~~~~~~~~~"
+PRINT "FAST SPRITES BANK"
+PRINT "~~~~~~~~~~~~~~~~~"
+PRINT "TOTAL SIZE=", ~SPRITES_SIZE, "bytes (", ~SPRITES_PAGES, " pages)"
+SAVE "Sprites", &8000, P%, &8000, &8000
+
+ENDIF ; _FAST_SPRITES
