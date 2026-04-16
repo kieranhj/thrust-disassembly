@@ -1140,7 +1140,7 @@ class Editor:
                 initialdir=str(Path(__file__).parent / "output"),
                 filetypes=[("BeebAsm assembly", "*.asm *.6502"),
                            ("All files", "*.*")])
-            root.destroy()
+            root.destroy(); self._drain_input_events()
             if not picked:
                 return
             path = picked
@@ -1673,6 +1673,15 @@ class Editor:
             self.selected_object = len(self.level.objects) - 1
         self.show_obj_menu = False
 
+    def _drain_input_events(self):
+        """Clear buffered pygame input events after a modal tk dialog so that
+        clicks/keys the user mashed while the dialog was up don't re-trigger
+        the button we just returned from (stacking dialogs).
+        """
+        pygame.event.clear(pygame.MOUSEBUTTONDOWN)
+        pygame.event.clear(pygame.MOUSEBUTTONUP)
+        pygame.event.clear(pygame.KEYDOWN)
+
     def _check_landscape_bottoms(self):
         """Run the open-bottoms integrity check. Returns True to proceed
         with export, False to abort. Auto-closes if the user chose Yes.
@@ -1694,7 +1703,7 @@ class Editor:
             f"No = export anyway\n"
             f"Cancel = abort export",
         )
-        root.destroy()
+        root.destroy(); self._drain_input_events()
         if result is None:
             return False
         if result:
@@ -1737,7 +1746,7 @@ class Editor:
             f"No = exit without saving\n"
             f"Cancel = stay in editor",
         )
-        root.destroy()
+        root.destroy(); self._drain_input_events()
         if result is None:
             return False
         if result:
@@ -1777,7 +1786,7 @@ class Editor:
             defaultextension=".asm",
             filetypes=[("BeebAsm assembly", "*.asm"), ("All files", "*.*")],
         )
-        root.destroy()
+        root.destroy(); self._drain_input_events()
         if not path:
             return
         self._save_to_file(path)
@@ -1796,7 +1805,7 @@ class Editor:
             defaultextension=".asm",
             filetypes=[("BeebAsm assembly", "*.asm"), ("All files", "*.*")],
         )
-        root.destroy()
+        root.destroy(); self._drain_input_events()
         if not path:
             return
         self.levels = import_beebasm(path)

@@ -273,6 +273,15 @@ class Editor:
     # Import / export (file dialogs, match level_editor.py pattern)
     # ------------------------------------------------------------------
 
+    def _drain_input_events(self):
+        """Clear buffered pygame input events after a modal tk dialog so that
+        clicks/keys the user mashed while the dialog was up don't re-trigger
+        the button we just returned from (stacking dialogs).
+        """
+        pygame.event.clear(pygame.MOUSEBUTTONDOWN)
+        pygame.event.clear(pygame.MOUSEBUTTONUP)
+        pygame.event.clear(pygame.KEYDOWN)
+
     def _save_to_file(self, path):
         """Write sprite + PNG data to the given path. No dialog, no prompts."""
         try:
@@ -310,7 +319,7 @@ class Editor:
             "No = exit without saving\n"
             "Cancel = stay in editor",
         )
-        root.destroy()
+        root.destroy(); self._drain_input_events()
         if result is None:
             return False
         if result:
@@ -333,7 +342,7 @@ class Editor:
             filetypes=[("BeebAsm assembly", "*.asm *.6502"),
                        ("All files", "*.*")],
         )
-        root.destroy()
+        root.destroy(); self._drain_input_events()
         if not path:
             return
         self._save_to_file(path)
@@ -350,7 +359,7 @@ class Editor:
             filetypes=[("BeebAsm assembly", "*.asm *.6502"),
                        ("All files", "*.*")],
         )
-        root.destroy()
+        root.destroy(); self._drain_input_events()
         if not path:
             return
         try:
