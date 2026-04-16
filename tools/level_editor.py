@@ -986,7 +986,8 @@ class Editor:
     def _handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                self.running = False
+                if self._confirm_exit():
+                    self.running = False
 
             elif event.type == pygame.VIDEORESIZE:
                 self.camera.viewport_w = event.w
@@ -1711,7 +1712,41 @@ class Editor:
         src = export_beebasm(self.levels)
         Path(path).write_text(src)
         self.last_file_path = str(Path(path).resolve())
+        # Clear per-level dirty flags so the exit check reflects true state.
+        for lv in self.levels:
+            lv.dirty = False
+            lv.terrain_dirty = False
         print(f"Exported to {path}")
+
+    def _has_unsaved_changes(self):
+        return any(lv.dirty for lv in self.levels)
+
+    def _confirm_exit(self):
+        """Prompt the user if there are unsaved changes.
+        Returns True if exit should proceed, False to cancel.
+        """
+        if not self._has_unsaved_changes():
+            return True
+        dirty = ", ".join(str(lv.level_num + 1) for lv in self.levels if lv.dirty)
+        root = tk.Tk()
+        root.withdraw()
+        result = messagebox.askyesnocancel(
+            "Unsaved changes",
+            f"Level(s) {dirty} have unsaved changes.\n\n"
+            f"Yes = save and exit\n"
+            f"No = exit without saving\n"
+            f"Cancel = stay in editor",
+        )
+        root.destroy()
+        if result is None:
+            return False
+        if result:
+            self._quick_save()
+            # If save was cancelled (e.g. open-bottom prompt cancelled),
+            # don't exit -- user is still in an unsaved state.
+            if self._has_unsaved_changes():
+                return False
+        return True
 
     def _quick_save(self):
         """Ctrl+S: save over the current file without a dialog. Falls back

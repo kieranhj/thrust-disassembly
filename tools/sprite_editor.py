@@ -35,7 +35,7 @@ import os
 import sys
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 
 import pygame
 
@@ -294,6 +294,30 @@ class Editor:
             self._save_to_file(self.last_file_path)
         else:
             self._export()
+
+    def _confirm_exit(self):
+        """Prompt the user if there are unsaved sprite changes.
+        Returns True if exit should proceed, False to cancel.
+        """
+        if not self.dirty:
+            return True
+        root = tk.Tk()
+        root.withdraw()
+        result = messagebox.askyesnocancel(
+            "Unsaved changes",
+            "Sprite data has unsaved changes.\n\n"
+            "Yes = save and exit\n"
+            "No = exit without saving\n"
+            "Cancel = stay in editor",
+        )
+        root.destroy()
+        if result is None:
+            return False
+        if result:
+            self._quick_save()
+            if self.dirty:
+                return False
+        return True
 
     def _export(self):
         """Export via file dialog (OS will prompt on overwrite)."""
@@ -611,13 +635,13 @@ class Editor:
 
     def handle_event(self, event):
         if event.type == pygame.QUIT:
-            return False
+            return not self._confirm_exit()
         if event.type == pygame.KEYDOWN:
             mods = pygame.key.get_mods()
             ctrl = mods & pygame.KMOD_CTRL
             shift = mods & pygame.KMOD_SHIFT
             if event.key == pygame.K_ESCAPE:
-                return False
+                return not self._confirm_exit()
             if ctrl and event.key == pygame.K_s:
                 self._quick_save()
                 return True
