@@ -273,7 +273,30 @@ class Editor:
     # Import / export (file dialogs, match level_editor.py pattern)
     # ------------------------------------------------------------------
 
+    def _save_to_file(self, path):
+        """Write sprite + PNG data to the given path. No dialog, no prompts."""
+        try:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            write_object_sprites_asm(self.sprites, path)
+            self._export_pngs()
+            self.last_file_path = str(Path(path).resolve())
+            self.dirty = False
+            rel = self._relpath(path)
+            self.status_msg = f"Saved to {rel} + PNGs"
+        except Exception as exc:
+            self.status_msg = f"Save FAILED: {exc}"
+
+    def _quick_save(self):
+        """Ctrl+S: save over the current file without a dialog. Falls back
+        to _export() if no file has been loaded/saved yet.
+        """
+        if self.last_file_path:
+            self._save_to_file(self.last_file_path)
+        else:
+            self._export()
+
     def _export(self):
+        """Export via file dialog (OS will prompt on overwrite)."""
         default_path = Path(self.last_file_path) if self.last_file_path \
             else DEFAULT_EXPORT_FILE
         root = tk.Tk()
@@ -289,16 +312,7 @@ class Editor:
         root.destroy()
         if not path:
             return
-        try:
-            Path(path).parent.mkdir(parents=True, exist_ok=True)
-            write_object_sprites_asm(self.sprites, path)
-            self._export_pngs()
-            self.last_file_path = str(Path(path).resolve())
-            self.dirty = False
-            rel = self._relpath(path)
-            self.status_msg = f"Exported to {rel} + PNGs"
-        except Exception as exc:
-            self.status_msg = f"Export FAILED: {exc}"
+        self._save_to_file(path)
 
     def _import(self):
         default_path = Path(self.last_file_path) if self.last_file_path \
@@ -605,7 +619,7 @@ class Editor:
             if event.key == pygame.K_ESCAPE:
                 return False
             if ctrl and event.key == pygame.K_s:
-                self._export()
+                self._quick_save()
                 return True
             if ctrl and event.key == pygame.K_i:
                 self._import()

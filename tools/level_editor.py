@@ -34,6 +34,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from pathlib import Path
 
+import numpy as np
 import pygame
 
 # Import shared data and decoders from the visualisation tool
@@ -759,11 +760,36 @@ _SHIP_BITMAP = [
 
 
 class SpriteCache:
-    """Caches decoded sprites as PyGame surfaces per (obj_type, landscape_col, object_col)."""
+    """Caches decoded sprites as PyGame surfaces per (obj_type, landscape_col, object_col).
+
+    Supports a "live" sprite source: if load_live_sprites() has been called
+    successfully, _render uses the loaded pixel data in preference to the
+    static SPRITE_DATA fallback, so the editor's visuals match whatever is
+    currently in tools/output/object_sprites.asm.
+    """
 
     def __init__(self):
         self._cache = {}
         self._ship_surf = None
+        self._live_pixels = {}   # {obj_type: np.ndarray} overrides SPRITE_DATA
+        self.live_path = None    # path currently supplying live sprites, or None
+
+    def load_live_sprites(self, path):
+        """Parse sprites from an assembly file (typically object_sprites.asm)
+        and use them as the rendering source. Raises on I/O / parse failure;
+        callers can ignore the exception for silent best-effort loads.
+        Returns the list of object type IDs that were replaced.
+        """
+        import sprite_codec
+        sprites = sprite_codec.load_sprites_from_file(str(path))
+        new_pixels = {}
+        for type_id, name in enumerate(sprite_codec.OBJECT_NAMES):
+            if name in sprites:
+                new_pixels[type_id] = np.array(sprites[name].pixels, dtype=int)
+        self._live_pixels = new_pixels
+        self.live_path = str(path)
+        self._cache.clear()      # force re-render at next get()
+        return list(new_pixels.keys())
 
     def get(self, obj_type, level):
         """Get cached sprite. level is a LevelData instance."""
@@ -790,9 +816,11 @@ class SpriteCache:
         self._ship_surf = None
 
     def _render(self, obj_type, level):
-        if obj_type not in SPRITE_DATA:
-            return None
-        pixel_array = decode_sprite(obj_type)
+        pixel_array = self._live_pixels.get(obj_type)
+        if pixel_array is None:
+            if obj_type not in SPRITE_DATA:
+                return None
+            pixel_array = decode_sprite(obj_type)
         h, w = pixel_array.shape
 
         palette = {
@@ -886,6 +914,16 @@ class Editor:
         self.camera = Camera()
         self.sprite_cache = SpriteCache()
         self.undo = UndoManager()
+
+        # Best-effort: load live sprite data from the SWRAM include so the
+        # editor shows whatever is currently painted in sprite_editor.py.
+        # Silent on failure; static SPRITE_DATA remains as fallback.
+        default_sprites = Path(__file__).parent / "output" / "object_sprites.asm"
+        if default_sprites.exists():
+            try:
+                self.sprite_cache.load_live_sprites(default_sprites)
+            except Exception as e:
+                print(f"Could not load live sprites from {default_sprites}: {e}")
 
         self.mode = "wall"   # "wall", "object", or "checkpoint"
         self.show_grid = False
@@ -1051,7 +1089,7 @@ class Editor:
                 self.undo.undo(self.levels)
 
         elif event.key == pygame.K_s and ctrl:
-            self._export()
+            self._quick_save()
 
         elif event.key == pygame.K_i and ctrl:
             self._import()
@@ -1077,6 +1115,9 @@ class Editor:
                            pygame.K_COMMA, pygame.K_PERIOD):
             self._adjust_selected_gun_aim(event.key)
 
+        elif event.key == pygame.K_F5:
+            self._reload_live_sprites()
+
         elif event.key == pygame.K_ESCAPE:
             self.selected_object = None
             self.selected_checkpoint = None
@@ -1084,6 +1125,29 @@ class Editor:
             self.dragging_bottom = False
             self.dragging_no_wrap = False
             self.show_obj_menu = False
+
+    def _reload_live_sprites(self):
+        """Reload object sprites from the current live path, or prompt for
+        one if none is set. Useful after painting in sprite_editor while the
+        level editor is still open.
+        """
+        path = self.sprite_cache.live_path
+        if path is None or not Path(path).exists():
+            root = tk.Tk(); root.withdraw()
+            picked = filedialog.askopenfilename(
+                title="Import object sprites",
+                initialdir=str(Path(__file__).parent / "output"),
+                filetypes=[("BeebAsm assembly", "*.asm *.6502"),
+                           ("All files", "*.*")])
+            root.destroy()
+            if not picked:
+                return
+            path = picked
+        try:
+            loaded = self.sprite_cache.load_live_sprites(path)
+            print(f"Loaded {len(loaded)} live sprites from {path}")
+        except Exception as e:
+            print(f"Failed to load sprites from {path}: {e}")
 
     def _adjust_selected_gun_aim(self, key):
         """Rotate base angle / cycle spread for the selected firing object.
@@ -1608,38 +1672,62 @@ class Editor:
             self.selected_object = len(self.level.objects) - 1
         self.show_obj_menu = False
 
-    def _export(self):
-        """Export level data to assembly file via file dialog."""
-        # Check for open landscape bottoms before exporting
-        open_levels = []
-        for lv in self.levels:
-            if _is_bottom_open(lv.left_wall, lv.right_wall):
-                open_levels.append(lv.level_num)
+    def _check_landscape_bottoms(self):
+        """Run the open-bottoms integrity check. Returns True to proceed
+        with export, False to abort. Auto-closes if the user chose Yes.
+        """
+        open_levels = [lv.level_num for lv in self.levels
+                       if _is_bottom_open(lv.left_wall, lv.right_wall)]
+        if not open_levels:
+            return True
 
-        if open_levels:
-            names = ", ".join(str(n + 1) for n in open_levels)
-            root = tk.Tk()
-            root.withdraw()
-            result = messagebox.askyesnocancel(
-                "Open landscape bottom",
-                f"Level(s) {names} have open bottoms — the left and right "
-                f"walls don't converge at the bottom of the landscape.\n\n"
-                f"This will cause rendering artifacts in-game.\n\n"
-                f"Yes = auto-close and export\n"
-                f"No = export anyway\n"
-                f"Cancel = abort export",
-            )
-            root.destroy()
-            if result is None:
-                return  # Cancel
-            if result:
-                # Auto-close
-                for n in open_levels:
-                    lv = self.levels[n]
-                    _close_bottom(lv.left_wall, lv.right_wall)
-                    lv.terrain_dirty = True
-                    lv.dirty = True
-                print(f"Auto-closed landscape bottom on level(s) {names}")
+        names = ", ".join(str(n + 1) for n in open_levels)
+        root = tk.Tk()
+        root.withdraw()
+        result = messagebox.askyesnocancel(
+            "Open landscape bottom",
+            f"Level(s) {names} have open bottoms — the left and right "
+            f"walls don't converge at the bottom of the landscape.\n\n"
+            f"This will cause rendering artifacts in-game.\n\n"
+            f"Yes = auto-close and export\n"
+            f"No = export anyway\n"
+            f"Cancel = abort export",
+        )
+        root.destroy()
+        if result is None:
+            return False
+        if result:
+            for n in open_levels:
+                lv = self.levels[n]
+                _close_bottom(lv.left_wall, lv.right_wall)
+                lv.terrain_dirty = True
+                lv.dirty = True
+            print(f"Auto-closed landscape bottom on level(s) {names}")
+        return True
+
+    def _save_to_file(self, path):
+        """Write level data to the given path. No dialog, no prompts."""
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        src = export_beebasm(self.levels)
+        Path(path).write_text(src)
+        self.last_file_path = str(Path(path).resolve())
+        print(f"Exported to {path}")
+
+    def _quick_save(self):
+        """Ctrl+S: save over the current file without a dialog. Falls back
+        to _export() if no file has been loaded/saved yet.
+        """
+        if not self._check_landscape_bottoms():
+            return
+        if self.last_file_path:
+            self._save_to_file(self.last_file_path)
+        else:
+            self._export()
+
+    def _export(self):
+        """Export via file dialog (OS will prompt on overwrite)."""
+        if not self._check_landscape_bottoms():
+            return
 
         if self.last_file_path:
             default_path = Path(self.last_file_path)
@@ -1657,11 +1745,7 @@ class Editor:
         root.destroy()
         if not path:
             return
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        src = export_beebasm(self.levels)
-        Path(path).write_text(src)
-        self.last_file_path = str(Path(path).resolve())
-        print(f"Exported to {path}")
+        self._save_to_file(path)
 
     def _import(self):
         """Import level data from assembly file via file dialog."""
@@ -2214,7 +2298,7 @@ class Editor:
 
         # Gravity control
         grav_x = col_x
-        txt = self.font.render("Grav", True, COL_TOOLBAR_TEXT)
+        txt = self.font.render("Gravity", True, COL_TOOLBAR_TEXT)
         screen.blit(txt, (grav_x, 12))
         val_x = grav_x + txt.get_width() + 4
         # - button
@@ -2276,6 +2360,9 @@ class Editor:
 
         parts.append(f"Rows: {lv.num_rows}")
         parts.append(f"Zoom: {self.camera.zoom:.1f}x")
+
+        if self.sprite_cache.live_path:
+            parts.append(f"Sprites: {Path(self.sprite_cache.live_path).name} (F5 reload)")
 
         if self.dragging_bottom or self.hovered_bottom:
             parts.append("Drag to resize landscape")

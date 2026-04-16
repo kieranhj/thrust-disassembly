@@ -122,16 +122,16 @@
 
 .obj_sprite_data_A_heavy_turret_up_right
         EQUB    $88,$10,$18,$80,$08,$10,$18,$80
-        EQUB    $10,$18,$80,$10,$18,$20,$80,$08
-        EQUB    $18,$20,$90,$18,$20,$90,$18,$20
-        EQUB    $98,$20,$98,$20,$A0,$A0,$A0,$A0
-        EQUB    $A0,$FF
+        EQUB    $08,$10,$18,$80,$08,$10,$18,$20
+        EQUB    $80,$08,$10,$18,$20,$90,$18,$20
+        EQUB    $90,$18,$20,$98,$20,$98,$20,$A0
+        EQUB    $A0,$A0,$A0,$A0,$FF
 .obj_sprite_data_B_heavy_turret_up_right
-        EQUB    $60,$70,$80,$10,$90,$80,$60,$60
-        EQUB    $60,$10,$80,$10,$80,$80,$F0,$F0
-        EQUB    $60,$80,$E0,$10,$80,$10,$80,$60
-        EQUB    $60,$10,$10,$10,$90,$90,$50,$50
-        EQUB    $30,$FF
+        EQUB    $60,$70,$80,$10,$F6,$80,$60,$71
+        EQUB    $FF,$E8,$10,$F7,$FF,$FE,$80,$80
+        EQUB    $F0,$F0,$FF,$E8,$80,$F1,$FE,$80
+        EQUB    $10,$F7,$E8,$71,$FE,$10,$FE,$F6
+        EQUB    $F6,$72,$72,$30
 
 .obj_sprite_data_A_table_LO
         EQUB    LO(obj_sprite_data_A_gun_up_right)
