@@ -108,6 +108,7 @@ OBJECT_pod_stand                    = $5        ; pod on its stand
 OBJECT_generator                    = $6        ; reactor/generator
 OBJECT_door_switch_right            = $7        ; door switch (right side)
 OBJECT_door_switch_left             = $8        ; door switch (left side)
+OBJECT_heavy_turret_up_right        = $9        ; heavy turret facing up-right (SWRAM only)
 
 PARTICLE_flag                       = $80       ; particle can be replaced
 PARTICLE_lifetime_bullet            = $28       ; bullet lifetime in ticks
@@ -120,6 +121,7 @@ PARTICLE_type_debris                = $01       ; shoot generator
 PARTICLE_type_star                  = $02       ; background star particle type
 PARTICLE_type_hostile_bullet        = $03       ; enemy bullet particle type
 PARTICLE_type_random_debris         = $04       ; random debris explosion particle type
+PARTICLE_type_hostile_heavy_bullet  = $05       ; heavy enemy bullet (applies impulse on shield absorb, SWRAM only)
 
 NUM_ANGLES                          = 32        ; number of discrete ship/tether angles
 ANGLE_MASK                          = NUM_ANGLES - 1 ; bitmask for angle wrapping (0-31)
@@ -1332,15 +1334,29 @@ ENDIF
 
 .obj_type_width
         EQUB    $05,$05,$05,$05,$04,$05,$05,$02,$02
+IF _SWRAM_BUILD
+        EQUB    $05                              ; [9] heavy_turret_up_right
+ENDIF
 
 .obj_type_height
         EQUB    $08,$08,$08,$08,$0A,$08,$0A,$08,$08
+IF _SWRAM_BUILD
+        EQUB    $08                              ; [9] heavy_turret_up_right
+ENDIF
 
 .obj_type_explosion_particle
         EQUB    $02,$02,$02,$02,$01                ; only guns and fuel can be destroyed
+IF _SWRAM_BUILD
+        EQUB    $00,$00,$00,$00                  ; pad [5..8] (not destructible)
+        EQUB    $02                              ; [9] heavy_turret_up_right
+ENDIF
 
 .obj_type_score_value                            ; only guns and fuel can be destroyed
         EQUB    $75,$75,$75,$75,$15
+IF _SWRAM_BUILD
+        EQUB    $00,$00,$00,$00                  ; pad [5..8]
+        EQUB    $A0                              ; [9] heavy_turret_up_right score
+ENDIF
 
 \ ******************************************************************************
 \ * Function: end_of_objects_function
@@ -1475,10 +1491,10 @@ ENDIF
 
         STA     object_type
 
-    .load_gun_param
-        LDA     level_0_gun_param,X                    ; **SELF-MODIFIED CODE**
-        level_gun_param_addr_LO   = load_gun_param+1
-        level_gun_param_addr_HI   = load_gun_param+2
+    .load_gun_aim
+        LDA     level_0_gun_aim,X                    ; **SELF-MODIFIED CODE**
+        level_gun_aim_addr_LO   = load_gun_aim+1
+        level_gun_aim_addr_HI   = load_gun_aim+2
 {
         PHA
         AND     #$1C
@@ -1486,7 +1502,7 @@ ENDIF
         PLA
         AND     #$03
         TAY
-        LDA     gun_param_table,Y
+        LDA     gun_spread_mask_table,Y
         STA     gun_angle_spread_mask
         LDY     object_type
         CPY     #OBJECT_pod_stand
@@ -1709,6 +1725,10 @@ ENDIF
 
     .L0F7D
         LDA     object_type
+IF _SWRAM_BUILD
+        CMP     #OBJECT_heavy_turret_up_right
+        BEQ     destroy_object
+ENDIF
         CMP     #OBJECT_pod_stand
         BCS     L0FAA
 
@@ -1799,7 +1819,14 @@ ENDIF
     .L1005
         LDA     object_type
         CMP     #OBJECT_fuel
+IF _SWRAM_BUILD
+        BCC     can_fire_check
+        CMP     #OBJECT_heavy_turret_up_right
+        BNE     L1067
+    .can_fire_check
+ELSE
         BCS     L1067
+ENDIF
 
         LDA     generator_recharge_counter
         BNE     L1067
@@ -1833,7 +1860,18 @@ ENDIF
         TAY
         JSR     angle_to_bullet_dx_dy
 
+IF _SWRAM_BUILD
+        LDA     object_type
+        CMP     #OBJECT_heavy_turret_up_right
+        BNE     spawn_hostile_bullet
+        LDA     #PARTICLE_type_hostile_heavy_bullet
+        JMP     spawn_type_set
+    .spawn_hostile_bullet
+ENDIF
         LDA     #PARTICLE_type_hostile_bullet
+IF _SWRAM_BUILD
+    .spawn_type_set
+ENDIF
         STA     particles_type,X
         STA     particles_xpos_FRAC,X
         LDA     particles_lifetime,X
@@ -1841,6 +1879,12 @@ ENDIF
         ORA     #PARTICLE_lifetime_bullet
         STA     particles_lifetime,X
         LDY     object_type
+IF _SWRAM_BUILD
+        CPY     #OBJECT_heavy_turret_up_right
+        BNE     spawn_offset_lookup
+        LDY     #OBJECT_gun_up_right            ; heavy_turret_up_right uses up-right gun offsets
+    .spawn_offset_lookup
+ENDIF
         LDA     current_obj_xpos_INT
         CLC
         ADC     gun_bullet_x_offset,Y
@@ -1924,7 +1968,7 @@ ENDIF
 .gun_bullet_y_offset
         EQUB    $00,$08,$00,$08
 
-.gun_param_table                        ; not sure what this is used for?
+.gun_spread_mask_table                        ; not sure what this is used for?
         EQUB    $01,$03,$07,$0F
 
 \ ******************************************************************************
@@ -6239,12 +6283,19 @@ ENDIF
         BEQ     next_X2
 
         LDA     particles_type,X
+IF _SWRAM_BUILD
+        CMP     #PARTICLE_type_hostile_heavy_bullet
+        BEQ     mark_hostile_lifetime
+ENDIF
         CMP     #PARTICLE_type_hostile_bullet
         BNE     L29D1
+IF _SWRAM_BUILD
+    .mark_hostile_lifetime
+ENDIF
 
         LDA     #$81
         STA     particles_lifetime,X
-        
+
     .L29D1
         LDA     particles_type,X
         CMP     #PARTICLE_type_debris
@@ -6269,6 +6320,13 @@ ENDIF
         AND     #$7F
         STA     particles_lifetime,X
         LDA     particles_type,X
+IF _SWRAM_BUILD
+        CMP     #PARTICLE_type_hostile_heavy_bullet
+        BNE     skip_heavy_impulse
+        JSR     apply_heavy_impulse_to_ship
+        LDA     particles_type,X                 ; reload A clobbered by JSR
+    .skip_heavy_impulse
+ENDIF
         CMP     #PARTICLE_type_hostile_bullet
         BCC     next_X2
 
@@ -6289,8 +6347,15 @@ ENDIF
 .test_particle_X_close_to_player
 {
         LDA     particles_type,X
+IF _SWRAM_BUILD
+        CMP     #PARTICLE_type_hostile_heavy_bullet
+        BEQ     is_hostile
+ENDIF
         CMP     #PARTICLE_type_hostile_bullet
         BNE     return
+IF _SWRAM_BUILD
+    .is_hostile
+ENDIF
 
         LDA     particles_xpos_INT,X
         SBC     player_xpos_INT
@@ -6343,6 +6408,11 @@ ENDIF
 
 .hostile_bullet_pixel_byte
         EQUB    $F0
+IF _SWRAM_BUILD
+        EQUB    $00                             ; [4] random_debris (placeholder)
+.heavy_bullet_pixel_byte
+        EQUB    $F0                             ; [5] hostile_heavy_bullet (same look as hostile)
+ENDIF
 
 \ ******************************************************************************
 \ * Function: particle_move_index_X
@@ -6714,10 +6784,10 @@ ENDIF
         LDA     level_obj_type_lookup_HI,X
         STA     level_obj_type_addr_HI                    ; **MODIFIES CODE**
 
-        LDA     level_gun_param_lookup_LO,X
-        STA     level_gun_param_addr_LO                    ; **MODIFIES CODE**
-        LDA     level_gun_param_lookup_HI,X
-        STA     level_gun_param_addr_HI                    ; **MODIFIES CODE**
+        LDA     level_gun_aim_lookup_LO,X
+        STA     level_gun_aim_addr_LO                    ; **MODIFIES CODE**
+        LDA     level_gun_aim_lookup_HI,X
+        STA     level_gun_aim_addr_HI                    ; **MODIFIES CODE**
 
         TXA
         ROR     A                                        ; level_number /= 2
@@ -6989,15 +7059,15 @@ ENDIF
         EQUB    LO(level_4_obj_type), HI(level_4_obj_type)
         EQUB    LO(level_5_obj_type), HI(level_5_obj_type)
 
-.level_gun_param_lookup_LO
-        EQUB    LO(level_0_gun_param)
-.level_gun_param_lookup_HI
-        EQUB    HI(level_0_gun_param)
-        EQUB    LO(level_1_gun_param), HI(level_1_gun_param)
-        EQUB    LO(level_2_gun_param), HI(level_2_gun_param)
-        EQUB    LO(level_3_gun_param), HI(level_3_gun_param)
-        EQUB    LO(level_4_gun_param), HI(level_4_gun_param)
-        EQUB    LO(level_5_gun_param), HI(level_5_gun_param)
+.level_gun_aim_lookup_LO
+        EQUB    LO(level_0_gun_aim)
+.level_gun_aim_lookup_HI
+        EQUB    HI(level_0_gun_aim)
+        EQUB    LO(level_1_gun_aim), HI(level_1_gun_aim)
+        EQUB    LO(level_2_gun_aim), HI(level_2_gun_aim)
+        EQUB    LO(level_3_gun_aim), HI(level_3_gun_aim)
+        EQUB    LO(level_4_gun_aim), HI(level_4_gun_aim)
+        EQUB    LO(level_5_gun_aim), HI(level_5_gun_aim)
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -9899,7 +9969,7 @@ skip &480
 \ * Modified level data. Potentially larger than original so requires SWRAM.
 \ ******************************************************************************
 
-INCLUDE "tools/output/thrust_levels_export.asm"
+INCLUDE "tools/output/thrust_levels_export2.asm"
 
 \ ******************************************************************************
 \ * Modified object sprite data. Potentially larger than original so requires SWRAM.
@@ -9990,6 +10060,42 @@ IF _THRUST_PARTICLES
         RTS
 }
 ENDIF
+
+\ ******************************************************************************
+\ * Function: apply_heavy_impulse_to_ship
+\ * Params: X = particle index (the heavy bullet)
+\ * Returns: none (clobbers A)
+\ * Description: Nudges the ship's force vector by the heavy bullet's velocity
+\ * when the bullet is absorbed by the shield. Scales the per-frame particle
+\ * velocity down by 4 (arithmetic shift right 2, sign-preserving) before
+\ * adding to force_vectorx_INT / force_vectory_INT -- one full shot direct
+\ * into force_INT was too strong in playtesting.
+\ *
+\ * Sign-preserving /2: CMP #$80 puts bit 7 of A into carry, ROR then shifts
+\ * that bit back in as the new MSB. Doing it twice gives /4 arithmetic.
+\ ******************************************************************************
+
+.apply_heavy_impulse_to_ship
+{
+        LDA     particles_dx_INT,X
+        CMP     #$80
+        ROR     A                        ; dx / 2 (sign-preserving)
+        CMP     #$80
+        ROR     A                        ; dx / 4
+        CLC
+        ADC     force_vectorx_INT
+        STA     force_vectorx_INT
+
+        LDA     particles_dy_INT,X
+        CMP     #$80
+        ROR     A                        ; dy / 2
+        CMP     #$80
+        ROR     A                        ; dy / 4
+        CLC
+        ADC     force_vectory_INT
+        STA     force_vectory_INT
+        RTS
+}
 
 IF PARTICLE_table_max<>$1F
 .particles_xpos_FRAC    SKIP PARTICLE_table_max+1 ; 32 entries, fractional X position

@@ -120,6 +120,19 @@
         EQUB    $07,$01,$08,$02,$04,$04,$08,$08
         EQUB    $08,$08,$04,$04,$02,$01,$08,$07
 
+.obj_sprite_data_A_heavy_turret_up_right
+        EQUB    $88,$10,$18,$80,$08,$10,$18,$80
+        EQUB    $10,$18,$80,$10,$18,$20,$80,$08
+        EQUB    $18,$20,$90,$18,$20,$90,$18,$20
+        EQUB    $98,$20,$98,$20,$A0,$A0,$A0,$A0
+        EQUB    $A0,$FF
+.obj_sprite_data_B_heavy_turret_up_right
+        EQUB    $60,$70,$80,$10,$90,$80,$60,$60
+        EQUB    $60,$10,$80,$10,$80,$80,$F0,$F0
+        EQUB    $60,$80,$E0,$10,$80,$10,$80,$60
+        EQUB    $60,$10,$10,$10,$90,$90,$50,$50
+        EQUB    $30,$FF
+
 .obj_sprite_data_A_table_LO
         EQUB    LO(obj_sprite_data_A_gun_up_right)
         EQUB    LO(obj_sprite_data_A_gun_down_right)
@@ -130,6 +143,7 @@
         EQUB    LO(obj_sprite_data_A_generator)
         EQUB    LO(obj_sprite_data_A_door_switch_right)
         EQUB    LO(obj_sprite_data_A_door_switch_left)
+        EQUB    LO(obj_sprite_data_A_heavy_turret_up_right)
 
 .obj_sprite_data_A_table_HI
         EQUB    HI(obj_sprite_data_A_gun_up_right)
@@ -141,6 +155,7 @@
         EQUB    HI(obj_sprite_data_A_generator)
         EQUB    HI(obj_sprite_data_A_door_switch_right)
         EQUB    HI(obj_sprite_data_A_door_switch_left)
+        EQUB    HI(obj_sprite_data_A_heavy_turret_up_right)
 
 .obj_sprite_data_B_table_LO
         EQUB    LO(obj_sprite_data_B_gun_up_right)
@@ -152,6 +167,7 @@
         EQUB    LO(obj_sprite_data_B_generator)
         EQUB    LO(obj_sprite_data_B_door_switch_right)
         EQUB    LO(obj_sprite_data_B_door_switch_left)
+        EQUB    LO(obj_sprite_data_B_heavy_turret_up_right)
 
 .obj_sprite_data_B_table_HI
         EQUB    HI(obj_sprite_data_B_gun_up_right)
@@ -163,3 +179,4 @@
         EQUB    HI(obj_sprite_data_B_generator)
         EQUB    HI(obj_sprite_data_B_door_switch_right)
         EQUB    HI(obj_sprite_data_B_door_switch_left)
+        EQUB    HI(obj_sprite_data_B_heavy_turret_up_right)

@@ -55,7 +55,7 @@ Implemented behind the `_THRUST_PARTICLES` build flag (SWRAM builds). Spawns deb
 
 ### Current enemies
 
-Only gun emplacements exist, in 4 directional variants (types $00-$03). They fire probabilistically using the shared particle pool with type `PARTICLE_type_hostile_bullet` ($03). Gun firing angle is determined by `gun_base_angle` (3 bits from `gun_param`) plus random spread masked by `gun_angle_spread_mask` (2 bits from `gun_param`).
+Only gun emplacements exist, in 4 directional variants (types $00-$03). They fire probabilistically using the shared particle pool with type `PARTICLE_type_hostile_bullet` ($03). Gun firing angle is determined by `gun_base_angle` (3 bits from `gun_aim`) plus random spread masked by `gun_angle_spread_mask` (2 bits from `gun_aim`).
 
 ### New enemy bullet types
 

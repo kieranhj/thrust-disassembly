@@ -46,7 +46,7 @@ from visualise_levels import (
 )
 
 # Gun param data per level (extracted from thrust.6502)
-GUN_PARAM_DATA = {
+GUN_AIM_DATA = {
     0: [0x00, 0x00, 0x00, 0x1E],
     1: [0x00, 0x00, 0x00, 0x06, 0x0F],
     2: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1B, 0x06, 0x0A, 0x16, 0x04],
@@ -260,7 +260,7 @@ def import_beebasm(path):
         obj_y = labels.get(f"level_{n}_obj_pos_Y", [])
         obj_y_ext = labels.get(f"level_{n}_obj_pos_Y_EXT", [])
         obj_type = labels.get(f"level_{n}_obj_type", [])
-        gun_param = labels.get(f"level_{n}_gun_param", [])
+        gun_aim = labels.get(f"level_{n}_gun_aim", [])
 
         # Remove $FF terminator from type list
         types = [t for t in obj_type if t != 0xFF]
@@ -269,12 +269,12 @@ def import_beebasm(path):
         for i in range(len(types)):
             y_world = ((obj_y_ext[i] if i < len(obj_y_ext) else 0) << 8) | \
                       (obj_y[i] if i < len(obj_y) else 0)
-            gp = gun_param[i] if i < len(gun_param) else 0x00
+            gp = gun_aim[i] if i < len(gun_aim) else 0x00
             objects.append({
                 "x": obj_x[i] if i < len(obj_x) else 0,
                 "y": y_world,
                 "type": types[i],
-                "gun_param": gp,
+                "gun_aim": gp,
             })
 
         # Colours (may not be present in older exports)
@@ -511,8 +511,8 @@ def export_beebasm(levels):
             lines.append(f"        EQUB    {format_bytes([o['y'] >> 8 for o in obj])}")
             lines.append(f".level_{n}_obj_type")
             lines.append(f"        EQUB    {format_bytes([o['type'] for o in obj] + [0xFF])}")
-            lines.append(f".level_{n}_gun_param")
-            lines.append(f"        EQUB    {format_bytes([o.get('gun_param', 0x00) for o in obj])}")
+            lines.append(f".level_{n}_gun_aim")
+            lines.append(f"        EQUB    {format_bytes([o.get('gun_aim', 0x00) for o in obj])}")
             lines.append("")
 
     # Gravity table
@@ -614,7 +614,7 @@ class LevelData:
         self.level_num = level_num
         self.left_wall = left_wall   # list[int] X per Y row
         self.right_wall = right_wall
-        self.objects = objects        # list[dict] with x, y, type, gun_param keys
+        self.objects = objects        # list[dict] with x, y, type, gun_aim keys
         self.terrain_rle = terrain_rle  # original RLE arrays {"A","B","C","D"}
         self.landscape_colour = landscape_colour if landscape_colour is not None \
             else LEVEL_LANDSCAPE_COLOUR[level_num]  # BBC physical colour 0-7
@@ -634,16 +634,16 @@ class LevelData:
         # Store original RLE data for byte-identical export
         td = TERRAIN_DATA[level_num]
         terrain_rle = {k: list(v) for k, v in td.items()}
-        # Build objects with gun_param
+        # Build objects with gun_aim
         od = OBJECT_DATA[level_num]
-        # Get gun_param from the source data
-        gun_params = GUN_PARAM_DATA.get(level_num, [])
+        # Get gun_aim from the source data
+        gun_aims = GUN_AIM_DATA.get(level_num, [])
         objects = []
         for i in range(len(od["type"])):
             y_world = (od["Y_EXT"][i] << 8) | od["Y"][i]
-            gp = gun_params[i] if i < len(gun_params) else 0x00
+            gp = gun_aims[i] if i < len(gun_aims) else 0x00
             objects.append({"x": od["X"][i], "y": y_world,
-                            "type": od["type"][i], "gun_param": gp})
+                            "type": od["type"][i], "gun_aim": gp})
         return cls(level_num, list(left), list(right), objects, terrain_rle)
 
     @property
@@ -1553,7 +1553,7 @@ class Editor:
             obj_type = types[idx]
             self.undo.save(self.level)
             wx, wy = self.obj_menu_world
-            self.level.objects.append({"x": wx, "y": wy, "type": obj_type, "gun_param": 0x00})
+            self.level.objects.append({"x": wx, "y": wy, "type": obj_type, "gun_aim": 0x00})
             self.level.dirty = True
             self.selected_object = len(self.level.objects) - 1
         self.show_obj_menu = False
