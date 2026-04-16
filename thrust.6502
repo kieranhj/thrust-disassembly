@@ -110,6 +110,9 @@ OBJECT_door_switch_right            = $7        ; door switch (right side)
 OBJECT_door_switch_left             = $8        ; door switch (left side)
 OBJECT_heavy_turret_up_right        = $9        ; heavy turret facing up-right (SWRAM only)
 
+OBJ_flag_drawn                      = $01       ; level_obj_flags bit 0: sprite was XOR-plotted (needs erase before redraw)
+OBJ_flag_alive                      = $02       ; level_obj_flags bit 1: object is active (update + draw + collide)
+
 PARTICLE_flag                       = $80       ; particle can be replaced
 PARTICLE_lifetime_bullet            = $28       ; bullet lifetime in ticks
 PARTICLE_lifetime_generator         = $0A       ; generator debris lifetime
@@ -1499,8 +1502,8 @@ ENDIF
 \ *  11. Plot sprite at new on-screen position and cache it for next frame.
 \ *
 \ * Flags on level_obj_flags,X (see banner above .level_obj_flags for layout):
-\ *     bit 0 = moved-this-frame (set by physics — triggers visibility test)
-\ *     bit 1 = ALIVE             (clear → skip draw + collisions + behaviour)
+\ *     OBJ_flag_drawn (bit 0): sprite was XOR-plotted last frame (needs erase)
+\ *     OBJ_flag_alive (bit 1): clear → skip draw + collisions + behaviour
 \ ******************************************************************************
 
 .update_and_draw_all_objects
@@ -1543,13 +1546,13 @@ ENDIF
         BNE     check_generator_blink
 
         LDA     level_obj_flags,X
-        ORA     #$02
+        ORA     #OBJ_flag_alive
         STA     level_obj_flags,X
         LDA     pod_attached_flag_2
         BEQ     check_generator_blink
 
         LDA     level_obj_flags,X
-        AND     #$FD
+        AND     #($FF EOR OBJ_flag_alive)
         STA     level_obj_flags,X
 
 \ --- 2b. generator: blink ALIVE bit on/off while planet countdown is active ---
@@ -1567,13 +1570,13 @@ ENDIF
         BNE     generator_blink_off
 
         LDA     level_obj_flags,X               ; on-phase: set ALIVE
-        ORA     #$02
+        ORA     #OBJ_flag_alive
         STA     level_obj_flags,X
         JMP     load_sprite_pointers
 
     .generator_blink_off
         LDA     level_obj_flags,X               ; off-phase: clear ALIVE
-        AND     #$FD
+        AND     #($FF EOR OBJ_flag_alive)
         STA     level_obj_flags,X
 
 \ --- 3. Load this type's sprite A/B pointers via self-mod inside plot_static_sprite ---
@@ -1590,10 +1593,10 @@ ENDIF
         STA     update_objects_flag
         STA     obj_plot_sprite_at_ptr+1
         LDA     level_obj_flags,X
-        ROR     A                                   ; shift bit 0 (moved) into C
-        BCC     test_alive_flag                     ; not moved → skip visibility
+        ROR     A                                   ; shift OBJ_flag_drawn (bit 0) into C
+        BCC     test_alive_flag                     ; not drawn last frame → nothing to erase
 
-        JSR     object_visibility_test              ; moved → recompute plot pos
+        JSR     object_visibility_test              ; was drawn: recompute new plot pos
 
 \ --- Dirty-rect check: if new plot ptr == cached ptr AND still alive, skip redraw ---
         LDX     current_object
@@ -1608,7 +1611,7 @@ ENDIF
         BNE     erase_old_sprite
 
         LDA     level_obj_flags,X
-        AND     #$02
+        AND     #OBJ_flag_alive
         BEQ     erase_old_sprite                    ; died → erase old
 
         LDA     #$FF                                ; unchanged → mark "no redraw"
@@ -1625,13 +1628,13 @@ ENDIF
 
         LDX     current_object
         LDA     level_obj_flags,X
-        AND     #$FE
+        AND     #($FF EOR OBJ_flag_drawn)           ; no longer on screen after XOR-erase
         STA     level_obj_flags,X
 
 \ --- 5. If ALIVE bit is clear, skip the rest of the per-object work ---
     .test_alive_flag
         LDA     level_obj_flags,X
-        AND     #$02
+        AND     #OBJ_flag_alive
         BNE     compute_visibility_if_needed
 
         JMP     next_object
@@ -1782,7 +1785,7 @@ ENDIF
     .destroy_object
         LDX     current_object
         LDA     level_obj_flags,X
-        AND     #$FD
+        AND     #($FF EOR OBJ_flag_alive)
         STA     level_obj_flags,X
         LDA     current_obj_xpos_INT
         ADC     #$02
@@ -1858,7 +1861,7 @@ ENDIF
         BCC     try_gun_fire
 
         LDA     level_obj_flags,X                   ; fuel collected: clear ALIVE, score, sfx
-        AND     #$FD
+        AND     #($FF EOR OBJ_flag_alive)
         STA     level_obj_flags,X
         LDA     #$30
         JSR     accumulate_score_A
@@ -2183,7 +2186,7 @@ ENDIF
 \\ {
         LDX     current_object
         LDA     level_obj_flags,X
-        ORA     #$01
+        ORA     #OBJ_flag_drawn
         STA     level_obj_flags,X
         LDA     plot_sprite_at_ptr
         AND     #$07
@@ -4881,8 +4884,8 @@ ENDIF ; _FAST_SPRITES=FALSE
         BNE     L1FD3
 
         LDA     level_obj_flags                ; what's special about first entry in table? -> must be pod!
-        AND     #$03
-        CMP     #$03
+        AND     #(OBJ_flag_drawn OR OBJ_flag_alive)
+        CMP     #(OBJ_flag_drawn OR OBJ_flag_alive)
         BEQ     L1FD3
 
         RTS
@@ -6089,10 +6092,12 @@ ENDIF
 
 \ ******************************************************************************
 \ * level_obj_flags: per-object state bits (one byte per object slot, 20 slots).
-\ * Indexed by current_object (0-19). Initialised to $02 for all slots at level
-\ * load (see initialise_level_pointers at initialise_sprite_table_A).
+\ * Indexed by current_object (0-19). Initialised to OBJ_flag_alive for all
+\ * slots at level load (see initialise_level_pointers at
+\ * initialise_sprite_table_A). Flag bit constants live near the OBJECT_*
+\ * block at the top of the file.
 \ *
-\ *   bit 0 ($01) "sprite drawn"
+\ *   bit 0  OBJ_flag_drawn ($01) "sprite drawn"
 \ *                    Set by plot_static_sprite after XORing pixels to screen.
 \ *                    Tested each frame by the update loop (ROR into carry):
 \ *                    when set, the object's previous pixels must be erased
@@ -6100,7 +6105,7 @@ ENDIF
 \ *                    Cleared after re-plotting in the same location, and
 \ *                    cleared for all slots on screen wipe / level reset.
 \ *
-\ *   bit 1 ($02) "active / alive"
+\ *   bit 1  OBJ_flag_alive ($02) "active / alive"
 \ *                    Cleared on destroy (bullet hit), when fuel has been
 \ *                    fully tractor-collected, when the pod attaches to its
 \ *                    pod_stand, and while the generator is in its exploding
@@ -6111,11 +6116,12 @@ ENDIF
 \ *   bits 2-7         unused.
 \ *
 \ * Special case: update_pod_tractor_beam reads level_obj_flags (no ,X -
-\ * hardcoded index 0) and tests AND #$03 == $03. This is the "pod must be
-\ * object index 0" coupling noted in docs/ideas.md.
+\ * hardcoded index 0) and tests that both OBJ_flag_drawn and OBJ_flag_alive
+\ * are set. This is the "pod must be object index 0" coupling noted in
+\ * docs/ideas.md.
 \ ******************************************************************************
 
-.level_obj_flags                                        ; initialised to $02 at start of level
+.level_obj_flags                                        ; initialised to OBJ_flag_alive at start of level
 {
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
@@ -6855,7 +6861,7 @@ ENDIF
         LDX     #LEVEL_MAX_OBJECTS                                    ; max objects per level
         
     .initialise_sprite_table_A
-        LDA     #$02
+        LDA     #OBJ_flag_alive
         STA     level_obj_flags,X
         DEX
         BPL     initialise_sprite_table_A
@@ -9348,7 +9354,7 @@ SET_BG_COL PAL_black
         
     .L3A18
         LDA     level_obj_flags,X
-        AND     #$FE
+        AND     #($FF EOR OBJ_flag_drawn)
         STA     level_obj_flags,X
         DEX
         BPL     L3A18

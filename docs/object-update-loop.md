@@ -36,14 +36,16 @@ rather than destroyed.
 ## `level_obj_flags[X]` Bit Layout
 
 The per-object flags byte drives the loop's state machine. Full layout is
-annotated at `thrust.6502:5980`; the two bits the update loop cares about are:
+annotated above `.level_obj_flags` in `thrust.6502`; the two bits the update
+loop cares about are:
 
-| Bit | Name | Meaning |
-|-----|------|---------|
-| 0 | `MOVED` | Set by physics when the object's on-screen cell may have changed. Consumed by step 3 (visibility test) and cleared in step 4 (erase old). |
-| 1 | `ALIVE` | `1` = render + apply behaviour. `0` = skip draw, collisions, and per-type ticks. |
+| Bit | Constant | Meaning |
+|-----|----------|---------|
+| 0 | `OBJ_flag_drawn` | Set by `plot_static_sprite` after XOR-plotting the sprite; cleared once the sprite is erased. When set on entry to the update loop, the previous sprite is still on-screen and must be erased before moving or hiding it. |
+| 1 | `OBJ_flag_alive` | `1` = render + apply behaviour. `0` = skip draw, collisions, and per-type ticks. |
 
-Other bits (`$04`, `$08`, `$10`…) are used by non-update-loop code.
+Bits 2..7 are unused. Constants are defined in the `OBJ_flag_*` block near the
+`OBJECT_*` constants at the top of `thrust.6502`.
 
 ## The Per-Object Loop
 
@@ -83,30 +85,31 @@ cleared in destroy / pickup paths.
 Select the sprite pointers for the current type from
 `obj_sprite_data_A/B_table_LO/HI` (indexed by `object_type`).
 
-If `MOVED` is set, run `object_visibility_test`. This populates
-`obj_plot_sprite_at_ptr` with either a screen address (visible) or `$0000`
-(culled). Then compare:
+If `OBJ_flag_drawn` is set (the sprite is still on-screen from last frame),
+run `object_visibility_test` to compute where it *should* plot this frame.
+This populates `obj_plot_sprite_at_ptr` with either a screen address (visible)
+or `$0000` (culled). Then compare:
 
 * New plot ptr == cached `level_obj_plot_at_ptr_{LO,HI}[X]`?
-* `ALIVE` still set?
+* `OBJ_flag_alive` still set?
 
 If both hold, set `update_objects_flag = $FF` to tell phase 11 "no redraw
 needed", and skip straight to phase 6 (bullet/player collision still runs).
 
 ### 4. Erase old sprite
 
-If the decision in phase 3 was "needs redraw" (moved cell, culled, or just
+If the decision in phase 3 was "needs redraw" (new cell, culled, or just
 died), plot the sprite at the *cached* position first. Because
 `plot_static_sprite` is an XOR plotter, re-plotting at the old cell erases it.
-Then clear `MOVED` (`AND #$FE`).
+Then clear `OBJ_flag_drawn` (the sprite is no longer on-screen).
 
-### 5. `ALIVE` gate
+### 5. `OBJ_flag_alive` gate
 
-If `ALIVE` is clear now (e.g. we just erased a dead object), jump straight to
-`next_object`. Everything from here on is for live objects.
+If `OBJ_flag_alive` is clear now (e.g. we just erased a dead object), jump
+straight to `next_object`. Everything from here on is for live objects.
 
-If `ALIVE` is set but `obj_plot_sprite_at_ptr+1` wasn't set in phase 3 (because
-`MOVED` was 0), run `object_visibility_test` now to populate it.
+If alive but `obj_plot_sprite_at_ptr+1` wasn't set in phase 3 (because
+`OBJ_flag_drawn` was clear), run `object_visibility_test` now to populate it.
 
 ### 6. Planet-explode trigger
 
@@ -204,11 +207,13 @@ The loop avoids an unconditional erase+redraw every frame. Instead:
 
 1. Each object caches the screen address it was last plotted to
    (`level_obj_plot_at_ptr_{LO,HI}[X]`).
-2. When physics hasn't flagged `MOVED`, the loop doesn't even run the
-   visibility test — it just plots straight from the cached address.
-3. When `MOVED` is set *but* visibility says the object hasn't actually
-   changed cell (sub-pixel motion) AND is still `ALIVE`, the loop sets
-   `update_objects_flag` to suppress the redraw entirely.
+2. When `OBJ_flag_drawn` is clear (the sprite was previously erased or has
+   never been plotted), the loop doesn't run the visibility test — it just
+   plots at the current position.
+3. When `OBJ_flag_drawn` is set *but* the fresh visibility test gives the same
+   cell as last frame AND `OBJ_flag_alive` is still set, the loop sets
+   `update_objects_flag` to suppress the redraw entirely — the sprite on
+   screen is already correct.
 
 Only when the object genuinely needs erasing (moved cell, culled, died) does
 the loop XOR at the cached position and then XOR-plot at the new one.
