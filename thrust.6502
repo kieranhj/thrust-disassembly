@@ -223,8 +223,8 @@ old_draw_line_end_x                 = $0047     ; remembers draw_line_end_x
 old_draw_line_start_y               = $0048     ; remembers draw_line_start_y
 old_draw_line_end_y                 = $0049     ; remembers draw_line_end_y
 line_drawn_flag                     = $004A     ; 0 or $FF set in draw_new_line, unset in erase_old_line
-player_xdist_in_window_INT            = $004B     ; calculated in update_window_and_terrain_tables
-player_ydist_in_window_INT            = $004C     ; "
+player_xdist_in_window_INT          = $004B     ; calculated in update_window_and_terrain_tables
+player_ydist_in_window_INT          = $004C     ; "
 midpoint_deltax_FRAC_LO             = $004D     ; "
 ship_window_xpos_FRAC               = $004E     ; calculated in update_shield_tractor_draw_ship_and_pod
 ship_window_xpos_INT                = $004F     ; *think* these are relative to the window position
@@ -1721,7 +1721,7 @@ ENDIF
         JMP     create_explosion
 
     .delete_object
-        JMP     remove_object_from_level_GUESS
+        JMP     object_bullet_test_done
 
     .L0F7D
         LDA     object_type
@@ -1751,15 +1751,15 @@ ENDIF
 
         JSR     create_explosion
 
-        JMP     remove_object_from_level_GUESS
+        JMP     object_bullet_test_done
 
     .L0FAA
         DEX
-        BMI     remove_object_from_level_GUESS
+        BMI     object_bullet_test_done
 
         JMP     bullet_test_loop
 
-    .remove_object_from_level_GUESS
+    .object_bullet_test_done
         LDA     pod_destroying_player_timer
         BMI     L0FB7
 
@@ -2689,13 +2689,19 @@ ENDIF
 \ ******************************************************************************
 
 \ ******************************************************************************
-\ * Function: attach_pod_calculate_UNKNOWN
-\ * Params: A = <unknown input>
-\ * Returns: none
-\ * Description: Multiplies two signed 8-bit values into a 16-bit result
+\ * Function: multiply_signed_8x8
+\ * Params: A = signed 8-bit multiplicand (stored into multiply_operand_b);
+\ *         multiply_operand_a = signed 8-bit multiplier (pre-set by caller)
+\ * Returns: multiply_result_hi:multiply_result_lo = signed 16-bit product
+\ * Corrupts: A, X, multiply_operand_a, multiply_operand_b, multiply_sign_ext
+\ * Description: Signed 8x8 -> 16 multiply using a standard shift-and-add loop.
+\ *   If multiply_operand_a is negative, both operands are two's-complement
+\ *   negated up-front, so the result's sign comes out correct without a final
+\ *   fix-up. multiply_sign_ext holds the sign extension of operand_b and is
+\ *   added (instead of 0) on each shift so the high byte accumulates signed.
 \ ******************************************************************************
 
-.attach_pod_calculate_UNKNOWN
+.multiply_signed_8x8
 {
         STA     multiply_operand_b
         LDA     #$00
@@ -5177,7 +5183,7 @@ ENDIF ; _FAST_SPRITES=FALSE
         ROL     A
         ROL     multiply_operand_a              ; project X force onto tether frame
         LDA     attach_pod_delta_y_scaled
-        JSR     attach_pod_calculate_UNKNOWN    ; multiply/projection helper
+        JSR     multiply_signed_8x8             ; (force_x << 4) * delta_y_scaled
 
         LDA     multiply_result_lo
         STA     cross_product_term_lo
@@ -5195,7 +5201,7 @@ ENDIF ; _FAST_SPRITES=FALSE
         ROL     A
         ROL     multiply_operand_a              ; project Y force similarly
         LDA     delta_x_scaled
-        JSR     attach_pod_calculate_UNKNOWN
+        JSR     multiply_signed_8x8             ; (force_y << 4) * delta_x_scaled
 
 ; Compute net angular impulse (difference of projections)
 
