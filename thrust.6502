@@ -27,13 +27,14 @@
 \ *****************************************************************************
 \ *****************************************************************************
 
-_SWRAM_BUILD       = TRUE
+_SWRAM_BUILD         = TRUE
 
-_DEBUG_RASTERS     = (_SWRAM_BUILD AND FALSE)   ; Raster timing
-_UNROLL_TERRAIN    = (_SWRAM_BUILD AND TRUE)    ; Faster terrain plotting
-_FRIENDLY_KEYS     = (_SWRAM_BUILD AND TRUE)    ; Emulator friendly key map
-_THRUST_PARTICLES  = (_SWRAM_BUILD AND TRUE)    ; Generate thrust particles
-_FAST_SPRITES      = (_SWRAM_BUILD AND TRUE)    ; Pre-baked two-stream ship sprites
+_DEBUG_RASTERS       = (_SWRAM_BUILD AND FALSE)   ; Raster timing
+_UNROLL_TERRAIN      = (_SWRAM_BUILD AND TRUE)    ; Faster terrain plotting
+_FRIENDLY_KEYS       = (_SWRAM_BUILD AND TRUE)    ; Emulator friendly key map
+_THRUST_PARTICLES    = (_SWRAM_BUILD AND TRUE)    ; Generate thrust particles
+_FAST_SPRITES        = (_SWRAM_BUILD AND FALSE)   ; Pre-baked two-stream ship sprites
+_NO_WRAP_UNDERGROUND = (_SWRAM_BUILD AND TRUE)    ; Skip X wrap when below surface
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -136,8 +137,8 @@ PLANET_COUNTDOWN_SECONDS            = $0A       ; planet countdown timer in seco
 POD_DESTROY_TIMER_INIT              = $3C       ; pod destroying player timer initial value (60 ticks)
 TRACTOR_BEAM_ACTIVATE_DIST          = $75       ; distance threshold to activate tractor beam
 TRACTOR_BEAM_ATTACH_DIST            = $84       ; distance threshold to attach pod
-WORLD_X_WRAP_THRESHOLD              = (256 - SCREEN_WIDTH_CHARS) ; $B8 - X position wrap point
-WORLD_X_WRAP_FORWARD                = (SCREEN_WIDTH_CHARS + 1) ; $49 - forward wrap delta
+WORLD_X_WRAP_THRESHOLD              = (256 - SCREEN_WIDTH_CHARS)           ; $B8 - X position wrap point
+WORLD_X_WRAP_FORWARD                = (SCREEN_WIDTH_CHARS + 1)             ; $49 - forward wrap delta
 WORLD_X_WRAP_BACKWARD               = (0 - SCREEN_WIDTH_CHARS - 1) AND $FF ; $B7 - backward wrap delta
 
 \ ******************************************************************************
@@ -220,8 +221,8 @@ old_draw_line_end_x                 = $0047     ; remembers draw_line_end_x
 old_draw_line_start_y               = $0048     ; remembers draw_line_start_y
 old_draw_line_end_y                 = $0049     ; remembers draw_line_end_y
 line_drawn_flag                     = $004A     ; 0 or $FF set in draw_new_line, unset in erase_old_line
-midpoint_window_xpos_INT            = $004B     ; calculated in update_window_and_terrain_tables
-midpoint_window_ypos_INT            = $004C     ; "
+player_xdist_in_window_INT            = $004B     ; calculated in update_window_and_terrain_tables
+player_ydist_in_window_INT            = $004C     ; "
 midpoint_deltax_FRAC_LO             = $004D     ; "
 ship_window_xpos_FRAC               = $004E     ; calculated in update_shield_tractor_draw_ship_and_pod
 ship_window_xpos_INT                = $004F     ; *think* these are relative to the window position
@@ -463,8 +464,12 @@ mute_sound_flag                     = $00A2     ; set to non-zero to mute sound
 hostile_gun_shoot_probability       = $00A3     ; probability that a gun will shoot
 total_levels_played                 = $00A4     ; total number of levels played in one game
 invisible_landscape_flag            = $00A5     ; game var init 0 - inverted start of each level
-gravity_SIGN                         = $00A6     ; gravity vector for level (integer part)
+gravity_SIGN                        = $00A6     ; gravity vector for level (integer part)
 gravity_FRAC                        = $00A7     ; " (fractional part)
+IF _NO_WRAP_UNDERGROUND
+no_wrap_y_INT                       = $00A8     ; Y threshold below which X wrap is disabled
+no_wrap_y_INT_HI                    = $00A9     ; " high byte
+ENDIF
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -2694,21 +2699,20 @@ ENDIF
         LDA     window_scroll_x
         ADC     window_xpos_INT
         STA     window_xpos_INT
+
         CLC
         LDA     window_scroll_y
         BMI     L173B
-
         BEQ     L174F
 
         ADC     window_ypos_INT
         STA     window_ypos_INT
         BCC     L172C
-
         INC     window_ypos_EXT
-        
+
     .L172C
-        LDA     window_scroll_y
-        
+        LDA     window_scroll_y  
+
     .L172E
         PHA
         JSR     terrain_process_accumulate_xpos            ; increments terrain_window_y_index
@@ -2724,7 +2728,6 @@ ENDIF
         ADC     window_ypos_INT
         STA     window_ypos_INT
         BCS     L1743
-
         DEC     window_ypos_EXT
         
     .L1743
@@ -2747,125 +2750,180 @@ ENDIF
         SBC     window_ypos_INT
         SEC
         SBC     #SCREEN_ADDR_HI_OFFSET
-        STA     midpoint_window_ypos_INT
+        STA     player_ydist_in_window_INT
         SEC
         LDA     force_vectory_INT
         BMI     L1785
 
-        LDA     midpoint_window_ypos_INT
+        ; <= Player velocity is down.
+
+        LDA     player_ydist_in_window_INT
         CMP     #$5D
         BCS     L177D
 
+        ; <= Player inside lower scroll bound.
+
         LDA     window_scroll_y
         BMI     L177A
-
         BEQ     L177A
+
+        ; <= Window scrolling direction is down.
 
         LDX     force_vectory_INT
         INX
         CPX     window_scroll_y
         BCS     L177A
 
+        ; <= Scroll in y > force in y.
+
         DEC     window_scroll_y
         BNE     L177A
+
+        ; <= Slow down scroll in y.
 
         INC     window_scroll_y
         
     .L177A
-        JMP     L17A3
+        JMP     L17A3   ; done y down.
 
     .L177D
+        ; <= Player outside scroll boundary.
+
         LDX     force_vectory_INT
         INX
         STX     window_scroll_y
+
+        ; <= Set scroll y to force y+1.
+
         JMP     L17A3
 
     .L1785
-        LDA     midpoint_window_ypos_INT
+        ; Player heading upwards.
+
+        LDA     player_ydist_in_window_INT
         CMP     #$2F
         BCC     L179E
 
+        ; Player inside upper scroll bound.
+
         LDA     window_scroll_y
         BPL     L179B
+
+        ; <= Window scrolling direction is up.
 
         LDA     window_scroll_y
         CMP     force_vectory_INT
         BCS     L179B
 
+        ; <= Window scroll y < force y.
+
         INC     window_scroll_y
         BNE     L179B
+
+        ; <= Slow down scroll in y.
 
         DEC     window_scroll_y
         
     .L179B
-        JMP     L17A3
+        JMP     L17A3   ; done y up.
 
     .L179E
+        ; <= Player outside upper scroll bound.
+
         LDX     force_vectory_INT
         DEX
         STX     window_scroll_y
+
+        ; <= Set scroll y to force y-1.
         
     .L17A3
         LDA     window_scroll_y
-        BEQ     L17C0
-
+        BEQ     L17C0                   ; no scroll y?
         BMI     L17B6
 
-        LDA     midpoint_window_ypos_INT
+        ; <= Window scrolling down.
+
+        LDA     player_ydist_in_window_INT
         CMP     #$3C
         BCS     L17C0
 
+        ; <= Player reaching top of screen.
+
         LDA     #$00
         STA     window_scroll_y
+
+        ; <= Zero scroll in y.
+
         JMP     L17C0
 
     .L17B6
-        LDA     midpoint_window_ypos_INT
+        ; <= Window scrolling up.
+
+        LDA     player_ydist_in_window_INT
         CMP     #$50
         BCC     L17C0
 
+        ; <= Player reaching bottom of screen.
+
         LDA     #$00
         STA     window_scroll_y
-        
+
+        ; <= Zero scroll in y.
+
     .L17C0
         SEC
         LDA     midpoint_xpos_INT
         SBC     window_xpos_INT
-        STA     midpoint_window_xpos_INT
+        STA     player_xdist_in_window_INT
         SEC
         SBC     #$10
         BCS     L17D1
+
+        ; Player X dist < 16 - hit LH boundary.
 
         STA     window_scroll_x
         JMP     L17DC
 
     .L17D1
-        LDA     midpoint_window_xpos_INT
+        ; Player X dist >= 16.
+
+        LDA     player_xdist_in_window_INT
         SEC
         SBC     #$30
         BEQ     L17DC
-
         BCC     L17DC
+
+        ; Player X dist >= 48 - hit RH boundary.
 
         STA     window_scroll_x
         
     .L17DC
         LDA     window_scroll_x
-        BEQ     L1813
-
+        BEQ     L1813   ; no horizontal scroll.
         BMI     L17FC
 
-        LDA     midpoint_window_xpos_INT
+        ; <= Window scrolling right.
+
+        LDA     player_xdist_in_window_INT
         CMP     #$1D
         BCS     L17EF
 
+        ; <= Player central in X.
+
         LDA     #$00
         STA     window_scroll_x
+
+        ; <= Stop horizontal scroll.
+
         JMP     L1813
 
     .L17EF
+        ; <= Player not central.
+
         CMP     #$30
         BCS     L1813
+
+        ; <= Player inside right hand window boundary.
 
         DEC     window_scroll_x
         BNE     L1813
@@ -2873,24 +2931,60 @@ ENDIF
         INC     window_scroll_x
         JMP     L1813
 
+        ; <= Slow down horizontal scroll.
+
     .L17FC
-        LDA     midpoint_window_xpos_INT
+        ; <= Window scrolling left.
+
+        LDA     player_xdist_in_window_INT
         CMP     #$23
         BCC     L1809
+
+        ; <= Player central.
 
         LDA     #$00
         STA     window_scroll_x
         JMP     L1813
 
+        ; <= Stop horizontal scroll.
+
     .L1809
+        ; <= Player not central.
+
         CMP     #$10
         BCC     L1813
+
+        ; <= Player inside left window boundary.
 
         INC     window_scroll_x
         BNE     L1813
 
         DEC     window_scroll_x
+
+        ; <= Slow down horizontal scroll.
+
     .L1813
+IF _NO_WRAP_UNDERGROUND
+        \ Skip X wrap when player Y is below the no-wrap threshold.
+        LDA     player_ypos_INT_HI
+        CMP     no_wrap_y_INT_HI
+        BCC     do_wrap_check           ; player HI < threshold HI: above, do wrap
+        BNE     do_left_hand_clamp      ; player HI > threshold HI: below, skip wrap
+        LDA     player_ypos_INT
+        CMP     no_wrap_y_INT
+        BCC     do_wrap_check           ; player LO >= threshold LO: at/below, skip wrap
+        \ But still need to clamp to LHS to avoid landscape draw overflow.
+    .do_left_hand_clamp
+        LDA     window_xpos_INT
+        CMP     #$3
+        BCS     no_lh_clamp
+        LDA     #0
+        STA     window_scroll_x
+        .no_lh_clamp
+        JMP     L187E
+
+    .do_wrap_check
+ENDIF
         LDA     window_xpos_INT
         BEQ     L181B
 
@@ -4235,7 +4329,7 @@ ENDIF
         LDA     midpoint_ypos_FRAC
         ADC     midpoint_deltay_FRAC
         STA     ship_window_ypos_FRAC
-        LDA     midpoint_window_ypos_INT
+        LDA     player_ydist_in_window_INT
         ADC     midpoint_deltay_INT
         STA     ship_window_ypos_INT
         LDX     ship_angle
@@ -4266,7 +4360,7 @@ ENDIF
         ADC     midpoint_deltax_FRAC
         PHA
         STA     ship_window_xpos_FRAC
-        LDA     midpoint_window_xpos_INT
+        LDA     player_xdist_in_window_INT
         ADC     midpoint_deltax_INT
         STA     calc_ship_window_xpos_INT
         STA     ship_window_xpos_INT
@@ -5345,7 +5439,7 @@ ENDIF
         LDA     midpoint_ypos_FRAC
         SBC     midpoint_deltay_FRAC
         STA     pod_temp
-        LDA     midpoint_window_ypos_INT
+        LDA     player_ydist_in_window_INT
         SBC     midpoint_deltay_INT
         ROL     pod_temp
         ROL     A
@@ -5358,7 +5452,7 @@ ENDIF
         SBC     midpoint_deltax_FRAC
         STA     plot_pod_xpos_FRAC
         STA     pod_window_xpos_FRAC
-        LDA     midpoint_window_xpos_INT
+        LDA     player_xdist_in_window_INT
         SBC     midpoint_deltax_INT
         STA     plot_pod_xpos_INT
         STA     pod_window_xpos_INT
@@ -6496,6 +6590,12 @@ ENDIF
         LDX     level_number
         LDA     level_gravity_FRAC_table,X
         STA     gravity_FRAC
+IF _NO_WRAP_UNDERGROUND
+        LDA     level_no_wrap_y_table_LO,X
+        STA     no_wrap_y_INT
+        LDA     level_no_wrap_y_table_HI,X
+        STA     no_wrap_y_INT_HI
+ENDIF
 
         LDA     terrain_left_wall_counter_ptrs_LO,X
         STA     terrain_left_wall_counter_LO
@@ -10886,7 +10986,7 @@ IF _UNROLL_TERRAIN
         BEQ     draw_terrain_return             ; 2c
         ; 38c
 
-        CPX     #16                              ; not worth doing it for <16 columns
+        CPX     #9                              ; not worth doing it for <9 columns
         BCS     draw_terrain_unrolled
 
     .draw_terrain_loop

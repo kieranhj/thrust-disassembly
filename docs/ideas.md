@@ -90,6 +90,10 @@ The particle system's `particles_type` field ($07A0) could be extended with new 
 
 **Practical approach:** levels can be made significantly deeper without engine changes. Wider levels would require extending the X coordinate to 16 bits, which would touch many parts of the codebase.
 
+### Disabling X wrap underground (`_NO_WRAP_UNDERGROUND`)
+
+A per-level Y threshold can skip the X wrap logic when the player is below a configurable depth. The build flag, ZP variables, per-level data tables, level editor support (draggable no-wrap line), and a simple skip check at `L1813` are implemented. Currently works correctly for the right-hand wrap (forward) but **not the left-hand wrap** — when the player's X position reaches <= ~$18, the landscape wall lookup goes wrong and the right wall is drawn filling the screen with terrain, which destroys the player. The root cause is likely the `landscape_draw` world-to-screen subtraction or terrain wall array indexing breaking down when `window_xpos_INT` is near zero. The right side works because the window position stays in a valid range for the subtraction. Needs further investigation — may require rethinking how `landscape_draw` handles low window X values, or moving to 16-bit world X first. Flag is left `FALSE` for now.
+
 ---
 
 ## Gameplay / level concepts

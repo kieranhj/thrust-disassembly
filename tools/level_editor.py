@@ -303,8 +303,17 @@ def import_beebasm(path):
         gravity_table = labels.get("level_gravity_FRAC_table", [])
         grav = gravity_table[n] if n < len(gravity_table) else None
 
+        # No-wrap Y threshold (may not be present in older exports)
+        nw_lo = labels.get("level_no_wrap_y_table_LO", [])
+        nw_hi = labels.get("level_no_wrap_y_table_HI", [])
+        if n < len(nw_lo) and n < len(nw_hi):
+            no_wrap_y = (nw_hi[n] << 8) | nw_lo[n]
+        else:
+            no_wrap_y = None
+
         lv = LevelData(n, list(left_wall), list(right_wall), objects,
-                        terrain_rle, land_col, obj_col, checkpoints, grav)
+                        terrain_rle, land_col, obj_col, checkpoints, grav,
+                        no_wrap_y)
         levels.append(lv)
 
     return levels
@@ -515,6 +524,18 @@ def export_beebasm(levels):
     lines.append(f"        EQUB    {format_bytes([lv.gravity for lv in levels])}")
     lines.append("")
 
+    # No-wrap Y threshold table
+    lines.append("\\ ******************************************************************************")
+    lines.append("\\ * No-wrap Y threshold per level")
+    lines.append("\\ * X wrap disabled when player Y >= this value ($FFFF = always wrap)")
+    lines.append("\\ ******************************************************************************")
+    lines.append("")
+    lines.append(".level_no_wrap_y_table_LO")
+    lines.append(f"        EQUB    {format_bytes([lv.no_wrap_y & 0xFF for lv in levels])}")
+    lines.append(".level_no_wrap_y_table_HI")
+    lines.append(f"        EQUB    {format_bytes([lv.no_wrap_y >> 8 for lv in levels])}")
+    lines.append("")
+
     # Colour tables
     lines.append("\\ ******************************************************************************")
     lines.append("\\ * Level colours")
@@ -589,7 +610,7 @@ class LevelData:
 
     def __init__(self, level_num, left_wall, right_wall, objects,
                  terrain_rle=None, landscape_colour=None, object_colour=None,
-                 checkpoints=None, gravity=None):
+                 checkpoints=None, gravity=None, no_wrap_y=None):
         self.level_num = level_num
         self.left_wall = left_wall   # list[int] X per Y row
         self.right_wall = right_wall
@@ -603,6 +624,7 @@ class LevelData:
             else [dict(cp) for cp in LEVEL_RESET_DATA[level_num]]
         self.gravity = gravity if gravity is not None \
             else LEVEL_GRAVITY_FRAC[level_num]       # Q0.8 fractional gravity
+        self.no_wrap_y = no_wrap_y if no_wrap_y is not None else 0xFFFF  # Y threshold for disabling X wrap
         self.dirty = False
         self.terrain_dirty = False    # True when walls have been edited
 
@@ -866,8 +888,10 @@ class Editor:
         self.line_start = None        # ("left"|"right", row, x) for line tool
         self.selected_checkpoint = None  # index into checkpoints list
         self.dragging_checkpoint = None  # ("spawn"|"window", index)
-        self.dragging_bottom = False  # dragging the landscape bottom limit
-        self.hovered_bottom = False   # hovering over the bottom limit handle
+        self.dragging_bottom = False    # dragging the landscape bottom limit
+        self.hovered_bottom = False     # hovering over the bottom limit handle
+        self.dragging_no_wrap = False   # dragging the no-wrap Y threshold line
+        self.hovered_no_wrap = False    # hovering over the no-wrap Y threshold line
 
         # Panning state
         self.panning = False
@@ -959,6 +983,7 @@ class Editor:
             self.selected_object = None
             self.dragging_wall = None
             self.dragging_bottom = False
+            self.dragging_no_wrap = False
 
         elif event.key == pygame.K_w:
             self.mode = "wall"
@@ -974,6 +999,7 @@ class Editor:
             self.mode = "checkpoint"
             self.dragging_wall = None
             self.dragging_bottom = False
+            self.dragging_no_wrap = False
             self.line_start = None
             self.selected_object = None
 
@@ -981,6 +1007,7 @@ class Editor:
             self.mode = "object"
             self.dragging_wall = None
             self.dragging_bottom = False
+            self.dragging_no_wrap = False
             self.line_start = None
             self.selected_checkpoint = None
 
@@ -1037,6 +1064,7 @@ class Editor:
             self.selected_checkpoint = None
             self.dragging_wall = None
             self.dragging_bottom = False
+            self.dragging_no_wrap = False
             self.show_obj_menu = False
 
     def _handle_mouse_down(self, event):
@@ -1065,7 +1093,20 @@ class Editor:
             return
 
         if event.button == 3:  # Right click
-            if self.mode == "object":
+            if self.mode == "wall":
+                # Toggle no-wrap Y threshold line
+                lv = self.level
+                if lv.no_wrap_y < 0xFFFF and self._hit_test_no_wrap(mx, my):
+                    # Remove the line
+                    self.undo.save(lv)
+                    lv.no_wrap_y = 0xFFFF
+                    lv.dirty = True
+                else:
+                    # Place the line at cursor Y
+                    self.undo.save(lv)
+                    lv.no_wrap_y = max(0, min(0xFFFE, int(wy)))
+                    lv.dirty = True
+            elif self.mode == "object":
                 # Open object creation menu
                 self.show_obj_menu = True
                 self.obj_menu_pos = (mx, my)
@@ -1079,7 +1120,11 @@ class Editor:
             if self.mode == "wall" and self.wall_tool == "line":
                 self._handle_line_tool_click(mx, my)
             elif self.mode == "wall":
-                # Check bottom handle first
+                # Check no-wrap line, then bottom handle, then wall edges
+                if self._hit_test_no_wrap(mx, my):
+                    self.undo.save(self.level)
+                    self.dragging_no_wrap = True
+                    return
                 if self._hit_test_bottom(mx, my):
                     self.undo.save(self.level)
                     self.dragging_bottom = True
@@ -1140,6 +1185,9 @@ class Editor:
             if self.dragging_bottom:
                 self.level.dirty = True
                 self.dragging_bottom = False
+            if self.dragging_no_wrap:
+                self.level.dirty = True
+                self.dragging_no_wrap = False
             if self.dragging_object:
                 self.level.dirty = True
                 self.dragging_object = False
@@ -1155,6 +1203,11 @@ class Editor:
             dy = self.pan_start[1] - my
             self.camera.pan(dx / self.camera.x_scale, dy / self.camera.y_scale)
             self.pan_start = (mx, my)
+            return
+
+        if self.dragging_no_wrap:
+            wx, wy = self.camera.screen_to_world(mx, my)
+            self.level.no_wrap_y = max(0, min(0xFFFE, int(wy)))
             return
 
         if self.dragging_bottom:
@@ -1220,6 +1273,7 @@ class Editor:
         # Hover detection
         if my > TOOLBAR_H and my < self.screen.get_height() - STATUS_H:
             if self.mode == "wall":
+                self.hovered_no_wrap = self._hit_test_no_wrap(mx, my)
                 self.hovered_bottom = self._hit_test_bottom(mx, my)
                 self.hovered_wall = self._hit_test_wall(mx, my)
             elif self.mode == "object":
@@ -1256,6 +1310,18 @@ class Editor:
         wx0, _ = self.camera.world_to_screen(0, 0)
         wx256, _ = self.camera.world_to_screen(256, 0)
         if mx >= wx0 and mx <= wx256 and abs(my - bottom_sy) < BOTTOM_HIT_TOLERANCE:
+            return True
+        return False
+
+    def _hit_test_no_wrap(self, mx, my):
+        """Test if screen position is near the no-wrap Y threshold line."""
+        lv = self.level
+        if lv.no_wrap_y >= 0xFFFF:
+            return False
+        _, line_sy = self.camera.world_to_screen(0, lv.no_wrap_y)
+        wx0, _ = self.camera.world_to_screen(0, 0)
+        wx256, _ = self.camera.world_to_screen(256, 0)
+        if mx >= wx0 and mx <= wx256 and abs(my - line_sy) < BOTTOM_HIT_TOLERANCE:
             return True
         return False
 
@@ -1407,12 +1473,14 @@ class Editor:
             self.mode = "object"
             self.dragging_wall = None
             self.dragging_bottom = False
+            self.dragging_no_wrap = False
             self.line_start = None
             self.selected_checkpoint = None
         elif mode_x + 135 <= mx < mode_x + 195:
             self.mode = "checkpoint"
             self.dragging_wall = None
             self.dragging_bottom = False
+            self.dragging_no_wrap = False
             self.line_start = None
             self.selected_object = None
 
@@ -1568,6 +1636,7 @@ class Editor:
         self.selected_object = None
         self.dragging_wall = None
         self.dragging_bottom = False
+        self.dragging_no_wrap = False
         self.undo = UndoManager()
         print(f"Imported from {path}")
 
@@ -1818,12 +1887,13 @@ class Editor:
             if sy_tl + draw_h < VIEWPORT_Y - 20 or sy_tl > VIEWPORT_Y + cam.viewport_h + 20:
                 continue
 
-            # Dashed horizontal line at spawn Y
-            line_col = (100, 200, 255) if self.mode == "checkpoint" else (60, 120, 160)
-            dash_len = 8
-            for dx in range(0, sw, dash_len * 2):
-                pygame.draw.line(screen, line_col,
-                                 (dx, int(sy_tl)), (min(dx + dash_len, sw), int(sy_tl)))
+            if self.mode == "checkpoint":
+                # Dashed horizontal line at spawn Y — only in checkpoint mode
+                line_col = (100, 200, 255)
+                dash_len = 8
+                for dx in range(0, sw, dash_len * 2):
+                    pygame.draw.line(screen, line_col,
+                                     (dx, int(sy_tl)), (min(dx + dash_len, sw), int(sy_tl)))
 
             # Draw ship sprite at top-left
             highlight = (self.mode == "checkpoint" and
@@ -1842,10 +1912,11 @@ class Editor:
                                  (int(sx_tl) - 1, int(sy_tl) - 1,
                                   draw_w + 2, draw_h + 2), 1)
 
-            # Label
-            label = f"CP{i}"
-            txt = self.font_small.render(label, True, line_col)
-            screen.blit(txt, (4, int(sy_tl) - 14))
+            # Label — only in checkpoint mode
+            if self.mode == "checkpoint":
+                label = f"CP{i}"
+                txt = self.font_small.render(label, True, (100, 200, 255))
+                screen.blit(txt, (4, int(sy_tl) - 14))
 
             # Game viewport rectangle (72 wide x 111 tall, offset 73 rows from window_y)
             if self.mode == "checkpoint":
@@ -1902,6 +1973,26 @@ class Editor:
             for tx in [x1 + 10, x2 - 10]:
                 pygame.draw.polygon(screen, col,
                                     [(tx - 5, by - 4), (tx + 5, by - 4), (tx, by + 4)])
+
+        # No-wrap Y threshold line
+        if lv.no_wrap_y < 0xFFFF:
+            wx0_nw, _ = cam.world_to_screen(0, lv.no_wrap_y)
+            wx256_nw, _ = cam.world_to_screen(256, lv.no_wrap_y)
+            _, nw_sy = cam.world_to_screen(0, lv.no_wrap_y)
+            nx1 = max(0, int(wx0_nw))
+            nx2 = min(sw, int(wx256_nw))
+            ny = int(nw_sy)
+            if VIEWPORT_Y <= ny <= VIEWPORT_Y + cam.viewport_h and nx2 > nx1:
+                col = (255, 200, 80) if (self.hovered_no_wrap or self.dragging_no_wrap) \
+                    else (200, 150, 50)
+                dash = 8
+                for dx in range(nx1, nx2, dash * 2):
+                    ex = min(dx + dash, nx2)
+                    pygame.draw.line(screen, col, (dx, ny), (ex, ny), 2)
+                # Label
+                label = f"No-wrap Y={lv.no_wrap_y}"
+                txt = self.font_small.render(label, True, col)
+                screen.blit(txt, (nx1 + 4, ny - 14))
 
         # Line tool: show start marker and preview line
         if self.wall_tool == "line" and self.line_start:
@@ -2080,6 +2171,11 @@ class Editor:
 
         if self.dragging_bottom or self.hovered_bottom:
             parts.append("Drag to resize landscape")
+
+        if self.dragging_no_wrap or self.hovered_no_wrap:
+            parts.append("Drag no-wrap line (right-click to remove)")
+        elif self.mode == "wall" and lv.no_wrap_y >= 0xFFFF:
+            parts.append("Right-click to place no-wrap line")
 
         if self.line_start:
             side, r, x = self.line_start
