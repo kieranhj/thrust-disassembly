@@ -27,7 +27,7 @@
 \ *****************************************************************************
 \ *****************************************************************************
 
-_SWRAM_BUILD         = TRUE
+_SWRAM_BUILD         = FALSE
 
 _DEBUG_RASTERS       = (_SWRAM_BUILD AND FALSE)   ; Raster timing
 _UNROLL_TERRAIN      = (_SWRAM_BUILD AND TRUE)    ; Faster terrain plotting
@@ -2865,11 +2865,37 @@ ENDIF
 
 \ ******************************************************************************
 \ * Function: update_window_and_terrain_tables
-\ * Description: Updates window X/Y position and rebuilds terrain tables after scroll
+\ * Description: Per-frame viewport advance. Drives four tightly coupled
+\ *              pieces of state:
+\ *
+\ *   1. Apply last frame's scroll delta to window_xpos / window_ypos. For Y,
+\ *      also walk the terrain RLE replay (terrain_process_{accumulate,
+\ *      subtract}_xpos) forward or backward by that many rows so that
+\ *      terrain_left_wall[] and terrain_right_wall[] stay in sync with the
+\ *      visible window.
+\ *   2. Tick door-switch timers (tick_door_logic).
+\ *   3. Recompute the player's distance from the window origin on both axes
+\ *      and from that decide next frame's window_scroll_{x,y} — a damped
+\ *      follow that snaps toward force_vector when the player leaves a
+\ *      central deadzone and decelerates by 1 per frame when the player
+\ *      returns toward centre. A separate clamp zeroes scroll if the
+\ *      window would overshoot past the player.
+\ *   4. If window_xpos just crossed a world X-wrap boundary, shift
+\ *      window_xpos / midpoint_xpos / player_xpos / old_player_xpos and
+\ *      every particle's xpos by WORLD_X_WRAP_FORWARD or _BACKWARD, then
+\ *      fix up the cached wall-X tables so the delta-XOR draw doesn't see
+\ *      a spurious jump.
+\ *
+\ * _NO_WRAP_UNDERGROUND build flag: when player Y is below the per-level
+\ * threshold, skip the X-wrap check entirely and instead just clamp
+\ * window_scroll_x to zero when window_xpos drops below 3. Prevents the
+\ * left-hand wall lookup going wrong underground. See docs/ideas.md.
 \ ******************************************************************************
 
 .update_window_and_terrain_tables
 {
+
+\ --- 1a. Apply accumulated X and Y scroll to window position ---
         CLC
         LDA     window_scroll_x
         ADC     window_xpos_INT
@@ -2877,306 +2903,293 @@ ENDIF
 
         CLC
         LDA     window_scroll_y
-        BMI     L173B
-        BEQ     L174F
+        BMI     y_scroll_up                            ; negative → walk terrain backwards
+        BEQ     after_y_scroll                         ; zero → skip terrain walk
 
+\ --- 1b. Y scrolling DOWN: extend window_ypos and replay terrain forward N rows ---
         ADC     window_ypos_INT
         STA     window_ypos_INT
-        BCC     L172C
-        INC     window_ypos_EXT
+        BCC     y_down_no_ext_carry
+        INC     window_ypos_EXT                        ; 16-bit overflow of window_ypos
 
-    .L172C
-        LDA     window_scroll_y  
+    .y_down_no_ext_carry
+        LDA     window_scroll_y                        ; A = scroll_y = iteration count
 
-    .L172E
+    .y_down_expand_terrain_loop
         PHA
-        JSR     terrain_process_accumulate_xpos            ; increments terrain_window_y_index
+        JSR     terrain_process_accumulate_xpos        ; advances terrain_window_y_index by 1
 
         PLA
         SEC
         SBC     #$01
-        BNE     L172E
+        BNE     y_down_expand_terrain_loop
 
-        JMP     L174F
+        JMP     after_y_scroll
 
-    .L173B
+\ --- 1c. Y scrolling UP: retract window_ypos and replay terrain backward |scroll_y| rows ---
+    .y_scroll_up
         ADC     window_ypos_INT
         STA     window_ypos_INT
-        BCS     L1743
-        DEC     window_ypos_EXT
-        
-    .L1743
-        LDA     window_scroll_y
-        
-    .L1745
+        BCS     y_up_no_ext_borrow
+        DEC     window_ypos_EXT                        ; 16-bit borrow of window_ypos
+
+    .y_up_no_ext_borrow
+        LDA     window_scroll_y                        ; A = scroll_y (negative) = -iteration count
+
+    .y_up_contract_terrain_loop
         PHA
-        JSR     terrain_process_subtract_xpos            ; decrements terrain_window_y_index
+        JSR     terrain_process_subtract_xpos          ; retreats terrain_window_y_index by 1
 
         PLA
         CLC
-        ADC     #$01
-        BNE     L1745
+        ADC     #$01                                   ; add 1 (count up toward zero)
+        BNE     y_up_contract_terrain_loop
 
-    .L174F
+\ --- 2. Tick door-switch timers (decoupled from scroll but always advances) ---
+    .after_y_scroll
         JSR     tick_door_logic
 
+\ --- 3a. Y scroll speed: compute player_ydist_in_window (larger = lower on screen) ---
         SEC
         LDA     midpoint_ypos_INT
         SBC     window_ypos_INT
         SEC
         SBC     #SCREEN_ADDR_HI_OFFSET
         STA     player_ydist_in_window_INT
-        SEC
+        SEC                                            ; (carry-prep; dead here, CMP resets C anyway)
         LDA     force_vectory_INT
-        BMI     L1785
+        BMI     player_heading_up
 
-        ; <= Player velocity is down.
-
+\ --- 3b. Player moving DOWN: decelerate if central, else snap scroll to force+1 ---
         LDA     player_ydist_in_window_INT
         CMP     #$5D
-        BCS     L177D
+        BCS     player_below_lower_y_bound             ; past lower deadzone → snap to force
 
-        ; <= Player inside lower scroll bound.
+        ; Player inside lower deadzone — maybe decelerate existing downward scroll.
 
         LDA     window_scroll_y
-        BMI     L177A
-        BEQ     L177A
+        BMI     done_y_down_speed
+        BEQ     done_y_down_speed                      ; scroll already <= 0, nothing to do
 
-        ; <= Window scrolling direction is down.
+        ; Window scrolling down — check whether scroll is outrunning the player.
 
         LDX     force_vectory_INT
         INX
         CPX     window_scroll_y
-        BCS     L177A
+        BCS     done_y_down_speed                      ; force+1 >= scroll → leave scroll alone
 
-        ; <= Scroll in y > force in y.
+        ; Scroll is outrunning the player; decelerate by 1 (but never settle on 0 mid-scroll).
 
         DEC     window_scroll_y
-        BNE     L177A
+        BNE     done_y_down_speed
 
-        ; <= Slow down scroll in y.
+        INC     window_scroll_y                        ; undo if DEC landed on zero
 
-        INC     window_scroll_y
-        
-    .L177A
-        JMP     L17A3   ; done y down.
+    .done_y_down_speed
+        JMP     clamp_y_scroll_at_edge
 
-    .L177D
-        ; <= Player outside scroll boundary.
+    .player_below_lower_y_bound
+        ; Player past bottom of deadzone → snap scroll_y = force_y + 1 to chase.
 
         LDX     force_vectory_INT
         INX
         STX     window_scroll_y
 
-        ; <= Set scroll y to force y+1.
+        JMP     clamp_y_scroll_at_edge
 
-        JMP     L17A3
-
-    .L1785
-        ; Player heading upwards.
-
+\ --- 3c. Player moving UP: decelerate if central, else snap scroll to force-1 ---
+    .player_heading_up
         LDA     player_ydist_in_window_INT
         CMP     #$2F
-        BCC     L179E
+        BCC     player_above_upper_y_bound             ; past upper deadzone → snap to force
 
-        ; Player inside upper scroll bound.
+        ; Player inside upper deadzone — maybe decelerate existing upward scroll.
 
         LDA     window_scroll_y
-        BPL     L179B
+        BPL     done_y_up_speed                        ; scroll is >= 0 (not scrolling up)
 
-        ; <= Window scrolling direction is up.
+        ; Window scrolling up — check whether scroll is outrunning the player.
 
         LDA     window_scroll_y
         CMP     force_vectory_INT
-        BCS     L179B
+        BCS     done_y_up_speed                        ; scroll >= force (less negative) → leave it
 
-        ; <= Window scroll y < force y.
+        ; Scroll is outrunning the player upward; decelerate by 1 (never settle on 0 mid-scroll).
 
         INC     window_scroll_y
-        BNE     L179B
+        BNE     done_y_up_speed
 
-        ; <= Slow down scroll in y.
+        DEC     window_scroll_y                        ; undo if INC landed on zero
 
-        DEC     window_scroll_y
-        
-    .L179B
-        JMP     L17A3   ; done y up.
+    .done_y_up_speed
+        JMP     clamp_y_scroll_at_edge
 
-    .L179E
-        ; <= Player outside upper scroll bound.
+    .player_above_upper_y_bound
+        ; Player past top of deadzone → snap scroll_y = force_y - 1 to chase.
 
         LDX     force_vectory_INT
         DEX
         STX     window_scroll_y
 
-        ; <= Set scroll y to force y-1.
-        
-    .L17A3
+\ --- 3d. Clamp Y scroll to zero if player has drifted to the OPPOSITE edge ---
+    .clamp_y_scroll_at_edge
         LDA     window_scroll_y
-        BEQ     L17C0                   ; no scroll y?
-        BMI     L17B6
+        BEQ     compute_x_scroll_speed                 ; no Y scroll → jump to X scroll
+        BMI     clamp_up_scroll_near_bottom
 
-        ; <= Window scrolling down.
+        ; Window scrolling DOWN — zero scroll if player has drifted up to near top of screen.
 
         LDA     player_ydist_in_window_INT
         CMP     #$3C
-        BCS     L17C0
+        BCS     compute_x_scroll_speed                 ; player still below top zone → keep scroll
 
-        ; <= Player reaching top of screen.
+        ; Player pulled away from bottom-track of scroll → stop scrolling down.
 
         LDA     #$00
         STA     window_scroll_y
 
-        ; <= Zero scroll in y.
+        JMP     compute_x_scroll_speed
 
-        JMP     L17C0
-
-    .L17B6
-        ; <= Window scrolling up.
+    .clamp_up_scroll_near_bottom
+        ; Window scrolling UP — zero scroll if player has drifted down to near bottom of screen.
 
         LDA     player_ydist_in_window_INT
         CMP     #$50
-        BCC     L17C0
+        BCC     compute_x_scroll_speed                 ; player still above bottom zone → keep scroll
 
-        ; <= Player reaching bottom of screen.
+        ; Player pulled away from top-track of scroll → stop scrolling up.
 
         LDA     #$00
         STA     window_scroll_y
 
-        ; <= Zero scroll in y.
-
-    .L17C0
+\ --- 4a. X scroll speed: compute player_xdist_in_window; snap scroll if outside deadzone ---
+    .compute_x_scroll_speed
         SEC
         LDA     midpoint_xpos_INT
         SBC     window_xpos_INT
-        STA     player_xdist_in_window_INT
+        STA     player_xdist_in_window_INT             ; player X offset inside the window
         SEC
         SBC     #$10
-        BCS     L17D1
+        BCS     x_dist_ge_16
 
-        ; Player X dist < 16 - hit LH boundary.
+        ; Player X dist < $10 — player has pushed past the left deadzone edge.
+        ; A now holds (xdist - $10), which is negative → use as -ve scroll.
 
-        STA     window_scroll_x
-        JMP     L17DC
+        STA     window_scroll_x                        ; scroll left at (xdist - $10)
+        JMP     decelerate_x_scroll
 
-    .L17D1
-        ; Player X dist >= 16.
+    .x_dist_ge_16
+        ; Player X dist >= $10. Test against the right deadzone edge.
 
         LDA     player_xdist_in_window_INT
         SEC
         SBC     #$30
-        BEQ     L17DC
-        BCC     L17DC
+        BEQ     decelerate_x_scroll                    ; exactly on right edge → no snap
+        BCC     decelerate_x_scroll                    ; still inside deadzone
 
-        ; Player X dist >= 48 - hit RH boundary.
+        ; Player X dist >= $30 — player has pushed past the right deadzone edge.
+        ; A now holds (xdist - $30), positive → use as +ve scroll.
 
-        STA     window_scroll_x
-        
-    .L17DC
+        STA     window_scroll_x                        ; scroll right at (xdist - $30)
+
+\ --- 4b. X scroll deceleration when player is back inside deadzone ---
+    .decelerate_x_scroll
         LDA     window_scroll_x
-        BEQ     L1813   ; no horizontal scroll.
-        BMI     L17FC
+        BEQ     check_x_wrap                           ; no X scroll → jump to wrap check
+        BMI     x_scrolling_left
 
-        ; <= Window scrolling right.
+        ; Window scrolling RIGHT — check whether player has drifted back toward centre.
 
         LDA     player_xdist_in_window_INT
         CMP     #$1D
-        BCS     L17EF
+        BCS     x_right_not_central
 
-        ; <= Player central in X.
+        ; Player back inside the right-scroll bound — stop scrolling right.
 
         LDA     #$00
         STA     window_scroll_x
 
-        ; <= Stop horizontal scroll.
+        JMP     check_x_wrap
 
-        JMP     L1813
-
-    .L17EF
-        ; <= Player not central.
-
+    .x_right_not_central
         CMP     #$30
-        BCS     L1813
+        BCS     check_x_wrap                           ; player still past right edge → keep speed
 
-        ; <= Player inside right hand window boundary.
+        ; Player inside the right-hand deadzone window → decelerate by 1 (not through 0).
 
         DEC     window_scroll_x
-        BNE     L1813
+        BNE     check_x_wrap
 
-        INC     window_scroll_x
-        JMP     L1813
+        INC     window_scroll_x                        ; undo if DEC landed on zero
+        JMP     check_x_wrap
 
-        ; <= Slow down horizontal scroll.
-
-    .L17FC
-        ; <= Window scrolling left.
+    .x_scrolling_left
+        ; Window scrolling LEFT — check whether player has drifted back toward centre.
 
         LDA     player_xdist_in_window_INT
         CMP     #$23
-        BCC     L1809
+        BCC     x_left_not_central
 
-        ; <= Player central.
+        ; Player back inside the left-scroll bound — stop scrolling left.
 
         LDA     #$00
         STA     window_scroll_x
-        JMP     L1813
+        JMP     check_x_wrap
 
-        ; <= Stop horizontal scroll.
-
-    .L1809
-        ; <= Player not central.
-
+    .x_left_not_central
         CMP     #$10
-        BCC     L1813
+        BCC     check_x_wrap                           ; player still past left edge → keep speed
 
-        ; <= Player inside left window boundary.
+        ; Player inside the left-hand deadzone window → decelerate by 1 (not through 0).
 
         INC     window_scroll_x
-        BNE     L1813
+        BNE     check_x_wrap
 
-        DEC     window_scroll_x
+        DEC     window_scroll_x                        ; undo if INC landed on zero
 
-        ; <= Slow down horizontal scroll.
-
-    .L1813
+\ --- 4c. World X-wrap check: wrap everything in world-X by ±WORLD_X_WRAP_* if needed ---
+    .check_x_wrap
 IF _NO_WRAP_UNDERGROUND
         \ Skip X wrap when player Y is below the no-wrap threshold.
+        \ Left-hand wall lookup breaks down at small window_xpos underground,
+        \ so we disable the wrap and instead clamp scroll_x so the window
+        \ can't drift below xpos=3. See docs/ideas.md for context.
         LDA     player_ypos_INT_HI
         CMP     no_wrap_y_INT_HI
         BCC     do_wrap_check           ; player HI < threshold HI: above, do wrap
         BNE     do_left_hand_clamp      ; player HI > threshold HI: below, skip wrap
         LDA     player_ypos_INT
         CMP     no_wrap_y_INT
-        BCC     do_wrap_check           ; player LO >= threshold LO: at/below, skip wrap
-        \ But still need to clamp to LHS to avoid landscape draw overflow.
+        BCC     do_wrap_check           ; player LO < threshold LO: above, do wrap
     .do_left_hand_clamp
         LDA     window_xpos_INT
         CMP     #$3
         BCS     no_lh_clamp
         LDA     #0
-        STA     window_scroll_x
-        .no_lh_clamp
-        JMP     L187E
+        STA     window_scroll_x                        ; clamp: don't scroll below xpos=3
+    .no_lh_clamp
+        JMP     return
 
     .do_wrap_check
 ENDIF
         LDA     window_xpos_INT
-        BEQ     L181B
-
+        BEQ     wrap_x_backward                        ; xpos == 0 → wrap backward
+                                                       ;   (treat $00 as "about to underflow")
         CMP     #$DC
-        BCC     L181F
+        BCC     check_wrap_x_forward                   ; $01..$DB → no backward wrap, try forward
 
-    .L181B
-        LDA     #WORLD_X_WRAP_BACKWARD
-        BNE     L1825
+    .wrap_x_backward
+        LDA     #WORLD_X_WRAP_BACKWARD                 ; xpos was $00 or $DC..$FF → shift backward
+        BNE     apply_x_wrap                           ; always taken (constant non-zero)
 
-    .L181F
+    .check_wrap_x_forward
         CMP     #WORLD_X_WRAP_THRESHOLD
-        BCC     L187E
+        BCC     return                                 ; below threshold → no wrap needed
 
-        LDA     #WORLD_X_WRAP_FORWARD
-        
-    .L1825
+        LDA     #WORLD_X_WRAP_FORWARD                  ; shift forward
+
+\ --- 4d. Apply the X-wrap delta to window, midpoint, player, old-player, and particles ---
+    .apply_x_wrap
         STA     window_deltax_INT
         LDA     window_xpos_INT
         CLC
@@ -3195,45 +3208,53 @@ ENDIF
         ADC     window_deltax_INT
         STA     old_player_xpos_INT
         LDX     #PARTICLE_table_max
-        
-    .L1845
+
+    .shift_particles_x_loop
         LDA     particles_xpos_INT,X
         CLC
         ADC     window_deltax_INT
         STA     particles_xpos_INT,X
         DEX
-        BPL     L1845
+        BPL     shift_particles_x_loop
 
+\ --- 4e. Sync cached wall-X tables across the wrap so the delta-XOR doesn't flash ---
+\ --- Walks all scanline cache entries (via terrain_draw_table_1,X / _3,X with X=17..127,
+\ --- covering table_2 and table_4 too). Entries with both walls pinned at the same edge
+\ --- get flipped to the opposite edge, matching the world-X shift.
         LDX     #$11
-    .L1853
+    .wrap_fix_cache_loop
         LDA     terrain_draw_table_3,X
-        BNE     L1868
+        BNE     check_both_at_right_edge
+
+        ; table_3 == 0 (right wall at left edge) — if table_1 is also 0, flip both to SCREEN_WIDTH.
 
         LDA     terrain_draw_table_1,X
-        BNE     L187B
+        BNE     next_cache_entry
 
         LDA     #SCREEN_WIDTH_CHARS
         STA     terrain_draw_table_1,X
         STA     terrain_draw_table_3,X
-        JMP     L187B
+        JMP     next_cache_entry
 
-    .L1868
+    .check_both_at_right_edge
         CMP     #SCREEN_WIDTH_CHARS
-        BNE     L187B
+        BNE     next_cache_entry                       ; table_3 non-zero and not at right edge
 
         LDA     terrain_draw_table_1,X
         CMP     #SCREEN_WIDTH_CHARS
-        BNE     L187B
+        BNE     next_cache_entry
+
+        ; Both walls pinned at SCREEN_WIDTH — flip both to 0.
 
         LDA     #$00
         STA     terrain_draw_table_3,X
         STA     terrain_draw_table_1,X
-        
-    .L187B
-        INX
-        BPL     L1853
 
-    .L187E
+    .next_cache_entry
+        INX
+        BPL     wrap_fix_cache_loop                    ; walk X = 17..127
+
+    .return
         RTS
 }
 
