@@ -186,7 +186,7 @@ angle_ship_to_pod                   = $001D     ; tether angle, integer part (0-
 tether_angular_vel_LO               = $001E     ; tether angular velocity, extra precision low byte
 tether_angular_vel_FRAC             = $001F     ; tether angular velocity, fractional part
 tether_angular_vel_INT              = $0020     ; tether angular velocity, integer/sign part
-pod_attached_flag_1                 = $0022     ; set to non-zero at top of attach_pod_to_ship function
+pod_tethered_flag                   = $0022     ; non-zero while pod is currently on the ship (cleared when pod destroyed)
 midpoint_deltax_FRAC                = $0023     ; add midpoint_delta to midpoint to get ship_position
 midpoint_deltax_INT                 = $0024     ; subtract midpoint_delta from midpoint to get pod_position
 midpoint_deltay_FRAC                = $0025     ; " (fractional part)
@@ -1422,7 +1422,7 @@ ENDIF
         LDA     #$01
         STA     plot_ship_collision_detected
         LDA     #$FF
-        STA     pod_attached_flag_2
+        STA     pod_lifted_flag
     
     .return
         RTS
@@ -1548,7 +1548,7 @@ ENDIF
         LDA     level_obj_flags,X
         ORA     #OBJ_flag_alive
         STA     level_obj_flags,X
-        LDA     pod_attached_flag_2
+        LDA     pod_lifted_flag
         BEQ     check_generator_blink
 
         LDA     level_obj_flags,X
@@ -1819,7 +1819,7 @@ ENDIF
 
 \ --- 8. Shield-tractor fuel pickup: fuel type only, player must be near + shield pressed ---
     .try_tractor_fuel_pickup
-        LDA     pod_attached_flag_1
+        LDA     pod_tethered_flag
         BNE     skip_tractor_check                  ; pod on ship → no fuel pickup
 
         LDA     object_type
@@ -3948,7 +3948,7 @@ ENDIF
         LDA     pod_destroying_player_timer
         BMI     L1B5F
 
-        LDA     pod_attached_flag_1
+        LDA     pod_tethered_flag
         BNE     L1B5F
 
         LDA     player_ship_destroyed_flag
@@ -4014,7 +4014,7 @@ ENDIF
         ENDIF
 
         LDY     #$04
-        LDA     pod_attached_flag_1
+        LDA     pod_tethered_flag
         BEQ     L1BA6
 
         INY
@@ -4036,7 +4036,7 @@ ENDIF
         ADC     #$01
         STA     calc_force_vectory_INT
         LDY     #$04
-        LDA     pod_attached_flag_1
+        LDA     pod_tethered_flag
         BEQ     L1BC6
         INY
 
@@ -4891,7 +4891,7 @@ ENDIF ; _FAST_SPRITES=FALSE
         RTS
 
     .L1FD3
-        LDA     pod_attached_flag_2
+        LDA     pod_lifted_flag
         BMI     tractor_beam_return
 
         LDA     shield_tractor_pressed
@@ -4980,8 +4980,8 @@ ENDIF ; _FAST_SPRITES=FALSE
         BEQ     tractor_beam_return
 
         LDA     #$FF                          ; mark pod as attached
-        STA     pod_attached_flag_1
-        STA     pod_attached_flag_2
+        STA     pod_tethered_flag
+        STA     pod_lifted_flag
         STA     level_reset_with_pod_flag
 
 ; ---------------------------------------------------------------------------
@@ -5540,7 +5540,7 @@ ENDIF
         JSR     L21B6
 
     .L227A
-        LDA     pod_attached_flag_2
+        LDA     pod_lifted_flag
         BNE     L2282
 
         JMP     return
@@ -5576,7 +5576,7 @@ ENDIF
         STA     plot_pod_xpos_INT
         STA     pod_window_xpos_INT
         LDX     #$03
-        LDA     pod_attached_flag_1
+        LDA     pod_tethered_flag
         BNE     L22BF
 
         LDA     #$00
@@ -5780,7 +5780,7 @@ ENDIF
         LDA     pod_destroying_player_timer
         BPL     L23A7
 
-        LDA     pod_attached_flag_1
+        LDA     pod_tethered_flag
         BEQ     return
 
     .L23A7
@@ -6627,7 +6627,7 @@ ENDIF
         STX     player_pressed_fire
         STX     planet_countdown_timer
         INX
-        STX     pod_attached_flag_2
+        STX     pod_lifted_flag
         LDX     #$0F
         STX     generator_recharge_counter
 
@@ -6721,8 +6721,8 @@ ENDIF
         BEQ     dont_set_angle_to_pod
 
         LDX     #$FF
-        STX     pod_attached_flag_2
-        STX     pod_attached_flag_1
+        STX     pod_lifted_flag
+        STX     pod_tethered_flag
 
         LDX     #$01                        ; angle $01 - straight up (+1)
         LDA     gravity_SIGN
@@ -7975,7 +7975,7 @@ ENDIF
         LDA     pod_destroying_player_timer
         BPL     L3170
 
-        LDA     pod_attached_flag_1
+        LDA     pod_tethered_flag
         BNE     L3175
 
     .L3170
@@ -8187,7 +8187,7 @@ ENDIF
         LDX     #$00
         STX     plot_ship_collision_detected
         STX     pod_line_exists_flag
-        STX     pod_attached_flag_1
+        STX     pod_tethered_flag
 
     .go_to_draw
         JMP     draw_player_timed_to_vsync
@@ -8221,13 +8221,13 @@ ENDIF
         PHA
         LDA     plot_ship_collision_detected
         PHA
-        LDA     pod_attached_flag_1
+        LDA     pod_tethered_flag
         PHA
         LDX     #$FF
         STX     plot_ship_collision_detected
         INX
         STX     pod_line_exists_flag
-        STX     pod_attached_flag_1
+        STX     pod_tethered_flag
         JSR     draw_player_timed_to_vsync
 
         JSR     calculate_line_coordinates
@@ -8265,7 +8265,7 @@ ENDIF
         JSR     do_teleport_animation
 
         PLA
-        STA     pod_attached_flag_1
+        STA     pod_tethered_flag
         PLA
         STA     plot_ship_collision_detected
         PLA
@@ -8889,7 +8889,7 @@ SET_BG_COL PAL_black
         LDA     fuel_empty_flag
         BNE     player_out_of_fuel
 
-        LDA     pod_attached_flag_1
+        LDA     pod_tethered_flag
         BNE     player_completed_mission
 
         LDA     planet_countdown_timer
@@ -9023,7 +9023,7 @@ SET_BG_COL PAL_black
         LDA     #$00
         STA     level_ended_flag
 
-        LDA     pod_attached_flag_1
+        LDA     pod_tethered_flag
         BNE     L38BE
 
         LDA     ship_sprite_plotted_flag
@@ -9065,14 +9065,14 @@ SET_BG_COL PAL_black
         LDA     player_ship_destroyed_flag
         BMI     destroy_player_ship
 
-        LDA     pod_attached_flag_1
+        LDA     pod_tethered_flag
         BNE     destroy_attached_pod
 
     .L38F0
         LDA     player_ship_destroyed_flag
         BPL     L38FF
 
-        LDA     pod_attached_flag_1
+        LDA     pod_tethered_flag
         BEQ     L38FF
 
         LDA     #$01
@@ -9160,7 +9160,7 @@ SET_BG_COL PAL_black
         LDX     #$01
         STX     level_tick_state
         DEX
-        STX     pod_attached_flag_1
+        STX     pod_tethered_flag
         STX     plot_pod_collision_detected
         LDA     #POD_DESTROY_TIMER_INIT
         STA     pod_destroying_player_timer
@@ -9643,10 +9643,17 @@ SET_BG_COL PAL_black
         EQUB    $7F,$14,$0A,$0F,$7F
 
 \ ******************************************************************************
-\ * Misc flag, maybe for tractor beam routine?
+\ * pod_lifted_flag: non-zero once the pod has been lifted off its stand this
+\ * level (sticky until next level load). Set by attach_pod_to_ship, by the
+\ * planet-countdown-zero handler, and on level respawn-with-pod. Controls:
+\ *   - pod_stand loses its OBJ_flag_alive once set (update loop phase 2a)
+\ *   - the shield-tractor beam is disabled once set (update_pod_tractor_beam)
+\ *   - the pod is drawn by pod physics rather than as part of the stand
+\ * Unlike pod_tethered_flag, this is NOT cleared when the pod is destroyed —
+\ * only on a fresh level load.
 \ ******************************************************************************
 
-.pod_attached_flag_2
+.pod_lifted_flag
         EQUB    $00
 
 \ ******************************************************************************

@@ -68,7 +68,7 @@ Even non-firing objects have a `gun_aim` byte (typically zero). Only types in
 Two object types mutate their own `ALIVE` bit every frame before rendering:
 
 **2a. `pod_stand`** — always sets `ALIVE`, then clears it once
-`pod_attached_flag_2 != 0` (the pod has been tractored off the stand). This is
+`pod_lifted_flag != 0` (the pod has been tractored off the stand). This is
 what makes the sprite disappear when you lift the pod.
 
 **2b. `generator`** — while `planet_countdown_timer` is in `$01..$7F`, the
@@ -151,7 +151,7 @@ short-circuits to the post-bullet tail. Only one hit per object per frame.
 **Type `fuel` only.** When:
 
 * `pod_destroying_player_timer` has bit 7 set (normal gameplay — $FF idle);
-* `pod_attached_flag_1 == 0` (pod isn't already on the ship);
+* `pod_tethered_flag == 0` (pod isn't already on the ship);
 * shield-tractor key is pressed; AND
 * player is within `|dx| < 6` and `|dy| < $1C`, same Y high byte
 
