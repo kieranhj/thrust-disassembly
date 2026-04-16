@@ -1322,6 +1322,13 @@ ENDIF
 
 .obj_tractor_counter    ; indexed by current_object, initialised to 0 at start of level, counts up when tractor beam active
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+IF _SWRAM_BUILD
+        \ extend to LEVEL_MAX_OBJECTS+1 entries so a fuel object at any
+        \ level slot can safely INC obj_tractor_counter,X without overrun
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00
+ENDIF
 
 .obj_type_width
         EQUB    $05,$05,$05,$05,$04,$05,$05,$02,$02
@@ -4770,7 +4777,7 @@ ENDIF ; _FAST_SPRITES=FALSE
         LDA     pod_sprite_plotted_flag
         BNE     L1FD3
 
-        LDA     level_obj_flags                ; what's special about first entry in table?
+        LDA     level_obj_flags                ; what's special about first entry in table? -> must be pod!
         AND     #$03
         CMP     #$03
         BEQ     L1FD3
@@ -5977,11 +5984,46 @@ IF _SWRAM_BUILD==FALSE
 INCLUDE "level_data.asm"
 ENDIF
 
+\ ******************************************************************************
+\ * level_obj_flags: per-object state bits (one byte per object slot, 20 slots).
+\ * Indexed by current_object (0-19). Initialised to $02 for all slots at level
+\ * load (see initialise_level_pointers at initialise_sprite_table_A).
+\ *
+\ *   bit 0 ($01) "sprite drawn"
+\ *                    Set by plot_static_sprite after XORing pixels to screen.
+\ *                    Tested each frame by the update loop (ROR into carry):
+\ *                    when set, the object's previous pixels must be erased
+\ *                    before it can be redrawn at a new position.
+\ *                    Cleared after re-plotting in the same location, and
+\ *                    cleared for all slots on screen wipe / level reset.
+\ *
+\ *   bit 1 ($02) "active / alive"
+\ *                    Cleared on destroy (bullet hit), when fuel has been
+\ *                    fully tractor-collected, when the pod attaches to its
+\ *                    pod_stand, and while the generator is in its exploding
+\ *                    countdown. Re-asserted each frame for pod_stand (while
+\ *                    empty) and generator (while recharging). The per-type
+\ *                    update branches short-circuit when this bit is clear.
+\ *
+\ *   bits 2-7         unused.
+\ *
+\ * Special case: update_pod_tractor_beam reads level_obj_flags (no ,X -
+\ * hardcoded index 0) and tests AND #$03 == $03. This is the "pod must be
+\ * object index 0" coupling noted in docs/ideas.md.
+\ ******************************************************************************
+
 .level_obj_flags                                        ; initialised to $02 at start of level
 {
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
         EQUB    $00,$00,$00,$00
+IF _SWRAM_BUILD
+        \ extend to LEVEL_MAX_OBJECTS+1 entries; the init and screen-wipe
+        \ loops count X from LEVEL_MAX_OBJECTS down, so the array must be
+        \ at least that long to avoid corrupting adjacent tables
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00
+ENDIF
 }
 
 .level_obj_plot_at_ptr_LO
@@ -5989,6 +6031,10 @@ ENDIF
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
         EQUB    $00,$00,$00,$00
+IF _SWRAM_BUILD
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00
+ENDIF
 }
 
 .level_obj_plot_at_ptr_HI
@@ -5996,6 +6042,10 @@ ENDIF
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
         EQUB    $00,$00,$00,$00
+IF _SWRAM_BUILD
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00
+ENDIF
 }
 
 \ ******************************************************************************
