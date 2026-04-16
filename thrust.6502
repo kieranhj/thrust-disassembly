@@ -849,142 +849,198 @@ ENDIF
 
 \ ******************************************************************************
 \ * Function: landscape_draw
-\ * Description: Draws the landscape terrain walls to screen, clipped to viewport 
+\ * Description: Redraws the cave walls on every other pixel row using a
+\ *              delta-XOR scheme — only the columns whose wall position
+\ *              changed since last frame are touched.
+\ *
+\ * Cave structure: each visible scanline has a "left wall" (right edge of the
+\ * solid fill on the left side of the screen) and a "right wall" (left edge
+\ * of the solid fill on the right). Those edges move a little each frame as
+\ * the world scrolls horizontally.
+\ *
+\ * Wall arrays (indexed by Y-scanline, updated by update_window_and_terrain_tables):
+\ *     terrain_left_wall[Y]  = left-wall world X for scanline Y
+\ *     terrain_right_wall[Y] = right-wall world X for scanline Y
+\ *
+\ * Cached last-frame screen positions (one byte per visible scanline):
+\ *     terrain_draw_table_2[t] = left-wall screen X drawn on last frame
+\ *     terrain_draw_table_4[t] = right-wall screen X drawn on last frame
+\ *
+\ * Per-scanline algorithm for each wall:
+\ *   1. Fetch wall[Y] and convert to screen-X by subtracting window_xpos.
+\ *      (Done via the self-mod SBC trick described below.)
+\ *   2. Clamp the screen-X to [0, SCREEN_WIDTH_CHARS].
+\ *   3. delta = new_screen_X - cached_screen_X.
+\ *         delta > 0 (wall moved right): XOR-fill delta columns starting
+\ *                                       from the OLD cached position, which
+\ *                                       flips previously-filled cells off.
+\ *         delta < 0 (wall moved left) : XOR-fill |delta| columns starting
+\ *                                       from the NEW position, which flips
+\ *                                       newly-needed cells on.
+\ *         delta = 0 (unchanged)       : nothing to draw.
+\ *   4. Update the cache with the new screen-X for next frame.
+\ *
+\ * draw_terrain (line 1281) does the actual EOR row draw. It requires carry
+\ * clear on entry — every path reaching it arrives with C=0.
+\ *
+\ * Self-mod SBC trick (sbc_window_xpos_{1,2}): the immediate operand is
+\ * patched to (window_xpos_INT - 1) at setup. The loop enters the first SBC
+\ * with carry clear (explicit CLC before the loop), so:
+\ *     A - (window_xpos-1) - (1 - 0)   =   A - window_xpos
+\ * This saves a SEC per iteration. The second SBC relies on draw_terrain and
+\ * the intervening code leaving C=0 — which they do on every reachable path.
+\ *
+\ * Scanline stepping: terrain_draw_addr_LO advances by 2 every iteration
+\ * (every other pixel row). When that crosses a character-cell boundary
+\ * (low nibble == 0 mod 8), add SCREEN_CHAR_ROW_BYTES-8 to jump down a char
+\ * row. Loop exits when terrain_draw_addr_HI goes negative (past screen end).
 \ ******************************************************************************
 
 .landscape_draw
 \\ {
+
+\ --- Setup: clear cache cursor, seed wall/screen cursors, patch SBC operand ---
         LDA     #$00
-        STA     terrain_draw_table_index
-        
-        LDA     #$49                                ; 73 - why?
+        STA     terrain_draw_table_index            ; cursor into cached-X tables (per scanline)
+
+        LDA     #$49                                ; $49 = 73 visible half-res scanlines
         CLC
         ADC     terrain_window_y_index
-        STA     terrain_draw_wall_index
-        
-        LDA     #$02                                ; start at scanline 2
+        STA     terrain_draw_wall_index             ; cursor into wall arrays (starts at top of window)
+
+        LDA     #$02                                ; begin at screen pixel row 2
         STA     terrain_draw_addr_LO
-        
+
         LDA     #HI(SCREEN_START_ADDR)
         STA     terrain_draw_addr_HI
-        
-        LDX     window_xpos_INT
-        DEX
+
+        LDX     window_xpos_INT                     ; patch SBC operand = window_xpos - 1
+        DEX                                         ;   so SBC with C=0 performs A - window_xpos
         STX     window_xpos_2                        ; **MODIFIES CODE**
         STX     window_xpos_1                        ; **MODIFIES CODE**
 
-        CLC
+        CLC                                         ; prime carry for first SBC below
 
     .landscape_draw_loop
-        LDY     terrain_draw_wall_index                ; starts at terrain_window_y_index + $49
+
+\ --- LEFT WALL: fetch, convert world X -> screen X, clamp ---
+        LDY     terrain_draw_wall_index
         LDA     terrain_left_wall,Y
 
     .sbc_window_xpos_1
-        SBC     #$00                                ; **SELF-MODIFIED CODE **
-        window_xpos_1   = sbc_window_xpos_1+1
-        BCS     terrain_xpos_1_greater_than_zero
+        SBC     #$00                                ; **SELF-MODIFIED** operand = window_xpos-1
+        window_xpos_1   = sbc_window_xpos_1+1       ; with C=0 on entry: A = wall - window_xpos
+        BCS     terrain_xpos_1_greater_than_zero    ; borrow (wall left of window) → clamp to 0
 
-        LDA     #$00                                ; clamp to 0
+        LDA     #$00
         JMP     terrain_xpos_1_less_than_screen_width
 
     .terrain_xpos_1_greater_than_zero
         CMP     #SCREEN_WIDTH_CHARS
         BCC     terrain_xpos_1_less_than_screen_width
 
-        LDA     #SCREEN_WIDTH_CHARS                    ; clamp to screen width (chars)
+        LDA     #SCREEN_WIDTH_CHARS                 ; clamp to right edge of playfield
 
     .terrain_xpos_1_less_than_screen_width
         STA     terrain_xpos_1_clipped
-        
+
+\ --- LEFT WALL: delta vs cached last-frame screen X ---
         LDY     terrain_draw_table_index
         SEC
-        SBC     terrain_draw_table_2,Y                ; number of columns to draw = xpos1 - table2
-        BCS     terrain_width_1_greater_than_zero
+        SBC     terrain_draw_table_2,Y              ; A = new_screen_X - cached_screen_X
+        BCS     terrain_width_1_greater_than_zero   ; C=1 → new >= cached (moved right / same)
 
-        EOR     #$FF                                ; negate width to make positive
-        TAX                                            ; number of columns to draw
-        INX                                            ; +1
-        
-        LDA     terrain_xpos_1_clipped        
-        STA     terrain_draw_table_2,Y                ; update table_2 for next time?
-        TAY                                            ; start X column
-        
-        JMP     draw_terrain_xpos_1                    ; draw a line of terrain
+\ --- LEFT WALL: delta < 0, wall moved LEFT — XOR-fill |delta| cols from NEW pos ---
+        EOR     #$FF                                ; negate two's complement: A = |delta| - 1
+        TAX
+        INX                                         ; X = |delta|  (column count)
+
+        LDA     terrain_xpos_1_clipped
+        STA     terrain_draw_table_2,Y              ; update cache with new screen X
+        TAY                                         ; Y = new screen X (draw start column)
+
+        JMP     draw_terrain_xpos_1                 ; C=0 preserved from BCC above
 
     .terrain_width_1_greater_than_zero
-        CLC
-        BEQ     landscape_draw_part_2                ; nothing to draw
+        CLC                                         ; prepare C=0 for draw_terrain / next SBC
+        BEQ     landscape_draw_part_2               ; delta == 0 → nothing to do
 
-        TAX                                            ; number of columns to draw
+\ --- LEFT WALL: delta > 0, wall moved RIGHT — XOR-fill delta cols from OLD pos ---
+        TAX                                         ; X = delta (column count)
         LDA     terrain_draw_table_2,Y
-        STA     terrain_draw_start_x                ; start X column
+        STA     terrain_draw_start_x                ; old screen X (draw start column)
         LDA     terrain_xpos_1_clipped
-        STA     terrain_draw_table_2,Y                ; update table_2 for next time?
-        LDY     terrain_draw_start_x                ; start X column
+        STA     terrain_draw_table_2,Y              ; update cache with new screen X
+        LDY     terrain_draw_start_x
 
     .draw_terrain_xpos_1
-        JSR     draw_terrain
+        JSR     draw_terrain                        ; XOR X columns starting at col Y on this scanline
 
+\ --- RIGHT WALL: fetch, convert world X -> screen X, clamp ---
     .landscape_draw_part_2
         LDY     terrain_draw_wall_index
         LDA     terrain_right_wall,Y
 
     .sbc_window_xpos_2
-        SBC     #$00                                ; **SELF-MODIFIED CODE **
-        window_xpos_2   = sbc_window_xpos_2+1
+        SBC     #$00                                ; **SELF-MODIFIED** (same operand as above)
+        window_xpos_2   = sbc_window_xpos_2+1       ; C=0 guaranteed by all reaching paths
         BCS     terrain_xpos_2_greater_than_zero
 
-        LDA     #$00                                ; clamp to 0
+        LDA     #$00
         JMP     terrain_xpos_2_less_than_screen_width
 
     .terrain_xpos_2_greater_than_zero
-        CMP     #SCREEN_WIDTH_CHARS                    ; clamp to screen width
+        CMP     #SCREEN_WIDTH_CHARS
         BCC     terrain_xpos_2_less_than_screen_width
 
         LDA     #SCREEN_WIDTH_CHARS
-        
+
     .terrain_xpos_2_less_than_screen_width
         STA     terrain_xpos_2_clipped
+
+\ --- RIGHT WALL: delta vs cached last-frame screen X ---
         LDY     terrain_draw_table_index
         SEC
         SBC     terrain_draw_table_4,Y
         BCS     terrain_width_2_greater_than_zero
 
-        EOR     #$FF                                ; negate width to make positive
-        TAX                                            ; number columns to draw
-        INX                                            ; +1
+\ --- RIGHT WALL: delta < 0, wall moved LEFT — XOR-fill |delta| cols from NEW pos ---
+        EOR     #$FF
+        TAX
+        INX
 
         LDA     terrain_xpos_2_clipped
         STA     terrain_draw_table_4,Y
-        TAY                                            ; start X column
-        
+        TAY
+
         JMP     draw_terrain_xpos_2
 
     .terrain_width_2_greater_than_zero
         CLC
-        BEQ     landscape_increment_index            ; nothing to draw
+        BEQ     landscape_increment_index           ; delta == 0 → nothing to do
 
-        TAX                                            ; number columns to draw
+\ --- RIGHT WALL: delta > 0, wall moved RIGHT — XOR-fill delta cols from OLD pos ---
+        TAX
         LDA     terrain_draw_table_4,Y
-        STA     terrain_draw_start_x                ; start X column
-
+        STA     terrain_draw_start_x
         LDA     terrain_xpos_2_clipped
-        STA     terrain_draw_table_4,Y                ; update table 4?
-
-        LDY     terrain_draw_start_x                ; start X column
+        STA     terrain_draw_table_4,Y
+        LDY     terrain_draw_start_x
 
     .draw_terrain_xpos_2
         JSR     draw_terrain
 
+\ --- Advance per-scanline cursors ---
     .landscape_increment_index
         INC     terrain_draw_wall_index
         INC     terrain_draw_table_index
 
+\ --- Advance screen address: +2 pixel rows, wrap into next char row every 8 ---
 .landscape_increment_draw_addr
         LDA     terrain_draw_addr_LO
-        ADC     #$02                                ; only draw every other line
+        ADC     #$02                                ; two pixel rows (we draw every other row)
         STA     terrain_draw_addr_LO
-        AND     #$07
+        AND     #$07                                ; crossed char-cell boundary?
         BEQ     landscape_draw_next_character_row
 
         JMP     landscape_draw_loop
@@ -994,9 +1050,9 @@ ENDIF
         ADC     #LO(SCREEN_CHAR_ROW_BYTES - 8)
         STA     terrain_draw_addr_LO
         LDA     terrain_draw_addr_HI
-        ADC     #HI(SCREEN_CHAR_ROW_BYTES - 8)        ; move down a character row
+        ADC     #HI(SCREEN_CHAR_ROW_BYTES - 8)      ; jump down one character row
         STA     terrain_draw_addr_HI
-        BMI     landscape_draw_return
+        BMI     landscape_draw_return               ; wrapped past top of memory → done
 
         JMP     landscape_draw_loop
 
