@@ -1469,7 +1469,38 @@ ENDIF
 
 \ ******************************************************************************
 \ * Function: update_and_draw_all_objects
-\ * Description: Update and draw all objects
+\ * Description: Per-frame tick + redraw for every object in the current level.
+\ *
+\ * Object types (see OBJECT_* constants near thrust.6502:102):
+\ *     $00..$03  gun_up_right / up_left / down_right / down_left  (hostile guns)
+\ *     $04       fuel            (shield-tractor pickup)
+\ *     $05       pod_stand       (pod holder; touching ends the level)
+\ *     $06       generator       (shield-tractor destroyable; starts planet timer)
+\ *     $07..$08  door_switch_right / door_switch_left
+\ *     $09       heavy_turret_up_right  (SWRAM build only — impulse bullet)
+\ *
+\ * Per-object loop, repeated until level_N_obj_type[X] == $FF:
+\ *   1. Unpack gun_aim byte into base angle + spread mask.
+\ *   2. Pod_stand / generator per-frame ALIVE-flag updates (pod-lifted clears
+\ *      ALIVE; generator blinks while the planet countdown runs).
+\ *   3. Select sprite for this type; run visibility cull; if the on-screen
+\ *      position is unchanged from last frame and the object is still alive,
+\ *      skip redraw entirely (dirty-rect optimisation).
+\ *   4. Erase old sprite at previous on-screen position for moved objects.
+\ *   5. If not ALIVE any more, advance to next object.
+\ *   6. Pod_stand vs player collision + planet-countdown-expired trigger.
+\ *   7. Test all 4 player bullets against this object's hitbox. Per-type hit
+\ *      dispatch: door_switches latch open, generator recharges/destroys and
+\ *      arms the planet timer, guns / fuel / heavy_turret are destroyed
+\ *      outright, pod_stand and anything above are inert to bullets.
+\ *   8. Shield-tractor fuel pickup (fuel type only, when shield pressed).
+\ *   9. Hostile gun fire (gun types $00..$03; heavy_turret in SWRAM build).
+\ *  10. Generator debris particle emission (every 8 ticks, generator only).
+\ *  11. Plot sprite at new on-screen position and cache it for next frame.
+\ *
+\ * Flags on level_obj_flags,X (see banner above .level_obj_flags for layout):
+\ *     bit 0 = moved-this-frame (set by physics — triggers visibility test)
+\ *     bit 1 = ALIVE             (clear → skip draw + collisions + behaviour)
 \ ******************************************************************************
 
 .update_and_draw_all_objects
@@ -1491,6 +1522,7 @@ ENDIF
 
         STA     object_type
 
+\ --- 1. Unpack gun_aim byte: bits 2..4 = base angle (shifted), bits 0..1 = spread ---
     .load_gun_aim
         LDA     level_0_gun_aim,X                    ; **SELF-MODIFIED CODE**
         level_gun_aim_addr_LO   = load_gun_aim+1
@@ -1505,43 +1537,47 @@ ENDIF
         LDA     gun_spread_mask_table,Y
         STA     gun_angle_spread_mask
         LDY     object_type
+
+\ --- 2a. pod_stand: set ALIVE while on the stand; clear once pod has been lifted ---
         CPY     #OBJECT_pod_stand
-        BNE     L0E29
+        BNE     check_generator_blink
 
         LDA     level_obj_flags,X
         ORA     #$02
         STA     level_obj_flags,X
         LDA     pod_attached_flag_2
-        BEQ     L0E29
+        BEQ     check_generator_blink
 
         LDA     level_obj_flags,X
         AND     #$FD
         STA     level_obj_flags,X
-        
-    .L0E29
+
+\ --- 2b. generator: blink ALIVE bit on/off while planet countdown is active ---
+    .check_generator_blink
         CPY     #OBJECT_generator
-        BNE     L0E4C
+        BNE     load_sprite_pointers
 
         LDA     planet_countdown_timer
-        BMI     L0E4C
+        BMI     load_sprite_pointers            ; countdown not armed yet ($FF)
 
-        BEQ     L0E4C
+        BEQ     load_sprite_pointers            ; countdown expired
 
         LDA     countdown_timer_ticks
         AND     #$04
-        BNE     L0E44
+        BNE     generator_blink_off
 
-        LDA     level_obj_flags,X
+        LDA     level_obj_flags,X               ; on-phase: set ALIVE
         ORA     #$02
         STA     level_obj_flags,X
-        JMP     L0E4C
+        JMP     load_sprite_pointers
 
-    .L0E44
-        LDA     level_obj_flags,X
+    .generator_blink_off
+        LDA     level_obj_flags,X               ; off-phase: clear ALIVE
         AND     #$FD
         STA     level_obj_flags,X
-        
-    .L0E4C
+
+\ --- 3. Load this type's sprite A/B pointers via self-mod inside plot_static_sprite ---
+    .load_sprite_pointers
         LDA     obj_sprite_data_A_table_LO,Y
         STA     sprite_data_A_ptr_LO                ; **MODIFIES CODE**
         LDA     obj_sprite_data_A_table_HI,Y
@@ -1554,76 +1590,82 @@ ENDIF
         STA     update_objects_flag
         STA     obj_plot_sprite_at_ptr+1
         LDA     level_obj_flags,X
-        ROR     A
-        BCC     L0EAA
+        ROR     A                                   ; shift bit 0 (moved) into C
+        BCC     test_alive_flag                     ; not moved → skip visibility
 
-        JSR     object_visibility_test
+        JSR     object_visibility_test              ; moved → recompute plot pos
 
+\ --- Dirty-rect check: if new plot ptr == cached ptr AND still alive, skip redraw ---
         LDX     current_object
         LDA     obj_plot_sprite_at_ptr+1
-        BEQ     L0E93
+        BEQ     erase_old_sprite                    ; culled this frame → erase old
 
         CMP     level_obj_plot_at_ptr_HI,X
-        BNE     L0E93
+        BNE     erase_old_sprite                    ; moved cell → erase old
 
         LDA     obj_plot_sprite_at_ptr
         CMP     level_obj_plot_at_ptr_LO,X
-        BNE     L0E93
+        BNE     erase_old_sprite
 
         LDA     level_obj_flags,X
         AND     #$02
-        BEQ     L0E93
+        BEQ     erase_old_sprite                    ; died → erase old
 
-        LDA     #$FF
+        LDA     #$FF                                ; unchanged → mark "no redraw"
         STA     update_objects_flag
-        JMP     L0EBB
+        JMP     check_planet_explode_trigger
 
-    .L0E93
+\ --- 4. Erase sprite at previous on-screen position and clear moved-bit ---
+    .erase_old_sprite
         LDA     level_obj_plot_at_ptr_HI,X
         STA     plot_sprite_at_ptr+1
         LDA     level_obj_plot_at_ptr_LO,X
         STA     plot_sprite_at_ptr
-        JSR     plot_static_sprite
+        JSR     plot_static_sprite                  ; XOR-erase at old cell
 
         LDX     current_object
         LDA     level_obj_flags,X
         AND     #$FE
         STA     level_obj_flags,X
-    .L0EAA
+
+\ --- 5. If ALIVE bit is clear, skip the rest of the per-object work ---
+    .test_alive_flag
         LDA     level_obj_flags,X
         AND     #$02
-        BNE     L0EB4
+        BNE     compute_visibility_if_needed
 
         JMP     next_object
 
-    .L0EB4
+    .compute_visibility_if_needed
         LDA     obj_plot_sprite_at_ptr+1
-        BNE     L0EBB
+        BNE     check_planet_explode_trigger
 
-        JSR     object_visibility_test
+        JSR     object_visibility_test              ; alive but not yet culled
 
-    .L0EBB
+\ --- 6. Planet-explode trigger: fires when countdown hits zero for any non-pod object ---
+    .check_planet_explode_trigger
         LDA     object_type
         CMP     #OBJECT_pod_stand
-        BEQ     bullet_test_object
+        BEQ     bullet_test_object                  ; pod_stand is inert to the trigger
 
         LDA     planet_countdown_timer
-        BNE     bullet_test_object
+        BNE     bullet_test_object                  ; $01..$7F → still counting
 
         LDA     planet_explode_anim
-        BNE     L0ECD
+        BNE     init_planet_explode_timer
 
-        LDA     #$0F
+        LDA     #$0F                                ; kick off explosion animation
         STA     planet_explode_anim
-    .L0ECD
+    .init_planet_explode_timer
         LDA     #POD_DESTROY_TIMER_INIT
         STA     pod_destroying_player_timer
         LDA     #$01
         STA     explosion_particle_type
         LDA     #$00
         STA     score_value
-        JMP     destroy_object
+        JMP     destroy_object                      ; treat ship as destroyed
 
+\ --- 7. Bullet collision: load per-type hitbox / score / explosion, scan 4 bullets ---
     .bullet_test_object
         LDX     object_type
         LDA     obj_type_width,X
@@ -1634,38 +1676,39 @@ ENDIF
         STA     explosion_particle_type
         LDA     obj_type_score_value,X
         STA     score_value
-        LDX     #$03
-        
+        LDX     #$03                                ; X = bullet index 3..0
+
     .bullet_test_loop
         LDA     particles_lifetime,X
-        BEQ     L0F61
+        BEQ     bullet_miss                         ; slot empty
 
         LDA     particles_type,X
-        BNE     L0F61
+        BNE     bullet_miss                         ; not a player bullet
 
-        SEC
+        SEC                                         ; AABB test: dx = bullet.x - obj.x
         LDA     particles_xpos_INT,X
         SBC     current_obj_xpos_INT
-        BCC     L0F61
+        BCC     bullet_miss                         ; left of obj
 
         CMP     current_object_width
-        BCS     L0F61
+        BCS     bullet_miss                         ; right of obj
 
-        SEC
+        SEC                                         ; AABB test: dy = bullet.y - obj.y
         LDA     particles_ypos_INT,X
         SBC     current_obj_ypos_INT
         TAY
         LDA     particles_ypos_INT_HI,X
         SBC     current_obj_ypos_EXT
-        BNE     L0F61
+        BNE     bullet_miss                         ; different Y high-byte
 
         CPY     current_object_height
-        BCS     L0F61
+        BCS     bullet_miss                         ; below obj
 
-        LDA     particles_lifetime,X
+        LDA     particles_lifetime,X                ; hit: kill bullet lifetime
         AND     #PARTICLE_flag
         STA     particles_lifetime,X
-        
+
+\ --- Hit dispatch by object type ---
         LDA     object_type
         CMP     #OBJECT_door_switch_right
         BEQ     handle_door_switch
@@ -1673,32 +1716,31 @@ ENDIF
         CMP     #OBJECT_door_switch_left
         BEQ     handle_door_switch
 
-        JMP     handle_generator
+        JMP     handle_generator                    ; everything else: test generator, else generic
 
     .handle_door_switch
-        LDA     #$FF
+        LDA     #$FF                                ; latch door-switch state
         STA     door_switch_counter_A
-        JSR     L0F64
+        JSR     spawn_hit_debris
 
     .handle_generator
         LDA     object_type
         CMP     #OBJECT_generator
-        BNE     L0F7D
+        BNE     check_generic_destructible
 
-        JSR     L0F64
+        JSR     spawn_hit_debris
 
-        JSR     rnd
-
-        AND     #$1F
-        ADC     generator_recharge_increase
+        JSR     rnd                                 ; generator is destroyable only when
+        AND     #$1F                                ; accumulated recharge+random overflows
+        ADC     generator_recharge_increase         ; → otherwise damage is absorbed as recharge
         STA     generator_recharge_counter
         STA     generator_recharge_increase
-        BCC     delete_object
+        BCC     delete_object                       ; no overflow → just bumped recharge
 
         LDA     planet_countdown_timer
-        BPL     delete_object
+        BPL     delete_object                       ; countdown already armed → no re-arm
 
-        LDA     #$FF
+        LDA     #$FF                                ; generator truly destroyed: arm countdown
         STA     generator_recharge_counter
         LDA     #PLANET_COUNTDOWN_SECONDS
         STA     planet_countdown_timer
@@ -1706,10 +1748,12 @@ ENDIF
         STA     countdown_timer_ticks
         JMP     delete_object
 
-    .L0F61
-        JMP     L0FAA
+\ --- Bullet didn't hit this object (or generator absorbed it) — try next bullet ---
+    .bullet_miss
+        JMP     try_next_bullet
 
-    .L0F64
+\ --- Helper: spawn random-debris explosion at bullet X's particle position ---
+    .spawn_hit_debris
         LDA     particles_xpos_INT,X
         STA     explosion_xpos_INT
         LDA     particles_ypos_INT_HI,X
@@ -1720,18 +1764,21 @@ ENDIF
         STA     explosion_particle_type
         JMP     create_explosion
 
+\ --- delete_object: generator recharge path — bullet consumed, no destruction ---
     .delete_object
         JMP     object_bullet_test_done
 
-    .L0F7D
+\ --- Generic destructibility gate: types < pod_stand are destroyed; others are inert ---
+    .check_generic_destructible
         LDA     object_type
 IF _SWRAM_BUILD
-        CMP     #OBJECT_heavy_turret_up_right
+        CMP     #OBJECT_heavy_turret_up_right       ; SWRAM: heavy turret is also destroyable
         BEQ     destroy_object
 ENDIF
         CMP     #OBJECT_pod_stand
-        BCS     L0FAA
+        BCS     try_next_bullet                     ; pod_stand and above are inert
 
+\ --- Destroy: clear ALIVE bit, spawn explosion, award score ---
     .destroy_object
         LDX     current_object
         LDA     level_obj_flags,X
@@ -1753,62 +1800,64 @@ ENDIF
 
         JMP     object_bullet_test_done
 
-    .L0FAA
+    .try_next_bullet
         DEX
-        BMI     object_bullet_test_done
+        BMI     object_bullet_test_done             ; all 4 bullets tested
 
         JMP     bullet_test_loop
 
+\ --- Post-bullet tail: fuel tractor → gun fire → generator debris → plot ---
     .object_bullet_test_done
-        LDA     pod_destroying_player_timer
-        BMI     L0FB7
+        LDA     pod_destroying_player_timer         ; $FF (idle/armed) → run tractor
+        BMI     try_tractor_fuel_pickup             ; positive → pod killing player, skip
 
-    .L0FB4
-        JMP     L1005
+    .skip_tractor_check
+        JMP     try_gun_fire
 
-    .L0FB7
+\ --- 8. Shield-tractor fuel pickup: fuel type only, player must be near + shield pressed ---
+    .try_tractor_fuel_pickup
         LDA     pod_attached_flag_1
-        BNE     L0FB4
+        BNE     skip_tractor_check                  ; pod on ship → no fuel pickup
 
         LDA     object_type
         CMP     #OBJECT_fuel
-        BNE     L0FB4
+        BNE     skip_tractor_check
 
-        CMP     #OBJECT_generator
-        BEQ     L0FB4
+        CMP     #OBJECT_generator                   ; (unreachable after fuel-eq check —
+        BEQ     skip_tractor_check                  ;  kept because the original does it)
 
         LDA     shield_tractor_pressed
-        BEQ     L0FB4
+        BEQ     skip_tractor_check
 
-        LDA     current_obj_xpos_INT
+        LDA     current_obj_xpos_INT                ; player proximity: |dx| < 6
         SEC
         SBC     player_xpos_INT
-        BEQ     L0FB4
+        BEQ     skip_tractor_check
 
         CMP     #$06
-        BCS     L0FB4
+        BCS     skip_tractor_check
 
-        LDA     current_obj_ypos_INT
+        LDA     current_obj_ypos_INT                ; and |dy| < $1C, same Y high byte
         SBC     player_ypos_INT
         TAX
         LDA     current_obj_ypos_EXT
         SBC     player_ypos_INT_HI
-        BNE     L0FB4
+        BNE     skip_tractor_check
 
         CPX     #$1C
-        BCS     L0FB4
+        BCS     skip_tractor_check
 
-        LDA     #$01
+        LDA     #$01                                ; engaged: count tractor frames
         STA     collecting_fuel_flag
         LDX     current_object
         LDY     obj_tractor_counter,X
         INY
         TYA
         STA     obj_tractor_counter,X
-        CMP     #$1A
-        BCC     L1005
+        CMP     #$1A                                ; ~26 frames to fully tractor fuel
+        BCC     try_gun_fire
 
-        LDA     level_obj_flags,X
+        LDA     level_obj_flags,X                   ; fuel collected: clear ALIVE, score, sfx
         AND     #$FD
         STA     level_obj_flags,X
         LDA     #$30
@@ -1816,38 +1865,39 @@ ENDIF
 
         JSR     collect_pod_fuel_sound
 
-    .L1005
+\ --- 9. Hostile gun fire: guns ($00-$03), plus heavy_turret ($09) in SWRAM build ---
+    .try_gun_fire
         LDA     object_type
         CMP     #OBJECT_fuel
 IF _SWRAM_BUILD
-        BCC     can_fire_check
+        BCC     can_fire_check                      ; types 0..3 (guns)
         CMP     #OBJECT_heavy_turret_up_right
-        BNE     L1067
+        BNE     generator_debris_tick
     .can_fire_check
 ELSE
-        BCS     L1067
+        BCS     generator_debris_tick
 ENDIF
 
-        LDA     generator_recharge_counter
-        BNE     L1067
+        LDA     generator_recharge_counter          ; guns are silenced while generator
+        BNE     generator_debris_tick               ; is recharging (or already destroyed)
 
-        LDA     planet_countdown_timer
-        BPL     L1067
+        LDA     planet_countdown_timer              ; and once the planet countdown is armed
+        BPL     generator_debris_tick
 
-        LDA     current_obj_visible_flag
-        BEQ     L1067
+        LDA     current_obj_visible_flag            ; don't shoot from off-screen
+        BEQ     generator_debris_tick
 
-        JSR     rnd
+        JSR     rnd                                 ; per-frame fire probability
 
         CMP     hostile_gun_shoot_probability
-        BCS     L1067
+        BCS     generator_debris_tick
 
         JSR     hostile_gun_sound
 
         JSR     particle_return_free_slot_in_Y
 
-        TYA
-        TAX
+        TYA                                         ; pick shot angle:
+        TAX                                         ;   base + rnd(spread_mask) + rnd(0..3)
         JSR     rnd
 
         AND     #$03
@@ -1861,7 +1911,7 @@ ENDIF
         JSR     angle_to_bullet_dx_dy
 
 IF _SWRAM_BUILD
-        LDA     object_type
+        LDA     object_type                         ; heavy_turret fires a distinct particle
         CMP     #OBJECT_heavy_turret_up_right
         BNE     spawn_hostile_bullet
         LDA     #PARTICLE_type_hostile_heavy_bullet
@@ -1885,7 +1935,7 @@ IF _SWRAM_BUILD
         LDY     #OBJECT_gun_up_right            ; heavy_turret_up_right uses up-right gun offsets
     .spawn_offset_lookup
 ENDIF
-        LDA     current_obj_xpos_INT
+        LDA     current_obj_xpos_INT                ; bullet spawn pos = obj + per-gun offset
         CLC
         ADC     gun_bullet_x_offset,Y
         STA     particles_xpos_INT,X
@@ -1895,25 +1945,26 @@ ENDIF
         LDA     current_obj_ypos_EXT
         ADC     #$00
         STA     particles_ypos_INT_HI,X
-        
-    .L1067
+
+\ --- 10. Generator debris emitter: every 8 ticks, generator only, before planet trigger ---
+    .generator_debris_tick
         LDA     level_tick_counter
         AND     #$07
-        BNE     L10B4
+        BNE     plot_current_sprite
 
         LDA     object_type
         CMP     #OBJECT_generator
-        BNE     L10B4
+        BNE     plot_current_sprite
 
         LDA     generator_recharge_counter
-        BNE     L10B4
+        BNE     plot_current_sprite                 ; generator recharging/destroyed
 
         LDA     planet_countdown_timer
-        BPL     L10B4
+        BPL     plot_current_sprite                 ; countdown already armed
 
         JSR     particle_return_free_slot_in_Y
 
-        LDA     current_obj_xpos_INT
+        LDA     current_obj_xpos_INT                ; spawn a debris puff drifting upward
         CLC
         ADC     #$04
         STA     particles_xpos_INT,Y
@@ -1925,7 +1976,7 @@ ENDIF
         STA     particles_ypos_INT,Y
         LDA     current_obj_ypos_EXT
         STA     particles_ypos_INT_HI,Y
-        LDA     #$8E
+        LDA     #$8E                                ; dy = negative (upward)
         STA     particles_dy_FRAC,Y
         LDA     #$FF
         STA     particles_dy_INT,Y
@@ -1935,15 +1986,17 @@ ENDIF
         AND     #PARTICLE_flag
         ORA     #PARTICLE_lifetime_generator
         STA     particles_lifetime,Y
-    .L10B4
-        LDA     update_objects_flag
+
+\ --- 11. Plot sprite at new on-screen position and cache for next-frame dirty-rect check ---
+    .plot_current_sprite
+        LDA     update_objects_flag                 ; set by dirty-rect → skip redraw
         BNE     next_object
 
         LDA     obj_plot_sprite_at_ptr
         STA     plot_sprite_at_ptr
         LDA     obj_plot_sprite_at_ptr+1
         STA     plot_sprite_at_ptr+1
-        BEQ     next_object
+        BEQ     next_object                         ; culled off-screen
 
         LDX     current_object
         LDA     plot_sprite_at_ptr

@@ -112,7 +112,7 @@ BOTTOM_HIT_TOLERANCE = 6  # pixels for bottom boundary handle
 COL_BOTTOM_HANDLE = (100, 180, 255)
 
 # Object types whose gun_aim byte actually drives firing behaviour.
-# thrust.6502 gates firing at L1005: types < OBJECT_fuel (0-3) AND
+# thrust.6502 gates firing at try_gun_fire: types < OBJECT_fuel (0-3) AND
 # OBJECT_heavy_turret_up_right ($09). Other types ignore gun_aim.
 OBJECT_FIRING_TYPES = frozenset({0x00, 0x01, 0x02, 0x03, 0x09})
 
@@ -2041,7 +2041,7 @@ class Editor:
         """Draw an arrow along the centre of the gun's firing cone, plus a
         translucent wedge showing the spread.
 
-        thrust.6502 firing logic (see L1005): shot_angle = base + rnd(spread_mask)
+        thrust.6502 firing logic (see try_gun_fire): shot_angle = base + rnd(spread_mask)
         + rnd(3), so bullets fly in a one-sided cone from `base` to
         `base + spread_mask + 3`. The arrow therefore points along the cone
         midpoint, not along `base`, which is how the gun actually "aims".
