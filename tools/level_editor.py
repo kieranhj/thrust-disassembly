@@ -110,6 +110,20 @@ WALL_HIT_TOLERANCE = 5  # pixels
 BOTTOM_HIT_TOLERANCE = 6  # pixels for bottom boundary handle
 COL_BOTTOM_HANDLE = (100, 180, 255)
 
+# Object types whose gun_aim byte actually drives firing behaviour.
+# thrust.6502 gates firing at L1005: types < OBJECT_fuel (0-3) AND
+# OBJECT_heavy_turret_up_right ($09). Other types ignore gun_aim.
+OBJECT_FIRING_TYPES = frozenset({0x00, 0x01, 0x02, 0x03, 0x09})
+
+# Spread mask index (gun_aim bits 0-1) -> actual mask from
+# thrust.6502 gun_spread_mask_table.
+GUN_SPREAD_MASKS = (0x01, 0x03, 0x07, 0x0F)
+
+# Visual scale for the aim indicator drawn over selected firing objects.
+GUN_AIM_ARROW_LEN = 18   # world X units (will be scaled by camera zoom)
+COL_GUN_AIM = (255, 180, 80)
+COL_GUN_SPREAD = (255, 180, 80, 90)
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -1059,6 +1073,10 @@ class Editor:
                     self.level.dirty = True
                     self.selected_checkpoint = None
 
+        elif event.key in (pygame.K_LEFTBRACKET, pygame.K_RIGHTBRACKET,
+                           pygame.K_COMMA, pygame.K_PERIOD):
+            self._adjust_selected_gun_aim(event.key)
+
         elif event.key == pygame.K_ESCAPE:
             self.selected_object = None
             self.selected_checkpoint = None
@@ -1066,6 +1084,38 @@ class Editor:
             self.dragging_bottom = False
             self.dragging_no_wrap = False
             self.show_obj_menu = False
+
+    def _adjust_selected_gun_aim(self, key):
+        """Rotate base angle / cycle spread for the selected firing object.
+
+        [ / ]  rotate base angle by -4 / +4 in the 32-angle system
+        , / .  decrement / increment spread mask index (0..3)
+        No-op if the selected object doesn't fire. (- / = are taken by zoom.)
+        """
+        if self.selected_object is None or self.mode != "object":
+            return
+        obj = self.level.objects[self.selected_object]
+        if obj["type"] not in OBJECT_FIRING_TYPES:
+            return
+
+        aim = obj.get("gun_aim", 0x00)
+        base = aim & 0x1C                      # bits 4-2: base angle (step 4)
+        spread_idx = aim & 0x03                # bits 1-0: spread mask index
+
+        if key == pygame.K_LEFTBRACKET:
+            base = (base - 4) & 0x1C
+        elif key == pygame.K_RIGHTBRACKET:
+            base = (base + 4) & 0x1C
+        elif key == pygame.K_COMMA:
+            spread_idx = (spread_idx - 1) & 0x03
+        elif key == pygame.K_PERIOD:
+            spread_idx = (spread_idx + 1) & 0x03
+
+        new_aim = base | spread_idx
+        if new_aim != aim:
+            self.undo.save(self.level)
+            obj["gun_aim"] = new_aim
+            self.level.dirty = True
 
     def _handle_mouse_down(self, event):
         mx, my = event.pos
@@ -1853,7 +1903,65 @@ class Editor:
                 pygame.draw.rect(screen, (200, 200, 200),
                                  (int(sx) - 1, int(sy) - 1, draw_w + 2, draw_h + 2), 1)
 
+            # Aim indicator for firing types, only while in object mode
+            if self.mode == "object" and obj["type"] in OBJECT_FIRING_TYPES:
+                self._render_gun_aim(obj, sx, sy, draw_w, draw_h)
+
         screen.set_clip(None)
+
+    def _render_gun_aim(self, obj, sx, sy, draw_w, draw_h):
+        """Draw an arrow along the centre of the gun's firing cone, plus a
+        translucent wedge showing the spread.
+
+        thrust.6502 firing logic (see L1005): shot_angle = base + rnd(spread_mask)
+        + rnd(3), so bullets fly in a one-sided cone from `base` to
+        `base + spread_mask + 3`. The arrow therefore points along the cone
+        midpoint, not along `base`, which is how the gun actually "aims".
+
+        Game angle convention (see angle_to_x/y lookup tables in app_init.asm):
+        angle 0 = up, CW, 32 steps. dx = +1.25*sin(a*2pi/32), dy = -2.5*cos(...).
+        """
+        aim = obj.get("gun_aim", 0x00)
+        base = aim & 0x1C
+        spread_idx = aim & 0x03
+        spread_mask = GUN_SPREAD_MASKS[spread_idx]
+        # Total additive spread on top of base.
+        max_spread = spread_mask + 3
+        # Centre of the firing cone (where the arrow points).
+        centre = base + max_spread / 2.0
+        half = max_spread / 2.0
+
+        cx = sx + draw_w / 2
+        cy = sy + draw_h / 2
+        arrow_len = GUN_AIM_ARROW_LEN * self.camera.zoom / 4
+
+        def angle_to_xy(angle, length):
+            rad = (angle / 32.0) * 2 * math.pi
+            return math.sin(rad) * length, -math.cos(rad) * length
+
+        # Spread wedge as a pie slice (apex + arc sampled every 1 angle unit).
+        # A straight-edged triangle looks wrong for wide spreads ($0F mask is
+        # ~202 degrees total) because the far chord cuts across the "circle".
+        pts = [(cx, cy)]
+        steps = max(2, int(max_spread))
+        for i in range(steps + 1):
+            a = (centre - half) + max_spread * i / steps
+            dx, dy = angle_to_xy(a, arrow_len)
+            pts.append((cx + dx, cy + dy))
+        cone = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
+        pygame.draw.polygon(cone, COL_GUN_SPREAD, pts)
+        self.screen.blit(cone, (0, 0))
+
+        # Centre-angle arrow.
+        dx_c, dy_c = angle_to_xy(centre, arrow_len)
+        tip = (cx + dx_c, cy + dy_c)
+        pygame.draw.line(self.screen, COL_GUN_AIM, (cx, cy), tip, 2)
+        perp_dx, perp_dy = angle_to_xy(centre + 8, 3)  # +90 deg CW from centre
+        pygame.draw.polygon(self.screen, COL_GUN_AIM, [
+            tip,
+            (tip[0] - dx_c * 0.3 + perp_dx, tip[1] - dy_c * 0.3 + perp_dy),
+            (tip[0] - dx_c * 0.3 - perp_dx, tip[1] - dy_c * 0.3 - perp_dy),
+        ])
 
     def _render_checkpoints(self):
         """Draw checkpoint markers as horizontal lines with spawn position dots."""
@@ -2185,6 +2293,13 @@ class Editor:
             obj = lv.objects[self.selected_object]
             name = OBJECT_TYPE_NAMES.get(obj["type"], f"?{obj['type']}")
             parts.append(f"Selected: {name} @ ({obj['x']}, {obj['y']})")
+            if obj["type"] in OBJECT_FIRING_TYPES:
+                aim = obj.get("gun_aim", 0x00)
+                base = aim & 0x1C
+                spread_idx = aim & 0x03
+                mask = GUN_SPREAD_MASKS[spread_idx]
+                parts.append(
+                    f"aim=${aim:02X} base={base} spread=${mask:02X}  ([/] rotate  ,/. spread)")
 
         if self.selected_checkpoint is not None and self.selected_checkpoint < len(lv.checkpoints):
             cp = lv.checkpoints[self.selected_checkpoint]
