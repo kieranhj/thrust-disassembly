@@ -5974,7 +5974,7 @@ ENDIF
 }
 
 IF _SWRAM_BUILD==FALSE
-INCLUDE "level_data.6502"
+INCLUDE "level_data.asm"
 ENDIF
 
 .level_obj_flags                                        ; initialised to $02 at start of level
@@ -8272,7 +8272,7 @@ ENDIF
 \ ******************************************************************************
 
 IF _SWRAM_BUILD=FALSE
-INCLUDE "obj_sprite_data.6502"
+INCLUDE "obj_sprite_data.asm"
 ENDIF ; _SWRAM_BUILD=FALSE
 
 \ ******************************************************************************
