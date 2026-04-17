@@ -38,20 +38,26 @@ OBJECT_NAMES = [
     "door_switch_right",
     "door_switch_left",
     "heavy_turret_up_right",
+    "heavy_turret_down_right",
+    "heavy_turret_up_left",
+    "heavy_turret_down_left",
 ]
 
 # Char-column widths from obj_type_width at thrust.6502:1327.
 OBJECT_WIDTH_CHARS = {
-    "gun_up_right":          5,
-    "gun_down_right":        5,
-    "gun_up_left":           5,
-    "gun_down_left":         5,
-    "fuel":                  4,
-    "pod_stand":             5,
-    "generator":             5,
-    "door_switch_right":     2,
-    "door_switch_left":      2,
-    "heavy_turret_up_right": 5,
+    "gun_up_right":            5,
+    "gun_down_right":          5,
+    "gun_up_left":             5,
+    "gun_down_left":           5,
+    "fuel":                    4,
+    "pod_stand":               5,
+    "generator":               5,
+    "door_switch_right":       2,
+    "door_switch_left":        2,
+    "heavy_turret_up_right":   5,
+    "heavy_turret_down_right": 5,
+    "heavy_turret_up_left":    5,
+    "heavy_turret_down_left":  5,
 }
 
 # BBC Micro Mode 1 physical palette (8 physical colours, index 0-7).
@@ -348,22 +354,40 @@ def encode_streams(pixels: List[List[int]],
 # ---------------------------------------------------------------------------
 
 def load_sprites_from_source(source: str) -> Dict[str, Sprite]:
-    """Load all 9 object sprites from a thrust.6502 (or export) source string."""
+    """Load all object sprites from a thrust.6502 (or export) source string.
+
+    If a sprite's label is missing, or decodes to zero height (placeholder
+    $FF-only entry for a newly added OBJECT_NAMES entry that hasn't been
+    drawn yet), returns a blank sprite of the configured width at default
+    height so the editor can still launch and the user can paint it.
+    """
     out = {}
+    default_h = 8
     for name in OBJECT_NAMES:
         width = OBJECT_WIDTH_CHARS[name]
-        sa = extract_label_bytes(source, f"obj_sprite_data_A_{name}")
-        sb = extract_label_bytes(source, f"obj_sprite_data_B_{name}")
-        pixels, height, _, first_adv = decode_streams(sa, sb, width)
-        out[name] = Sprite(
-            name=name,
-            width_chars=width,
-            height=height,
-            pixels=pixels,
-            first_byte_has_advance=first_adv,
-            orig_stream_a=sa[:],
-            orig_stream_b=sb[:],
-        )
+        try:
+            sa = extract_label_bytes(source, f"obj_sprite_data_A_{name}")
+            sb = extract_label_bytes(source, f"obj_sprite_data_B_{name}")
+            pixels, height, _, first_adv = decode_streams(sa, sb, width)
+        except ValueError:
+            pixels, height, first_adv, sa, sb = [], 0, True, [], []
+        if height == 0 or not pixels:
+            out[name] = Sprite(
+                name=name,
+                width_chars=width,
+                height=default_h,
+                pixels=[[0] * (width * 4) for _ in range(default_h)],
+            )
+        else:
+            out[name] = Sprite(
+                name=name,
+                width_chars=width,
+                height=height,
+                pixels=pixels,
+                first_byte_has_advance=first_adv,
+                orig_stream_a=sa[:],
+                orig_stream_b=sb[:],
+            )
     return out
 
 

@@ -113,8 +113,8 @@ COL_BOTTOM_HANDLE = (100, 180, 255)
 
 # Object types whose gun_aim byte actually drives firing behaviour.
 # thrust.6502 gates firing at try_gun_fire: types < OBJECT_fuel (0-3) AND
-# OBJECT_heavy_turret_up_right ($09). Other types ignore gun_aim.
-OBJECT_FIRING_TYPES = frozenset({0x00, 0x01, 0x02, 0x03, 0x09})
+# OBJECT_heavy_turret_up_right..down_left ($09..$0C). Others ignore gun_aim.
+OBJECT_FIRING_TYPES = frozenset({0x00, 0x01, 0x02, 0x03, 0x09, 0x0A, 0x0B, 0x0C})
 
 # Spread mask index (gun_aim bits 0-1) -> actual mask from
 # thrust.6502 gun_spread_mask_table.
@@ -821,6 +821,8 @@ class SpriteCache:
             if obj_type not in SPRITE_DATA:
                 return None
             pixel_array = decode_sprite(obj_type)
+        if pixel_array.ndim != 2 or pixel_array.size == 0:
+            return None                           # unpainted sprite, skip render
         h, w = pixel_array.shape
 
         palette = {

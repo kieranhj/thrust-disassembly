@@ -27,7 +27,7 @@
 \ *****************************************************************************
 \ *****************************************************************************
 
-_SWRAM_BUILD         = FALSE
+_SWRAM_BUILD         = TRUE
 
 _DEBUG_RASTERS       = (_SWRAM_BUILD AND FALSE)   ; Raster timing
 _UNROLL_TERRAIN      = (_SWRAM_BUILD AND TRUE)    ; Faster terrain plotting
@@ -109,12 +109,16 @@ OBJECT_generator                    = $6        ; reactor/generator
 OBJECT_door_switch_right            = $7        ; door switch (right side)
 OBJECT_door_switch_left             = $8        ; door switch (left side)
 OBJECT_heavy_turret_up_right        = $9        ; heavy turret facing up-right (SWRAM only)
+OBJECT_heavy_turret_down_right      = $A        ; heavy turret facing down-right (SWRAM only)
+OBJECT_heavy_turret_up_left         = $B        ; heavy turret facing up-left (SWRAM only)
+OBJECT_heavy_turret_down_left       = $C        ; heavy turret facing down-left (SWRAM only)
 
 OBJ_flag_drawn                      = $01       ; level_obj_flags bit 0: sprite was XOR-plotted (needs erase before redraw)
 OBJ_flag_alive                      = $02       ; level_obj_flags bit 1: object is active (update + draw + collide)
 
 PARTICLE_flag                       = $80       ; particle can be replaced
 PARTICLE_lifetime_bullet            = $28       ; bullet lifetime in ticks
+PARTICLE_lifetime_heavy_bullet      = $50       ; heavy bullet lifetime (2x regular, SWRAM only)
 PARTICLE_lifetime_generator         = $0A       ; generator debris lifetime
 PARTICLE_lifetime_star              = $1E       ; star lifetime in ticks
 PARTICLE_lifetime_thrust            = $09       ; thrust lifetime in ticks
@@ -437,10 +441,12 @@ multiply_operand_a                  = $0088     ; multiplier input for signed 8x
 draw_line_start_y                   = $0089     ; Y coord of line start for terrain drawing
 explosion_xpos_INT                  = $0089     ; integer X position of explosion origin
 multiply_result_lo                  = $0089     ; low byte of 8x8 multiply result
+heavy_impulse_FRAC                  = $0089     ; SWRAM: fractional scratch in apply_heavy_impulse_to_ship
 
 draw_line_end_x                     = $008A     ; X coord of line end for terrain drawing
 explosion_ypos_INT                  = $008A     ; integer Y position of explosion origin
 multiply_result_hi                  = $008A     ; high byte of 8x8 multiply result
+heavy_impulse_INT                   = $008A     ; SWRAM: integer scratch in apply_heavy_impulse_to_ship
 
 draw_line_end_y                     = $008B     ; Y coord of line end for terrain drawing
 explosion_ypos_INT_HI               = $008B     ; high byte of explosion Y position
@@ -1394,27 +1400,27 @@ ENDIF
 .obj_type_width
         EQUB    $05,$05,$05,$05,$04,$05,$05,$02,$02
 IF _SWRAM_BUILD
-        EQUB    $05                              ; [9] heavy_turret_up_right
+        EQUB    $05,$05,$05,$05                  ; [9..C] heavy_turret orientations
 ENDIF
 
 .obj_type_height
         EQUB    $08,$08,$08,$08,$0A,$08,$0A,$08,$08
 IF _SWRAM_BUILD
-        EQUB    $08                              ; [9] heavy_turret_up_right
+        EQUB    $08,$08,$08,$08                  ; [9..C] heavy_turret orientations
 ENDIF
 
 .obj_type_explosion_particle
         EQUB    $02,$02,$02,$02,$01                ; only guns and fuel can be destroyed
 IF _SWRAM_BUILD
         EQUB    $00,$00,$00,$00                  ; pad [5..8] (not destructible)
-        EQUB    $02                              ; [9] heavy_turret_up_right
+        EQUB    $02,$02,$02,$02                  ; [9..C] heavy_turret orientations
 ENDIF
 
 .obj_type_score_value                            ; only guns and fuel can be destroyed
         EQUB    $75,$75,$75,$75,$15
 IF _SWRAM_BUILD
         EQUB    $00,$00,$00,$00                  ; pad [5..8]
-        EQUB    $A0                              ; [9] heavy_turret_up_right score
+        EQUB    $A0,$A0,$A0,$A0                  ; [9..C] heavy_turret orientations
 ENDIF
 
 \ ******************************************************************************
@@ -1831,8 +1837,11 @@ ENDIF
     .check_generic_destructible
         LDA     object_type
 IF _SWRAM_BUILD
-        CMP     #OBJECT_heavy_turret_up_right       ; SWRAM: heavy turret is also destroyable
-        BEQ     destroy_object
+        CMP     #OBJECT_heavy_turret_up_right       ; $09
+        BCC     check_pod_stand                     ; < $09: fall through to normal check
+        CMP     #(OBJECT_heavy_turret_down_left+1)  ; $0D
+        BCC     destroy_object                      ; $09..$0C: heavy turret → destroy
+    .check_pod_stand
 ENDIF
         CMP     #OBJECT_pod_stand
         BCS     try_next_bullet                     ; pod_stand and above are inert
@@ -1924,14 +1933,16 @@ ENDIF
 
         JSR     collect_pod_fuel_sound
 
-\ --- 9. Hostile gun fire: guns ($00-$03), plus heavy_turret ($09) in SWRAM build ---
+\ --- 9. Hostile gun fire: guns ($00-$03), plus heavy_turrets ($09-$0C) in SWRAM build ---
     .try_gun_fire
         LDA     object_type
         CMP     #OBJECT_fuel
 IF _SWRAM_BUILD
         BCC     can_fire_check                      ; types 0..3 (guns)
-        CMP     #OBJECT_heavy_turret_up_right
-        BNE     generator_debris_tick
+        CMP     #OBJECT_heavy_turret_up_right       ; $09
+        BCC     generator_debris_tick               ; $04..$08: no fire
+        CMP     #(OBJECT_heavy_turret_down_left+1)  ; $0D
+        BCS     generator_debris_tick               ; >= $0D: no fire
     .can_fire_check
 ELSE
         BCS     generator_debris_tick
@@ -1970,30 +1981,22 @@ ENDIF
         JSR     angle_to_bullet_dx_dy
 
 IF _SWRAM_BUILD
-        LDA     object_type                         ; heavy_turret fires a distinct particle
-        CMP     #OBJECT_heavy_turret_up_right
-        BNE     spawn_hostile_bullet
-        LDA     #PARTICLE_type_hostile_heavy_bullet
-        JMP     spawn_type_set
-    .spawn_hostile_bullet
-ENDIF
+        JSR     swram_pick_bullet_type              ; A = particle type; also slows bullet
+        STA     particles_type,X                    ;   + sets lifetime (heavy = 2x regular)
+        STA     particles_xpos_FRAC,X
+ELSE
         LDA     #PARTICLE_type_hostile_bullet
-IF _SWRAM_BUILD
-    .spawn_type_set
-ENDIF
         STA     particles_type,X
         STA     particles_xpos_FRAC,X
         LDA     particles_lifetime,X
         AND     #PARTICLE_flag
         ORA     #PARTICLE_lifetime_bullet
         STA     particles_lifetime,X
+ENDIF
         LDY     object_type
 IF _SWRAM_BUILD
-        CPY     #OBJECT_heavy_turret_up_right
-        BNE     spawn_offset_lookup
-        LDY     #OBJECT_gun_up_right            ; heavy_turret_up_right uses up-right gun offsets
-    .spawn_offset_lookup
-ENDIF
+        JSR     swram_remap_heavy_to_gun_Y          ; $09..$0C → $00..$03 so they share
+ENDIF                                               ;   the 4-entry gun_bullet_*_offset tables
         LDA     current_obj_xpos_INT                ; bullet spawn pos = obj + per-gun offset
         CLC
         ADC     gun_bullet_x_offset,Y
@@ -2148,6 +2151,9 @@ ENDIF
 
 .object_type_cull_size_table
         EQUB    $44,$44,$44,$44,$45,$45,$44,$47,$47
+IF _SWRAM_BUILD
+        EQUB    $44,$44,$44,$44                      ; [9..C] heavy_turret orientations (5 chars wide like guns)
+ENDIF
 
 \ ******************************************************************************
 \ * Function: calculate_object_plot_addr
@@ -6462,13 +6468,6 @@ ENDIF
         AND     #$7F
         STA     particles_lifetime,X
         LDA     particles_type,X
-IF _SWRAM_BUILD
-        CMP     #PARTICLE_type_hostile_heavy_bullet
-        BNE     skip_heavy_impulse
-        JSR     apply_heavy_impulse_to_ship
-        LDA     particles_type,X                 ; reload A clobbered by JSR
-    .skip_heavy_impulse
-ENDIF
         CMP     #PARTICLE_type_hostile_bullet
         BCC     next_X2
 
@@ -6491,13 +6490,10 @@ ENDIF
         LDA     particles_type,X
 IF _SWRAM_BUILD
         CMP     #PARTICLE_type_hostile_heavy_bullet
-        BEQ     is_hostile
-ENDIF
+        BEQ     tail_to_swram_heavy             ; heavy bullets get a slightly wider
+ENDIF                                           ;   shield-catch zone + impulse hook
         CMP     #PARTICLE_type_hostile_bullet
         BNE     return
-IF _SWRAM_BUILD
-    .is_hostile
-ENDIF
 
         LDA     particles_xpos_INT,X
         SBC     player_xpos_INT
@@ -6536,6 +6532,11 @@ ENDIF
 
     .return
         RTS
+
+IF _SWRAM_BUILD
+    .tail_to_swram_heavy
+        JMP     swram_heavy_bullet_shield_test
+ENDIF
 }
 
 \ ******************************************************************************
@@ -10211,37 +10212,194 @@ IF _THRUST_PARTICLES
 ENDIF
 
 \ ******************************************************************************
+\ * Function: slow_heavy_bullet
+\ * Params: X = particle index (just-spawned heavy turret bullet)
+\ * Returns: none (clobbers A)
+\ * Description: Halves the bullet's (dx_INT:dx_FRAC) and (dy_INT:dy_FRAC)
+\ * Q7.8 velocity signed 16-bit, for a more telegraphed "heavy" flight speed.
+\ * Signed shift: CMP #$80 copies bit 7 (sign) into C, ROR A shifts it back in
+\ * as the new MSB. ROR on the FRAC byte picks up bit 0 of the old INT as
+\ * the new MSB of FRAC, completing the 16-bit arithmetic right-shift.
+\ ******************************************************************************
+
+.slow_heavy_bullet
+{
+        LDA     particles_dx_INT,X
+        CMP     #$80
+        ROR     A
+        STA     particles_dx_INT,X
+        ROR     particles_dx_FRAC,X
+        LDA     particles_dy_INT,X
+        CMP     #$80
+        ROR     A
+        STA     particles_dy_INT,X
+        ROR     particles_dy_FRAC,X
+        RTS
+}
+
+\ ******************************************************************************
+\ * Function: swram_pick_bullet_type
+\ * Params: X = particle slot, object_type = firing object's type
+\ * Returns: A = particle type (hostile_bullet or hostile_heavy_bullet);
+\ *          for heavy turrets, also halves the bullet's velocity as a side
+\ *          effect via slow_heavy_bullet.
+\ * Description: Collapses the "is this a heavy turret?" check + slow + type
+\ *   selection into a single JSR, to keep the main-RAM update loop small.
+\ ******************************************************************************
+
+.swram_pick_bullet_type
+{
+        LDA     object_type
+        CMP     #OBJECT_heavy_turret_up_right       ; $09
+        BCC     regular
+        CMP     #(OBJECT_heavy_turret_down_left+1)  ; $0D
+        BCS     regular
+        JSR     slow_heavy_bullet
+        LDA     particles_lifetime,X                ; heavy: double the regular lifetime
+        AND     #PARTICLE_flag
+        ORA     #PARTICLE_lifetime_heavy_bullet
+        STA     particles_lifetime,X
+        LDA     #PARTICLE_type_hostile_heavy_bullet
+        RTS
+    .regular
+        LDA     particles_lifetime,X
+        AND     #PARTICLE_flag
+        ORA     #PARTICLE_lifetime_bullet
+        STA     particles_lifetime,X
+        LDA     #PARTICLE_type_hostile_bullet
+        RTS
+}
+
+\ ******************************************************************************
+\ * Function: swram_remap_heavy_to_gun_Y
+\ * Params: Y = object_type
+\ * Returns: Y = Y-9 if original Y was $09..$0C (heavy turrets → gun orientations
+\ *          $00..$03 for shared gun_bullet_*_offset lookup); otherwise Y
+\ *          unchanged.
+\ * Description: Keeps the 4-entry gun_bullet_x/y_offset tables unchanged while
+\ *   letting all four heavy turret orientations reuse them.
+\ ******************************************************************************
+
+.swram_remap_heavy_to_gun_Y
+{
+        CPY     #OBJECT_heavy_turret_up_right
+        BCC     done
+        CPY     #(OBJECT_heavy_turret_down_left+1)
+        BCS     done
+        TYA
+        SEC
+        SBC     #OBJECT_heavy_turret_up_right
+        TAY
+    .done
+        RTS
+}
+
+\ ******************************************************************************
+\ * Function: swram_heavy_bullet_shield_test
+\ * Params: X = particle index (heavy bullet)
+\ * Returns: sets plot_ship_collision_detected on unshielded hit, applies impulse
+\ *          on shielded hit, no-op if not close to ship
+\ * Description: Heavy-bullet variant of test_particle_X_close_to_player with a
+\ *   slightly widened shield-catch zone (dx 2..6, dy 1..7 vs regular 3..5 /
+\ *   2..6). Lets the shield absorb grazing bullets that would have missed
+\ *   the narrow hit box, and applies an impulse when it does.
+\ ******************************************************************************
+
+.swram_heavy_bullet_shield_test
+{
+        SEC
+        LDA     particles_xpos_INT,X
+        SBC     player_xpos_INT
+        CMP     #$02
+        BCC     return
+        CMP     #$07
+        BCS     return
+
+        SEC
+        LDA     particles_ypos_INT,X
+        SBC     player_ypos_INT
+        STA     player_to_particle_deltay_INT
+        LDA     particles_ypos_INT_HI,X
+        SBC     player_ypos_INT_HI
+        BNE     return
+
+        LDA     player_to_particle_deltay_INT
+        CMP     #$01
+        BCC     return
+        CMP     #$08
+        BCS     return
+
+        LDA     ship_sprite_plotted_flag
+        BEQ     return
+
+        LDA     particles_lifetime,X            ; mark bullet absorbed
+        AND     #$80
+        STA     particles_lifetime,X
+
+        LDA     shield_tractor_pressed
+        BEQ     damage_ship                     ; no shield → ship dies
+
+        JMP     apply_heavy_impulse_to_ship     ; shield absorbed → impulse, tail call
+
+    .damage_ship
+        LDA     #$FF
+        STA     plot_ship_collision_detected
+    .return
+        RTS
+}
+
+\ ******************************************************************************
 \ * Function: apply_heavy_impulse_to_ship
 \ * Params: X = particle index (the heavy bullet)
-\ * Returns: none (clobbers A)
+\ * Returns: none (clobbers A, heavy_impulse_FRAC, heavy_impulse_INT)
 \ * Description: Nudges the ship's force vector by the heavy bullet's velocity
-\ * when the bullet is absorbed by the shield. Scales the per-frame particle
-\ * velocity down by 4 (arithmetic shift right 2, sign-preserving) before
-\ * adding to force_vectorx_INT / force_vectory_INT -- one full shot direct
-\ * into force_INT was too strong in playtesting.
+\ * when the bullet is absorbed by the shield. Treats the bullet's
+\ * (dx_INT:dx_FRAC) Q7.8 velocity as a signed 16-bit value, arithmetic-shifts
+\ * right once (/2), then adds to (force_vectorx_INT:force_vectorx_FRAC).
+\ * Same for Y. Using the fractional byte makes the direction noticeably
+\ * finer than the old /4-of-INT-only version (bullet INT is usually only
+\ * $01-$02, so integer-only math rounded most nudges to 0 or a full step).
+\ * Since the heavy bullet is spawned at half speed (see slow_heavy_bullet),
+\ * a further /2 here keeps the total magnitude close to the original /4 of
+\ * the full-speed bullet, just spread across INT+FRAC for finer direction.
 \ *
-\ * Sign-preserving /2: CMP #$80 puts bit 7 of A into carry, ROR then shifts
-\ * that bit back in as the new MSB. Doing it twice gives /4 arithmetic.
+\ * 16-bit signed ASR: CMP #$80 copies bit 7 (sign) into C, ROR A shifts it
+\ * back in as the new MSB. ROR on the FRAC byte picks up bit 0 of the old
+\ * INT as the new MSB of FRAC, completing the shift.
 \ ******************************************************************************
 
 .apply_heavy_impulse_to_ship
 {
-        LDA     particles_dx_INT,X
+        LDA     particles_dx_INT,X              ; (dx_INT:dx_FRAC) signed >> 1
         CMP     #$80
-        ROR     A                        ; dx / 2 (sign-preserving)
-        CMP     #$80
-        ROR     A                        ; dx / 4
-        CLC
-        ADC     force_vectorx_INT
+        ROR     A
+        STA     heavy_impulse_INT
+        LDA     particles_dx_FRAC,X
+        ROR     A
+        STA     heavy_impulse_FRAC
+
+        CLC                                     ; 16-bit add into (force_vectorx_INT:FRAC)
+        LDA     force_vectorx_FRAC
+        ADC     heavy_impulse_FRAC
+        STA     force_vectorx_FRAC
+        LDA     force_vectorx_INT
+        ADC     heavy_impulse_INT
         STA     force_vectorx_INT
 
-        LDA     particles_dy_INT,X
+        LDA     particles_dy_INT,X              ; (dy_INT:dy_FRAC) signed >> 1
         CMP     #$80
-        ROR     A                        ; dy / 2
-        CMP     #$80
-        ROR     A                        ; dy / 4
+        ROR     A
+        STA     heavy_impulse_INT
+        LDA     particles_dy_FRAC,X
+        ROR     A
+        STA     heavy_impulse_FRAC
+
         CLC
-        ADC     force_vectory_INT
+        LDA     force_vectory_FRAC
+        ADC     heavy_impulse_FRAC
+        STA     force_vectory_FRAC
+        LDA     force_vectory_INT
+        ADC     heavy_impulse_INT
         STA     force_vectory_INT
         RTS
 }

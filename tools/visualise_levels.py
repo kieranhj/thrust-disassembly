@@ -81,6 +81,9 @@ OBJECT_TYPE_NAMES = {
     0x07: "Door switch (R)",
     0x08: "Door switch (L)",
     0x09: "Heavy turret (UR)",
+    0x0A: "Heavy turret (DR)",
+    0x0B: "Heavy turret (UL)",
+    0x0C: "Heavy turret (DL)",
 }
 
 OBJECT_TYPE_MARKERS = {
@@ -94,6 +97,9 @@ OBJECT_TYPE_MARKERS = {
     0x07: ("P", "magenta"),   # door switch right
     0x08: ("P", "violet"),    # door switch left
     0x09: ("H", "crimson"),   # heavy turret up-right
+    0x0A: ("h", "crimson"),   # heavy turret down-right
+    0x0B: ("H", "darkred"),   # heavy turret up-left
+    0x0C: ("h", "darkred"),   # heavy turret down-left
 }
 
 # ---------------------------------------------------------------------------

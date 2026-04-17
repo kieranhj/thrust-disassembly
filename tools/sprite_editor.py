@@ -92,6 +92,14 @@ COL_TRANSPARENT_DARK = (30, 30, 34)  # canvas background
 COL_TRANSPARENT_LIGHT = (40, 40, 44)  # checkerboard
 
 
+def _short_name(name: str) -> str:
+    """Abbreviate long orientation suffixes so sidebar labels fit."""
+    return (name.replace("_up_right", "_UR")
+                .replace("_up_left",  "_UL")
+                .replace("_down_right", "_DR")
+                .replace("_down_left",  "_DL"))
+
+
 # ---------------------------------------------------------------------------
 # Editor state
 # ---------------------------------------------------------------------------
@@ -447,7 +455,7 @@ class Editor:
                                          (thumb_x + px * thumb_zoom,
                                           thumb_y + py * thumb_zoom,
                                           thumb_zoom, thumb_zoom))
-            label = self.font.render(name, True, COL_TEXT)
+            label = self.font.render(_short_name(name), True, COL_TEXT)
             self.screen.blit(label, (thumb_x + tw + 10,
                                      row_rect.y + 4))
             dim = self.font_small.render(
