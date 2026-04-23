@@ -126,20 +126,6 @@ Upgrades could be persistent across a run (Metroidvania) or per-level purchases 
 
 ---
 
-## Puzzle-oriented levels
-
-Levels designed as self-contained logic puzzles rather than pure dexterity challenges. The new environmental objects (gravity fields, fans, bullet-deflecting fields, power nodes, landing bubbles) are the building blocks. Example puzzle structures:
-
-- **Key-and-lock:** shoot a power node to open a passage, but the node is behind a corner — only reachable by routing a bullet through a gravity-bending field
-- **Gravity maze:** a chamber where the player must chain gravity flippers to navigate, since raw thrust can't reach the exit
-- **Bullet billiards:** destroy a target by setting up a bullet that bounces or bends through multiple gravity fields
-- **Escort with a twist:** carry the pod through a region where gravity fields pull ship and pod in opposite directions — the player has to time their path so the tether doesn't snap
-- **Time-lock:** a timed laser turret guards the exit; the only safe window requires first disabling a fan that would otherwise blow the ship into the beam
-
-Each level becomes a small "what order do I do this in" problem rather than "how fast can I fly through." Fits well with the Metroidvania structure described earlier — optional puzzle rooms gate extra upgrades.
-
----
-
 ## Larger levels
 
 ### Current limits
@@ -151,6 +137,20 @@ Each level becomes a small "what order do I do this in" problem rather than "how
 - **Object count:** terminated by $FF sentinel in the type array. No explicit limit, but all objects are checked every frame for visibility/collision, so very large counts would impact performance.
 
 **Practical approach:** levels can be made significantly deeper without engine changes. Wider levels would require extending the X coordinate to 16 bits, which would touch many parts of the codebase.
+
+### More than 6 levels / level packs
+
+The game ships with 6 levels baked into `level_data.6502` (`terrain_left_wall_count_0` through `terrain_right_wall_inc_5`), loaded by `initialise_level_pointers` (line 6274). The "reverse gravity every 6 levels" mechanic at `thrust.6502:6841` implies the original design treats 6 as a loop length, not a hard cap on unique content.
+
+**Increase the baked-in count:** add more level-data arrays and extend the pointer tables. Limited by available memory — each level is a handful of RLE arrays plus an object table, so dozens fit comfortably if there's RAM/ROM to spare. Keep the 6-level gravity cycle intact as a cadence marker (levels 1-6 normal gravity, 7-12 inverted, etc.) or re-tune it.
+
+**Level packs loaded from disc:** instead of baking all levels into the binary, keep one pack (6 levels, or whatever the current cycle length is) resident at a time and load the next pack from disc between missions. This is how most BBC disc games handled large level counts. Each pack is a single file containing the RLE arrays and object tables for its levels; loading reuses the existing `OSFILE`/`OSWORD` disc routines already linked in. Pack size should match the gravity cycle (currently 6) so the reverse-gravity logic keeps working naturally — if the cycle length changes, the pack size follows.
+
+**Considerations:**
+- Level pointer tables become pack-relative rather than absolute
+- Disc access between levels is noticeable but acceptable (Thrust already loads from disc at boot)
+- Opens the door to user-authored level packs via the level editor's export — just drop a new pack file onto the disc image
+- Save-game support (current level number + pack identifier) becomes more important since players won't grind through all content in one sitting
 
 ### ~~Expand X axis to 16 bits~~ — CURRENTLY INFEASIBLE
 
@@ -193,6 +193,18 @@ Start at the bottom of a deep vertical mine and race upward. A rising water leve
 - Fuel management becomes critical: thrust hard to stay ahead but risk running dry
 - Optional side chambers with fuel pickups, accessible only by briefly diving below the main path and racing back up
 - The mine gets narrower and more complex as the player ascends, requiring precise navigation under time pressure
+
+### Puzzle-oriented levels
+
+Levels designed as self-contained logic puzzles rather than pure dexterity challenges. The new environmental objects (gravity fields, fans, bullet-deflecting fields, power nodes, landing bubbles) are the building blocks. Example puzzle structures:
+
+- **Key-and-lock:** shoot a power node to open a passage, but the node is behind a corner — only reachable by routing a bullet through a gravity-bending field
+- **Gravity maze:** a chamber where the player must chain gravity flippers to navigate, since raw thrust can't reach the exit
+- **Bullet billiards:** destroy a target by setting up a bullet that bounces or bends through multiple gravity fields
+- **Escort with a twist:** carry the pod through a region where gravity fields pull ship and pod in opposite directions — the player has to time their path so the tether doesn't snap
+- **Time-lock:** a timed laser turret guards the exit; the only safe window requires first disabling a fan that would otherwise blow the ship into the beam
+
+Each level becomes a small "what order do I do this in" problem rather than "how fast can I fly through." Fits well with the Metroidvania structure — optional puzzle rooms gate extra upgrades.
 
 ---
 
