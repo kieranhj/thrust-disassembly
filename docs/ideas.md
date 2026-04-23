@@ -4,45 +4,6 @@ Working title: **Thrust Next** — essentially Thrust meets Exile.
 
 ---
 
-## Investigation tasks
-
-### Make a test level
-
-Use the level editor (`tools/level_editor.py`) to design a sandbox level for experimenting with new features. Export via `--import`/Ctrl+S and build with BeebAsm. The editor already supports terrain editing, object placement, and round-trip import/export.
-
-### Understand the landscape drawing routine
-
-Now documented in `docs/landscape-drawing.md`. Key points:
-- RLE delta-compressed terrain with two interleaved decoder triples per wall
-- 256-byte circular wall buffers at $0400/$0500
-- EOR-based incremental rendering (only changed columns are redrawn each frame)
-- Half-resolution vertical rendering (every other pixel row)
-
-### Understand the dynamics implementation
-
-Now documented in `docs/ship-physics.md`. Key points:
-- Midpoint-based physics: all forces act on the centre of mass of the ship-pod system
-- One-frame-behind Euler integration
-- Q7.16 for X force, Q7.8 for Y force, Q8.16 for X position, Q16.8 for Y position
-- Tether modelled as a rigid rod with angular velocity and damping
-- Thrust magnitude halved when pod is attached (5 right shifts vs 4)
-
-### Raster timing / cycle budget
-
-No raster timing or cycle-counting infrastructure currently exists in the code. The IRQ handler (`thrust.6502:5296`) distinguishes vsync from Timer1 via `irq1_timer1_signal` but there are no budget annotations.
-
-**To instrument:** set up Timer1 to fire at a known point in the frame, toggle a palette register or border colour at the start/end of key routines (landscape_draw, particles_update_and_draw, draw_player). This would reveal how much of each frame is spent on each system.
-
-### Identify slowest code paths
-
-Likely candidates based on code structure:
-- `landscape_draw` (line 755): iterates all 73 visible scanlines, computing deltas and EOR-drawing columns
-- `particles_update_and_draw` (line 5799): updates and redraws all 32 particles every frame
-- `update_objects_loop` (line 1393): iterates all level objects for visibility, rendering, and collision
-- Ship sprite plotting: 17 rotation frames + shield sprite, XOR-plotted with clipping
-
----
-
 ## Particle effects
 
 ### ~~Thrust particles from ship exhaust~~ — IMPLEMENTED (`_THRUST_PARTICLES`)
@@ -78,6 +39,107 @@ The particle system's `particles_type` field ($07A0) could be extended with new 
 
 ---
 
+## Environmental objects and hazards
+
+### Mini power nodes
+
+Small destructible objects that, when shot, explode and take out a pre-defined chunk of the landscape around them. Not landscape deformation — each node has an authored "hole shape" that gets blitted into the terrain wall buffers when triggered. Could open up hidden passages, create shortcuts, or remove terrain blocking a mission objective.
+
+**Implementation notes:** the hole shape could be stored as a list of (row, new-left, new-right) triples patched into `terrain_left_wall`/`terrain_right_wall` on trigger. Visual effect reuses the existing explosion particle burst.
+
+### Gravity field objects
+
+Objects that modify gravity within a local radius:
+- **Gravity flipper:** inverts the Y component of gravity while the ship is inside the radius
+- **Gravity null:** zeroes gravity inside the radius (fly like in open space)
+- **Gravity well:** pulls the ship toward the node (radial gravity instead of vertical)
+- **Paired generators/repulsors acting on ship *and* pod:** the pod has its own physics state (`pod_xpos`, `pod_ypos`, velocity) — extending the field check to the pod as well means the tethered system can be yanked around by the environment, not just the ship. Since the tether is a rigid rod, asymmetric forces on ship vs pod create interesting angular dynamics.
+- **Fields that act on bullets:** apply the same force to active particles of type `PARTICLE_type_player_bullet` and/or hostile bullet. Bending a player bullet around a corner to hit a turret tucked in an alcove opens up real puzzle geometry. Costs more per frame (force applied to every bullet inside every field) but the bullet count is bounded by the 32-slot particle pool.
+
+**Implementation notes:** the existing gravity constant is applied per frame in the physics update. A check against object position/radius could substitute a modified gravity value before integration. Multiple overlapping fields would need a priority rule. Bullet-affecting fields slot naturally into `particles_update_and_draw` (line 5799) — per-particle force application already exists for gravity.
+
+### Timed laser turrets
+
+Fires a straight beam at a fixed spot on a periodic timer — the beam is always in the same place, the player just has to time passage through it. Telegraph the next shot with a warning flash a few frames before firing.
+
+**Implementation notes:** beam is a line between two authored points, EOR-drawn during its active frames. Collision is a point-to-line-segment distance check against the ship position. No particles needed — the beam is a static shape.
+
+### Landing bubbles
+
+Soft capture points that hold the ship in place while it recharges fuel or shield, then dissipate after a fixed duration or when recharge completes. Different from a landing pad: the bubble locks the ship regardless of approach angle, but each bubble is single-use.
+
+**Implementation notes:** on contact, zero the ship's velocity and disable physics updates until the timer expires or the player thrusts out. Visual could be a pulsing circle drawn with XOR particles around the ship.
+
+### Fans / turbines
+
+Directional force emitters — an alternative to the radial gravity nodes. Each fan applies a constant force vector to the ship while inside its column of influence. Useful for vertical shafts (upward fans assist ascent) or horizontal corridors (blow the ship sideways).
+
+**Implementation notes:** rectangular region test; on overlap, add a fixed vector to `force_vectorx/y`. Animated blade sprite for visual feedback.
+
+### Rotating gun emplacements
+
+Like the existing gun types $00-$03 but with a continuously rotating aim angle instead of fixed cardinal directions. Fires when the aim passes near the player, or on a fixed timer regardless of aim. Already have the 17 rotation frames from the ship sprite system — could reuse the same angle indexing.
+
+**Implementation notes:** per-frame `gun_base_angle` increment; existing particle spawn code handles the rest. The heavy turret (4 fixed orientations, per the recent commit) is a discrete-angle cousin of this.
+
+### Bobbing mines
+
+Passive hazards that float in place, bobbing gently up and down on a sine wave. Destroy on contact with ship or bullet, exploding with a blast radius.
+
+**Implementation notes:** Y position is `base_y + sin(frame_counter + phase) * amplitude`. Phase offset per mine so a group doesn't bob in lockstep. Collision is a simple circle test; on contact, spawn an explosion particle burst and apply radial impulse to the ship if close enough.
+
+### Hot areas
+
+Regions (near reactors, lava, engines) where the ship accumulates heat over time. As heat rises, flight degrades: thrust magnitude drops, handling becomes sluggish, and eventually the ship takes damage. The player must leave the hot area and "rest" in a safe region to cool down, or dunk into water (see below) for fast cooling. A heatsink upgrade extends safe dwell time.
+
+**Implementation notes:** a single-byte `ship_heat` counter increments each frame while in a hot region, decrements elsewhere. Thrust scaling and damage thresholds read this value. Heat zones can be defined as rectangular regions or tied to specific object types (reactor, lava tiles). Visual feedback: hull colour shift via palette, or heat-shimmer particles emitted from the ship when hot.
+
+### Water as a general element
+
+Distinct from the flooding-mine scenario above: water as a static (or slowly-animated) environmental feature that the ship can enter, not just avoid. Possibilities:
+- **Submerged regions** with modified physics: reduced gravity, heavy damping on velocity (drag), thrust still works but is weaker
+- **Water as terrain hazard:** instant destruction on contact (simple version, matches the flooding mine)
+- **Floating objects:** pods or pickups that float on the water surface
+- **Bubbles released by thrust** when submerged, using the existing particle pool
+
+**Implementation notes:** rendering-wise, the timer-based palette switch described in the flooding-mine section works for a static water line too. Physics changes would branch on `ship_ypos > water_line_y` to swap in alternate gravity/damping constants.
+
+---
+
+## Ship upgrades
+
+An upgrade system feeds directly into the Metroidvania structure — and with rescue NPCs (see Mission types) acting as the currency, upgrades become the reward loop. Candidates:
+
+| Upgrade | Effect | Implementation notes |
+|---------|--------|---------------------|
+| Reinforced shield | Survive or bounce off a wall impact instead of exploding | Wall collision handler checks an upgrade flag before triggering destruction; on bounce, reflect velocity with damping |
+| Absorbing shield | Reduces knockback impulse from heavy bullets / explosions | Scale the incoming impulse by an upgrade-dependent factor before adding to `force_vectorx/y` |
+| Heavier bullets | Player bullets deal more damage or pass through weak terrain | New `particles_type` variant, or a damage multiplier read on hit |
+| Inertial dampers | Passive velocity bleed — ship comes to rest faster when not thrusting | Apply a small per-frame scalar reduction to `vel_x`/`vel_y` when thrust is off |
+| Improved handling | Faster rotation, finer aim increments | Scale the rotation delta applied per frame by the upgrade factor |
+| Docking computer | Auto-hover mode: engine automatically applies gravity-cancelling thrust | When enabled, substitute a computed thrust value that zeroes net Y force; drains fuel faster than idle |
+| Bigger fuel tank | Higher max fuel, longer flight time | Raise the fuel cap; no other physics change |
+| Heatsink | Extends safe time in hot areas (see Environmental objects) | Scale `ship_heat` accumulation rate down |
+| Tractor range / strength | Longer tether, faster pod slew, or tolerates more angle stress | Adjust tether constants; the physics already reads these as values |
+
+Upgrades could be persistent across a run (Metroidvania) or per-level purchases at a shop screen between levels.
+
+---
+
+## Puzzle-oriented levels
+
+Levels designed as self-contained logic puzzles rather than pure dexterity challenges. The new environmental objects (gravity fields, fans, bullet-deflecting fields, power nodes, landing bubbles) are the building blocks. Example puzzle structures:
+
+- **Key-and-lock:** shoot a power node to open a passage, but the node is behind a corner — only reachable by routing a bullet through a gravity-bending field
+- **Gravity maze:** a chamber where the player must chain gravity flippers to navigate, since raw thrust can't reach the exit
+- **Bullet billiards:** destroy a target by setting up a bullet that bounces or bends through multiple gravity fields
+- **Escort with a twist:** carry the pod through a region where gravity fields pull ship and pod in opposite directions — the player has to time their path so the tether doesn't snap
+- **Time-lock:** a timed laser turret guards the exit; the only safe window requires first disabling a fan that would otherwise blow the ship into the beam
+
+Each level becomes a small "what order do I do this in" problem rather than "how fast can I fly through." Fits well with the Metroidvania structure described earlier — optional puzzle rooms gate extra upgrades.
+
+---
+
 ## Larger levels
 
 ### Current limits
@@ -90,7 +152,11 @@ The particle system's `particles_type` field ($07A0) could be extended with new 
 
 **Practical approach:** levels can be made significantly deeper without engine changes. Wider levels would require extending the X coordinate to 16 bits, which would touch many parts of the codebase.
 
-### Disabling X wrap underground (`_NO_WRAP_UNDERGROUND`)
+### ~~Expand X axis to 16 bits~~ — CURRENTLY INFEASIBLE
+
+Widening the world X coordinate from 8 to 16 bits would touch the physics integration, `landscape_draw` world-to-screen conversion, terrain wall decoder, X wrap logic, object visibility checks, and every ZP variable and lookup derived from `window_xpos_INT` / `ship_xpos_INT`. The cycle budget is already tight, and adding a high byte to every per-frame X computation would push multiple hot paths (landscape_draw, particles, object iteration) over frame. Parked for now — revisit only if a specific level design genuinely needs a world wider than 256 columns, and budget a significant refactor.
+
+### ~~Disabling X wrap underground (`_NO_WRAP_UNDERGROUND`)~~ — DONE (behind feature flag)
 
 A per-level Y threshold can skip the X wrap logic when the player is below a configurable depth. The build flag, ZP variables, per-level data tables, level editor support (draggable no-wrap line), and a simple skip check at `check_x_wrap` are implemented. Currently works correctly for the right-hand wrap (forward) but **not the left-hand wrap** — when the player's X position reaches <= ~$18, the landscape wall lookup goes wrong and the right wall is drawn filling the screen with terrain, which destroys the player. The root cause is likely the `landscape_draw` world-to-screen subtraction or terrain wall array indexing breaking down when `window_xpos_INT` is near zero. The right side works because the window position stays in a valid range for the subtraction. Needs further investigation — may require rethinking how `landscape_draw` handles low window X values, or moving to 16-bit world X first. Flag is left `FALSE` for now.
 
@@ -149,9 +215,9 @@ Floating islands, pillars, or isolated walls cannot be represented in the curren
 - Each obstacle defined as a rectangular or polygon region
 - Collision detection against obstacle bounds in addition to wall checks at lines 5871-5874
 
-### Variable wall slopes
+### ~~Variable wall slopes~~ — CURRENTLY INFEASIBLE
 
-Currently walls move by 0 or 1 column per scanline (the increment is applied every row). Steeper slopes are possible (increment > 1 per row), but shallow slopes (< 1 column per row) would require fractional increments. The 8-bit increment already supports this via unsigned wrapping — a value like $80 moves half a column per row on average, but the discrete steps would look jagged. True sub-pixel slopes would need a fixed-point accumulator in the RLE decoder.
+Currently walls move by 0 or 1 column per scanline (the increment is applied every row). Steeper slopes are possible (increment > 1 per row), but shallow slopes (< 1 column per row) would require fractional increments. The 8-bit increment already supports this via unsigned wrapping — a value like $80 moves half a column per row on average, but the discrete steps would look jagged. True sub-pixel slopes would need a fixed-point accumulator in the RLE decoder, which changes the format and the hot-path decoder. Not worth it without a concrete design need.
 
 ---
 
@@ -167,6 +233,17 @@ The current game loop is: collect pod, escape through ceiling, destroy reactor (
 | Mission briefing | Text display before level start; could reuse the existing string rendering (`draw_string`, line 2240) |
 | Mid-mission popup | Pause game, overlay text, resume on keypress |
 | Keys and doors | New object types for keys (collectible) and doors (blocking terrain). Door switch types $07/$08 already exist — extend the mechanism |
+
+### Rescue NPCs
+
+Little characters scattered around the level — civilians, stranded miners, survivors — that the player can pick up with the tractor beam (same mechanism as the pod) for a cash bonus. Like *Choplifter* or *Airlift*: fly down, hover over the NPC, suck them up, fly them home. Cash from rescues funds ship upgrades between missions.
+
+**Implementation notes:**
+- NPCs are a new object type with their own sprite. They stand on terrain (or walk back and forth between two points for a bit of life)
+- Tractor beam already tethers objects — the code path at `update_pod_tractor_beam` (line 4572) is hardcoded to object 0, so either extend that to iterate other pickup-type objects, or use a simpler "proximity pickup" model where NPCs vanish when the ship hovers close enough
+- Each NPC must be delivered to a drop-off zone (existing base, or a dedicated rescue pad) for the bonus to register — encourages full round trips, not just grab-and-dump
+- Limit on carry capacity (one at a time? or a counter?) adds a risk/reward dimension — do you go for more rescues or cash in what you have?
+- If carrying multiple NPCs conflicts with the single-pod constraint, start with "one rescue at a time"
 
 ### Keys and doors
 
@@ -213,3 +290,42 @@ The game's dual-triple terrain decoder initialises both triples with a hardcoded
 ### 32 shared particle slots
 
 All particle effects (player bullets, enemy bullets, debris, stars, exhaust) share a single 32-entry pool. Player bullets are limited to 4 simultaneous. Adding new particle-based features (thrust exhaust, new weapon types) increases contention for this fixed pool.
+
+---
+
+## Investigation tasks
+
+### ~~Make a test level~~ — DONE
+
+Use the level editor (`tools/level_editor.py`) to design a sandbox level for experimenting with new features. Export via `--import`/Ctrl+S and build with BeebAsm. The editor already supports terrain editing, object placement, and round-trip import/export.
+
+### ~~Understand the landscape drawing routine~~ — DONE
+
+Now documented in `docs/landscape-drawing.md`. Key points:
+- RLE delta-compressed terrain with two interleaved decoder triples per wall
+- 256-byte circular wall buffers at $0400/$0500
+- EOR-based incremental rendering (only changed columns are redrawn each frame)
+- Half-resolution vertical rendering (every other pixel row)
+
+### ~~Understand the dynamics implementation~~ — DONE
+
+Now documented in `docs/ship-physics.md`. Key points:
+- Midpoint-based physics: all forces act on the centre of mass of the ship-pod system
+- One-frame-behind Euler integration
+- Q7.16 for X force, Q7.8 for Y force, Q8.16 for X position, Q16.8 for Y position
+- Tether modelled as a rigid rod with angular velocity and damping
+- Thrust magnitude halved when pod is attached (5 right shifts vs 4)
+
+### ~~Raster timing / cycle budget~~ — DONE
+
+No raster timing or cycle-counting infrastructure currently exists in the code. The IRQ handler (`thrust.6502:5296`) distinguishes vsync from Timer1 via `irq1_timer1_signal` but there are no budget annotations.
+
+**To instrument:** set up Timer1 to fire at a known point in the frame, toggle a palette register or border colour at the start/end of key routines (landscape_draw, particles_update_and_draw, draw_player). This would reveal how much of each frame is spent on each system.
+
+### ~~Identify slowest code paths~~ — DONE
+
+Likely candidates based on code structure:
+- `landscape_draw` (line 755): iterates all 73 visible scanlines, computing deltas and EOR-drawing columns
+- `particles_update_and_draw` (line 5799): updates and redraws all 32 particles every frame
+- `update_objects_loop` (line 1393): iterates all level objects for visibility, rendering, and collision
+- Ship sprite plotting: 17 rotation frames + shield sprite, XOR-plotted with clipping
