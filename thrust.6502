@@ -35,6 +35,7 @@ _FRIENDLY_KEYS       = (_SWRAM_BUILD AND TRUE)    ; Emulator friendly key map
 _THRUST_PARTICLES    = (_SWRAM_BUILD AND TRUE)    ; Generate thrust particles
 _FAST_SPRITES        = (_SWRAM_BUILD AND FALSE)   ; Pre-baked two-stream ship sprites
 _NO_WRAP_UNDERGROUND = (_SWRAM_BUILD AND TRUE)    ; Skip X wrap when below surface
+_TIMED_LASER         = (_SWRAM_BUILD AND TRUE)    ; Timed laser turret enemy ($09)
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -108,6 +109,12 @@ OBJECT_pod_stand                    = $5        ; pod on its stand
 OBJECT_generator                    = $6        ; reactor/generator
 OBJECT_door_switch_right            = $7        ; door switch (right side)
 OBJECT_door_switch_left             = $8        ; door switch (left side)
+IF _TIMED_LASER
+OBJECT_laser_turret_up_right        = $9        ; laser turret facing up-right (SWRAM only)
+OBJECT_laser_turret_down_right      = $A        ; laser turret facing down-right (SWRAM only)
+OBJECT_laser_turret_up_left         = $B        ; laser turret facing up-left (SWRAM only)
+OBJECT_laser_turret_down_left       = $C        ; laser turret facing down-left (SWRAM only)
+ENDIF
 
 OBJ_flag_drawn                      = $01       ; level_obj_flags bit 0: sprite was XOR-plotted (needs erase before redraw)
 OBJ_flag_alive                      = $02       ; level_obj_flags bit 1: object is active (update + draw + collide)
@@ -1391,15 +1398,29 @@ ENDIF
 
 .obj_type_width
         EQUB    $05,$05,$05,$05,$04,$05,$05,$02,$02
+IF _TIMED_LASER
+        EQUB    $05,$05,$05,$05                  ; [9..C] laser_turret orientations
+ENDIF
 
 .obj_type_height
         EQUB    $08,$08,$08,$08,$0A,$08,$0A,$08,$08
+IF _TIMED_LASER
+        EQUB    $08,$08,$08,$08                  ; [9..C] laser_turret orientations
+ENDIF
 
 .obj_type_explosion_particle
         EQUB    $02,$02,$02,$02,$01                ; only guns and fuel can be destroyed
+IF _TIMED_LASER
+        EQUB    $00,$00,$00,$00                  ; pad [5..8] (not destructible)
+        EQUB    $02,$02,$02,$02                  ; [9..C] laser_turret orientations
+ENDIF
 
 .obj_type_score_value                            ; only guns and fuel can be destroyed
         EQUB    $75,$75,$75,$75,$15
+IF _TIMED_LASER
+        EQUB    $00,$00,$00,$00                  ; pad [5..8]
+        EQUB    $A0,$A0,$A0,$A0                  ; [9..C] laser_turret orientations
+ENDIF
 
 \ ******************************************************************************
 \ * Function: end_of_objects_function
@@ -1520,6 +1541,7 @@ ENDIF
 \ *     $05       pod_stand       (pod holder; touching ends the level)
 \ *     $06       generator       (shield-tractor destroyable; starts planet timer)
 \ *     $07..$08  door_switch_right / door_switch_left
+\ *     $09..$0C  laser_turret  (SWRAM build only — timed beam emitter, 4 orientations)
 \ *
 \ * Per-object loop, repeated until level_N_obj_type[X] == $FF:
 \ *   1. Unpack gun_aim byte into base angle + spread mask.
@@ -1533,7 +1555,7 @@ ENDIF
 \ *   6. Pod_stand vs player collision + planet-countdown-expired trigger.
 \ *   7. Test all 4 player bullets against this object's hitbox. Per-type hit
 \ *      dispatch: door_switches latch open, generator recharges/destroys and
-\ *      arms the planet timer, guns / fuel are destroyed
+\ *      arms the planet timer, guns / fuel / laser_turret are destroyed
 \ *      outright, pod_stand and anything above are inert to bullets.
 \ *   8. Shield-tractor fuel pickup (fuel type only, when shield pressed).
 \ *   9. Hostile gun fire (gun types $00..$03).
@@ -1813,6 +1835,13 @@ ENDIF
 \ --- Generic destructibility gate: types < pod_stand are destroyed; others are inert ---
     .check_generic_destructible
         LDA     object_type
+IF _TIMED_LASER
+        CMP     #OBJECT_laser_turret_up_right       ; $09
+        BCC     check_pod_stand                     ; < $09: fall through to normal check
+        CMP     #(OBJECT_laser_turret_down_left+1)  ; $0D
+        BCC     destroy_object                      ; $09..$0C: laser turret → destroy
+    .check_pod_stand
+ENDIF
         CMP     #OBJECT_pod_stand
         BCS     try_next_bullet                     ; pod_stand and above are inert
 
@@ -2103,6 +2132,9 @@ ENDIF
 
 .object_type_cull_size_table
         EQUB    $44,$44,$44,$44,$45,$45,$44,$47,$47
+IF _TIMED_LASER
+        EQUB    $44,$44,$44,$44                  ; [9..C] laser_turret orientations (5 chars wide like guns)
+ENDIF
 
 \ ******************************************************************************
 \ * Function: calculate_object_plot_addr
@@ -10047,7 +10079,7 @@ skip &480
 \ * Modified level data. Potentially larger than original so requires SWRAM.
 \ ******************************************************************************
 
-INCLUDE "tools/output/thrust_levels_export.asm"
+INCLUDE "tools/output/thrust_levels_export2.asm"
 
 \ ******************************************************************************
 \ * Modified object sprite data. Potentially larger than original so requires SWRAM.
