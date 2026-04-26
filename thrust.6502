@@ -2048,6 +2048,16 @@ ENDIF
         STA     level_obj_plot_at_ptr_HI,X
         JSR     plot_static_sprite
 
+IF _TIMED_LASER
+        LDA     object_type
+        CMP     #OBJECT_laser_turret_up_right       ; $09
+        BCC     skip_laser_beam
+        CMP     #(OBJECT_laser_turret_down_left+1)  ; $0D
+        BCS     skip_laser_beam
+        JSR     draw_laser_beam_step3               ; one-shot XOR-draw; persists until next fresh draw
+    .skip_laser_beam
+ENDIF
+
     .next_object
         LDX     current_object
         INX
@@ -10168,6 +10178,50 @@ IF _THRUST_PARTICLES
         STA     particles_type,X
     .return
         RTS
+}
+ENDIF
+
+IF _TIMED_LASER
+\ ******************************************************************************
+\ * Function: draw_laser_beam_step3
+\ * Params: obj_screen_x, obj_screen_y (set by object_visibility_test for current
+\ *         laser turret object)
+\ * Returns: none (clobbers A; passes through draw_line which clobbers more)
+\ * Description: Step 3 placeholder. Draws a fixed-length up-right beam from the
+\ *   laser turret sprite centre using the existing Bresenham draw_line in the
+\ *   hostile-bullet pixel byte. Called once per visible-alive-fresh-draw frame:
+\ *   the dirty-rect skip in phase 11 means stationary lasers draw the beam once
+\ *   then leave the XOR pixels in place (giving "always on" semantics) until
+\ *   the next fresh draw, at which point the redraw XORs them out.
+\ *
+\ * TODO: replace with per-instance dx/dy and timer-driven on/off in step 4. The
+\ *   generic draw_line is per-pixel — a straight-line plotter would be faster
+\ *   for axis-aligned beams once profiling justifies it.
+\ ******************************************************************************
+
+.draw_laser_beam_step3
+{
+        LDA     obj_screen_x                        ; sprite centre X (chars) → pixels
+        CLC
+        ADC     #$02                                ; +2 chars to centre 5-char sprite
+        ASL     A
+        ASL     A                                   ; *4 = pixel column
+        STA     draw_line_start_x
+        CLC
+        ADC     #60                                 ; +60 px (15 chars) to the right
+        STA     draw_line_end_x
+
+        LDA     obj_screen_y                        ; sprite centre Y (rows)
+        CLC
+        ADC     #$04                                ; +4 to centre 8-row sprite
+        STA     draw_line_start_y
+        SEC
+        SBC     #30                                 ; -30 rows up
+        STA     draw_line_end_y
+
+        LDA     hostile_bullet_pixel_byte           ; same colour as hostile bullets
+        STA     plot_line_pixels_byte
+        JMP     draw_line                           ; tail call
 }
 ENDIF
 
