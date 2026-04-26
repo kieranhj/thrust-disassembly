@@ -80,7 +80,7 @@ Directional force emitters — an alternative to the radial gravity nodes. Each 
 
 Like the existing gun types $00-$03 but with a continuously rotating aim angle instead of fixed cardinal directions. Fires when the aim passes near the player, or on a fixed timer regardless of aim. Already have the 17 rotation frames from the ship sprite system — could reuse the same angle indexing.
 
-**Implementation notes:** per-frame `gun_base_angle` increment; existing particle spawn code handles the rest. The heavy turret (4 fixed orientations, per the recent commit) is a discrete-angle cousin of this.
+**Implementation notes:** per-frame `gun_base_angle` increment; existing particle spawn code handles the rest.
 
 ### Bobbing mines
 

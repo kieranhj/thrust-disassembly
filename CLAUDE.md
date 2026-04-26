@@ -25,4 +25,4 @@ To run in an emulator: `run.bat` launches the `.ssd` in BeebEm.
 
 ## Build Verification
 
-A correct build must produce a `.ssd` file with CRC32 `6389c446`. Any code change that alters the binary output should be intentional.
+A correct **non-SWRAM** build (`_SWRAM_BUILD = FALSE` at `thrust.6502:30`) must produce a `.ssd` file with CRC32 `6389c446`. This CRC anchors the original-game gameplay logic (physics, ship handling) — any change that alters this binary risks an unintentional gameplay regression. The default build is SWRAM-enabled and will produce a different CRC; toggle `_SWRAM_BUILD = FALSE` to verify the canonical CRC.

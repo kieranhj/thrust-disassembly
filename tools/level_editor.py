@@ -112,9 +112,9 @@ BOTTOM_HIT_TOLERANCE = 6  # pixels for bottom boundary handle
 COL_BOTTOM_HANDLE = (100, 180, 255)
 
 # Object types whose gun_aim byte actually drives firing behaviour.
-# thrust.6502 gates firing at try_gun_fire: types < OBJECT_fuel (0-3) AND
-# OBJECT_heavy_turret_up_right..down_left ($09..$0C). Others ignore gun_aim.
-OBJECT_FIRING_TYPES = frozenset({0x00, 0x01, 0x02, 0x03, 0x09, 0x0A, 0x0B, 0x0C})
+# thrust.6502 gates firing at try_gun_fire: types < OBJECT_fuel (0-3).
+# Others ignore gun_aim.
+OBJECT_FIRING_TYPES = frozenset({0x00, 0x01, 0x02, 0x03})
 
 # Spread mask index (gun_aim bits 0-1) -> actual mask from
 # thrust.6502 gun_spread_mask_table.

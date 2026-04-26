@@ -37,27 +37,19 @@ OBJECT_NAMES = [
     "generator",
     "door_switch_right",
     "door_switch_left",
-    "heavy_turret_up_right",
-    "heavy_turret_down_right",
-    "heavy_turret_up_left",
-    "heavy_turret_down_left",
 ]
 
 # Char-column widths from obj_type_width at thrust.6502:1327.
 OBJECT_WIDTH_CHARS = {
-    "gun_up_right":            5,
-    "gun_down_right":          5,
-    "gun_up_left":             5,
-    "gun_down_left":           5,
-    "fuel":                    4,
-    "pod_stand":               5,
-    "generator":               5,
-    "door_switch_right":       2,
-    "door_switch_left":        2,
-    "heavy_turret_up_right":   5,
-    "heavy_turret_down_right": 5,
-    "heavy_turret_up_left":    5,
-    "heavy_turret_down_left":  5,
+    "gun_up_right":      5,
+    "gun_down_right":    5,
+    "gun_up_left":       5,
+    "gun_down_left":     5,
+    "fuel":              4,
+    "pod_stand":         5,
+    "generator":         5,
+    "door_switch_right": 2,
+    "door_switch_left":  2,
 }
 
 # BBC Micro Mode 1 physical palette (8 physical colours, index 0-7).

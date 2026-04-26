@@ -2,8 +2,7 @@
 
 This document describes `update_and_draw_all_objects` (`thrust.6502:1475`) — the
 per-frame tick and redraw loop for every non-player object in the current level
-(guns, fuel cells, the pod stand, the generator, door switches, and — in the
-SWRAM build — the heavy turret).
+(guns, fuel cells, the pod stand, the generator, and door switches).
 
 The loop is called from the main game tick at four points (see
 `thrust.6502:8483`, `8495`, `8758`, `8792`). Each call walks the level's
@@ -26,7 +25,6 @@ tooling (`tools/sprite_codec.py` `OBJECT_NAMES`) mirrors the same order.
 | `$06` | `generator` | yes (recharging HP) | — | — |
 | `$07` | `door_switch_right` | — (latches) | — | — |
 | `$08` | `door_switch_left` | — (latches) | — | — |
-| `$09` | `heavy_turret_up_right` (SWRAM) | yes | yes (heavy bullet) | — |
 
 "Destructible" means a player bullet will destroy the object and remove it from
 the level. `pod_stand` and `door_switch_*` are explicitly *not* destructible —
@@ -140,7 +138,7 @@ object. On a hit, kill the bullet's lifetime and dispatch on object type:
 |------|---------------|
 | `door_switch_*` | Latch `door_switch_counter_A = $FF`, spawn debris, then fall through `handle_generator` (not a generator) into `check_generic_destructible`. Door switch IDs (`$07`/`$08`) are `>= pod_stand` (`$05`), so the `BCS` there treats them as inert. Net effect: switch latches, bullet is consumed, sprite is not destroyed. |
 | `generator` | Spawn debris, add random damage to `generator_recharge_counter`. No overflow → `delete_object` (damage absorbed). Overflow → arm `planet_countdown_timer` for `PLANET_COUNTDOWN_SECONDS`, then `delete_object`. The generator sprite keeps rendering until the blink phase finishes. |
-| type `< pod_stand` (`$00..$04`), or `heavy_turret` (SWRAM) | `destroy_object`: clear `ALIVE`, spawn explosion, award `score_value`. |
+| type `< pod_stand` (`$00..$04`) | `destroy_object`: clear `ALIVE`, spawn explosion, award `score_value`. |
 | `pod_stand`, `door_switch_*`, or any type `>= pod_stand` not whitelisted | Inert: `try_next_bullet`. |
 
 Important: `destroy_object` does **not** return to `bullet_test_loop` — it
@@ -161,7 +159,7 @@ cleared, `$30` added to score, pickup sound played.
 
 ### 9. Hostile gun fire
 
-For firing types only (`$00..$03`, plus `heavy_turret` in SWRAM):
+For firing types only (`$00..$03`):
 
 Gated by:
 
@@ -177,12 +175,8 @@ angle = gun_base_angle + (rnd & gun_angle_spread_mask) + (rnd & $03)
 ```
 
 Bullets always fly in a one-sided cone from `base` to
-`base + spread_mask + 3`. Spawn a `PARTICLE_type_hostile_bullet` (or
-`_hostile_heavy_bullet` for heavy turrets) at the object position plus the
-per-orientation offset from `gun_bullet_x/y_offset`.
-
-The heavy turret uses the `OBJECT_gun_up_right` offsets via a remap rather than
-extending the 4-entry offset tables.
+`base + spread_mask + 3`. Spawn a `PARTICLE_type_hostile_bullet` at the object
+position plus the per-orientation offset from `gun_bullet_x/y_offset`.
 
 ### 10. Generator debris emitter
 
@@ -235,8 +229,7 @@ Because every per-type table is indexed by `object_type`, adding a new type is
 a coordinated change across the Python tooling, the per-type tables, and the
 CMP/BEQ dispatch sites at phases 2, 6, 7, 9, 10.
 
-The checklist and a worked example (`OBJECT_heavy_turret_up_right = $09`) are
-in `~/.claude/plans/stateless-foraging-narwhal.md`. The quick summary:
+Quick summary:
 
 1. Append to Python `OBJECT_NAMES` / `OBJECT_TYPE_NAMES`.
 2. Draw the sprite in `tools/sprite_editor.py`, save → regenerates
