@@ -127,6 +127,16 @@ GUN_AIM_ARROW_LEN = 18   # world X units (will be scaled by camera zoom)
 COL_GUN_AIM = (255, 180, 80)
 COL_GUN_SPREAD = (255, 180, 80, 90)
 
+# Laser turret types use the gun_aim byte differently (period/duty/phase
+# instead of base angle / spread). Beam direction is fixed per orientation,
+# mirroring laser_beam_dx/dy_table in thrust.6502.
+OBJECT_LASER_TYPES = frozenset({0x09, 0x0A, 0x0B, 0x0C})
+LASER_BEAM_DX_PIXELS = {0x09: +60, 0x0A: +60, 0x0B: -60, 0x0C: -60}
+LASER_BEAM_DY_ROWS   = {0x09: -30, 0x0A: +30, 0x0B: -30, 0x0C: +30}
+LASER_BARREL_X_CHARS = {0x09:   4, 0x0A:   4, 0x0B:   1, 0x0C:   1}
+LASER_BARREL_Y_ROWS  = {0x09:   0, 0x0A:   8, 0x0B:   0, 0x0C:   8}
+COL_LASER_BEAM       = (255, 110, 50)
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -1155,10 +1165,15 @@ class Editor:
             print(f"Failed to load sprites from {path}: {e}")
 
     def _adjust_selected_gun_aim(self, key):
-        """Rotate base angle / cycle spread for the selected firing object.
+        """Edit the gun_aim byte for the selected firing object.
 
-        [ / ]  rotate base angle by -4 / +4 in the 32-angle system
-        , / .  decrement / increment spread mask index (0..3)
+        Guns:
+            [ / ]  rotate base angle by -4 / +4 in the 32-angle system
+            , / .  decrement / increment spread mask index (0..3)
+        Lasers (gun_aim repurposed for period/duty/phase, see thrust.6502
+        update_one_laser_beam):
+            [ / ]  decrement / increment phase index (low nibble, 0..15)
+            , / .  decrement / increment duty  index (high nibble, 0..15)
         No-op if the selected object doesn't fire. (- / = are taken by zoom.)
         """
         if self.selected_object is None or self.mode != "object":
@@ -1168,19 +1183,32 @@ class Editor:
             return
 
         aim = obj.get("gun_aim", 0x00)
-        base = aim & 0x1C                      # bits 4-2: base angle (step 4)
-        spread_idx = aim & 0x03                # bits 1-0: spread mask index
 
-        if key == pygame.K_LEFTBRACKET:
-            base = (base - 4) & 0x1C
-        elif key == pygame.K_RIGHTBRACKET:
-            base = (base + 4) & 0x1C
-        elif key == pygame.K_COMMA:
-            spread_idx = (spread_idx - 1) & 0x03
-        elif key == pygame.K_PERIOD:
-            spread_idx = (spread_idx + 1) & 0x03
+        if obj["type"] in OBJECT_LASER_TYPES:
+            phase_idx = aim & 0x0F
+            duty_idx = (aim & 0xF0) >> 4
+            if key == pygame.K_LEFTBRACKET:
+                phase_idx = (phase_idx - 1) & 0x0F
+            elif key == pygame.K_RIGHTBRACKET:
+                phase_idx = (phase_idx + 1) & 0x0F
+            elif key == pygame.K_COMMA:
+                duty_idx = (duty_idx - 1) & 0x0F
+            elif key == pygame.K_PERIOD:
+                duty_idx = (duty_idx + 1) & 0x0F
+            new_aim = (duty_idx << 4) | phase_idx
+        else:
+            base = aim & 0x1C                      # bits 4-2: base angle (step 4)
+            spread_idx = aim & 0x03                # bits 1-0: spread mask index
+            if key == pygame.K_LEFTBRACKET:
+                base = (base - 4) & 0x1C
+            elif key == pygame.K_RIGHTBRACKET:
+                base = (base + 4) & 0x1C
+            elif key == pygame.K_COMMA:
+                spread_idx = (spread_idx - 1) & 0x03
+            elif key == pygame.K_PERIOD:
+                spread_idx = (spread_idx + 1) & 0x03
+            new_aim = base | spread_idx
 
-        new_aim = base | spread_idx
         if new_aim != aim:
             self.undo.save(self.level)
             obj["gun_aim"] = new_aim
@@ -2035,9 +2063,12 @@ class Editor:
                 pygame.draw.rect(screen, (200, 200, 200),
                                  (int(sx) - 1, int(sy) - 1, draw_w + 2, draw_h + 2), 1)
 
-            # Aim indicator for firing types, only while in object mode
-            if self.mode == "object" and obj["type"] in OBJECT_FIRING_TYPES:
-                self._render_gun_aim(obj, sx, sy, draw_w, draw_h)
+            # Aim / beam-direction indicator for firing types, only in object mode
+            if self.mode == "object":
+                if obj["type"] in OBJECT_LASER_TYPES:
+                    self._render_laser_beam(obj, sx, sy, draw_w, draw_h)
+                elif obj["type"] in OBJECT_FIRING_TYPES:
+                    self._render_gun_aim(obj, sx, sy, draw_w, draw_h)
 
         screen.set_clip(None)
 
@@ -2094,6 +2125,34 @@ class Editor:
             (tip[0] - dx_c * 0.3 + perp_dx, tip[1] - dy_c * 0.3 + perp_dy),
             (tip[0] - dx_c * 0.3 - perp_dx, tip[1] - dy_c * 0.3 - perp_dy),
         ])
+
+    def _render_laser_beam(self, obj, sx, sy, draw_w, draw_h):
+        """Draw a static line from the laser turret barrel along its firing
+        direction. Length and direction mirror laser_beam_dx/dy_table and the
+        gun_bullet_x/y_offset reuse in thrust.6502 — the rendered beam should
+        match where the in-game beam will actually plot.
+
+        Note on aspect: the editor compresses horizontals (ASPECT = 2) so 1
+        char draws as 2 row-heights, but on the BBC display 1 char displays
+        as ~4 row-heights (4:3 CRT, 320×256, 4 BBC pixels per char). Scaling
+        beam X by row_h_px keeps the in-game angle (60 BBC px × 30 rows ≈
+        2:1 → ~27°), but the editor's halved char width means dropping a
+        further factor of 2 keeps the beam's on-screen length proportional
+        to the sprite the same way it is in-game (beam ≈ 3× sprite width).
+        """
+        obj_type = obj["type"]
+        # Sprite cells are 5 chars wide × 8 rows tall for laser turrets.
+        char_w_px = draw_w / 5.0
+        row_h_px  = draw_h / 8.0
+        barrel_sx = sx + LASER_BARREL_X_CHARS[obj_type] * char_w_px
+        barrel_sy = sy + LASER_BARREL_Y_ROWS[obj_type]  * row_h_px
+        # Both axes scaled by row_h_px / 2 → preserves angle, halves length to
+        # match the editor's compressed view of the rest of the scene.
+        end_sx = barrel_sx + LASER_BEAM_DX_PIXELS[obj_type] * row_h_px / 2.0
+        end_sy = barrel_sy + LASER_BEAM_DY_ROWS[obj_type]   * row_h_px / 2.0
+        pygame.draw.line(self.screen, COL_LASER_BEAM,
+                         (int(barrel_sx), int(barrel_sy)),
+                         (int(end_sx), int(end_sy)), 2)
 
     def _render_checkpoints(self):
         """Draw checkpoint markers as horizontal lines with spawn position dots."""
@@ -2428,7 +2487,15 @@ class Editor:
             obj = lv.objects[self.selected_object]
             name = OBJECT_TYPE_NAMES.get(obj["type"], f"?{obj['type']}")
             parts.append(f"Selected: {name} @ ({obj['x']}, {obj['y']})")
-            if obj["type"] in OBJECT_FIRING_TYPES:
+            if obj["type"] in OBJECT_LASER_TYPES:
+                aim = obj.get("gun_aim", 0x00)
+                phase_idx = aim & 0x0F
+                duty_idx = (aim & 0xF0) >> 4
+                duty_frames = duty_idx * 4 + 4
+                phase_frames = phase_idx * 8
+                parts.append(
+                    f"aim=${aim:02X} duty={duty_frames}f phase={phase_frames}f  ([/] phase  ,/. duty)")
+            elif obj["type"] in OBJECT_FIRING_TYPES:
                 aim = obj.get("gun_aim", 0x00)
                 base = aim & 0x1C
                 spread_idx = aim & 0x03

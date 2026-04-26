@@ -6901,6 +6901,12 @@ ENDIF
         STA     level_gun_aim_addr_LO                    ; **MODIFIES CODE**
         LDA     level_gun_aim_lookup_HI,X
         STA     level_gun_aim_addr_HI                    ; **MODIFIES CODE**
+IF _TIMED_LASER
+        LDA     level_gun_aim_lookup_LO,X
+        STA     laser_load_gun_aim_addr_LO                ; **MODIFIES CODE** (mirror for update_one_laser_beam)
+        LDA     level_gun_aim_lookup_HI,X
+        STA     laser_load_gun_aim_addr_HI                ; **MODIFIES CODE**
+ENDIF
 
         TXA
         ROR     A                                        ; level_number /= 2
@@ -10256,20 +10262,21 @@ IF _TIMED_LASER
 \ * Params: X = current_object, object_type already loaded
 \ * Returns: none
 \ * Description: Erases this laser's previous beam (if any), then decides whether
-\ *   the beam should be on this frame and re-draws if so. Hardcoded period 128
-\ *   frames, duty 32 frames, no per-instance phase yet (TODO step 5: decode
-\ *   from the gun_aim byte). The "drawn last frame" state lives in bit 2 of
-\ *   level_obj_flags (OBJ_flag_laser_beam_drawn) and the screen coords used at
-\ *   draw time are cached in obj_laser_prev_screen_x/y, so window scrolling and
+\ *   the beam should be on this frame and re-draws if so. Period stays
+\ *   hardcoded at 128 frames; the gun_aim byte encodes per-instance phase
+\ *   (low nibble × 8 frames offset) and duty (high nibble × 4 + 4 frames).
+\ *   The "drawn last frame" state lives in bit 2 of level_obj_flags
+\ *   (OBJ_flag_laser_beam_drawn) and the screen coords used at draw time
+\ *   are cached in obj_laser_prev_screen_x/y, so window scrolling and
 \ *   destruction cleanly retire the old pixels via XOR.
 \ ******************************************************************************
 
 .update_one_laser_beam
-{
+\\ {
         \\ Phase 1: erase previous beam (if drawn last frame) using cached coords.
         LDA     level_obj_flags,X
         AND     #OBJ_flag_laser_beam_drawn
-        BEQ     skip_erase
+        BEQ     laser_skip_erase
 
         LDA     obj_laser_prev_screen_x,X
         STA     obj_screen_x
@@ -10282,12 +10289,35 @@ IF _TIMED_LASER
         AND     #($FF EOR OBJ_flag_laser_beam_drawn)
         STA     level_obj_flags,X
 
-    .skip_erase
-        \\ Phase 2: timer gate. ON for first 32 frames of every 128-frame cycle.
-        LDA     level_tick_counter
-        AND     #$7F                                ; modulo period (128)
-        CMP     #$20                                ; duty (32)
-        BCS     done                                ; off-phase → leave erased
+    .laser_skip_erase
+        \\ Phase 2: timer gate. Decode period/duty/phase from this object's
+        \\ gun_aim byte (period stays hardcoded at 128 frames):
+        \\   bits 0..3 → phase_idx     (phase_offset = phase_idx * 8 frames, 0..120)
+        \\   bits 4..7 → duty_idx      (duty = duty_idx * 4 + 4 frames, 4..64)
+        \\ Beam is ON while ((tick + phase_offset) AND $7F) < duty. Reuses
+        \\ laser_clip_t_x_max as a scratch slot (it isn't read until
+        \\ draw_laser_beam_at_obj_screen, which only runs if we don't BCS-out).
+    .laser_load_gun_aim
+        LDA     level_0_gun_aim,X                   ; **SELF-MODIFIED CODE** (mirror of load_gun_aim)
+        laser_load_gun_aim_addr_LO = laser_load_gun_aim+1
+        laser_load_gun_aim_addr_HI = laser_load_gun_aim+2
+        TAY                                         ; Y = gun_aim (saved)
+        AND     #$F0                                ; duty_idx << 4
+        LSR     A
+        LSR     A                                   ; duty_idx * 4
+        CLC
+        ADC     #4                                  ; duty = duty_idx * 4 + 4 (range 4..64)
+        STA     laser_clip_t_x_max                  ; scratch: stash duty
+        TYA
+        AND     #$0F                                ; phase_idx
+        ASL     A
+        ASL     A
+        ASL     A                                   ; phase_offset = phase_idx * 8 (range 0..120)
+        CLC
+        ADC     level_tick_counter
+        AND     #$7F                                ; modulo period 128
+        CMP     laser_clip_t_x_max                  ; A = phase_in_cycle, mem = duty
+        BCS     laser_one_done                      ; phase >= duty → off-phase
 
         \\ Phase 3: only redraw for alive, on-screen lasers. The reliable cull
         \\ indicator is obj_plot_sprite_at_ptr+1, which calculate_object_plot_addr
@@ -10295,13 +10325,13 @@ IF _TIMED_LASER
         \\ stays set to $01 even for Y-culled objects on the same world page.
         LDA     level_obj_flags,X
         AND     #OBJ_flag_alive
-        BEQ     done
+        BEQ     laser_one_done
 
         LDA     #$00
         STA     obj_plot_sprite_at_ptr+1
         JSR     object_visibility_test
         LDA     obj_plot_sprite_at_ptr+1
-        BEQ     done                                ; off-screen → leave erased
+        BEQ     laser_one_done                      ; off-screen → leave erased
 
         LDX     current_object
 
@@ -10317,9 +10347,9 @@ IF _TIMED_LASER
         LDA     level_obj_flags,X
         ORA     #OBJ_flag_laser_beam_drawn
         STA     level_obj_flags,X
-    .done
+    .laser_one_done
         RTS
-}
+\\ }
 
 \ ******************************************************************************
 \ * Function: draw_laser_beam_at_obj_screen
