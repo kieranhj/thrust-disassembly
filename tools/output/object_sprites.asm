@@ -120,52 +120,52 @@
         EQUB    $07,$01,$08,$02,$04,$04,$08,$08
         EQUB    $08,$08,$04,$04,$02,$01,$08,$07
 
-.obj_sprite_data_A_heavy_turret_up_right
+.obj_sprite_data_A_laser_turret_up_right
         EQUB    $88,$10,$18,$80,$08,$10,$18,$80
         EQUB    $10,$18,$80,$10,$18,$20,$80,$08
         EQUB    $18,$20,$90,$18,$20,$90,$18,$20
         EQUB    $98,$20,$98,$20,$A0,$A0,$A0,$A0
         EQUB    $A0,$FF
-.obj_sprite_data_B_heavy_turret_up_right
+.obj_sprite_data_B_laser_turret_up_right
         EQUB    $60,$70,$80,$10,$90,$80,$60,$60
         EQUB    $60,$10,$80,$10,$80,$80,$F0,$F0
         EQUB    $60,$80,$E0,$10,$80,$10,$80,$60
         EQUB    $60,$10,$10,$10,$90,$90,$50,$50
         EQUB    $30,$72,$72,$30
 
-.obj_sprite_data_A_heavy_turret_down_right
+.obj_sprite_data_A_laser_turret_down_right
         EQUB    $20,$A0,$A0,$A0,$A0,$98,$20,$98
         EQUB    $20,$90,$18,$20,$90,$18,$20,$80
         EQUB    $08,$18,$20,$80,$10,$18,$20,$80
         EQUB    $10,$18,$80,$08,$10,$18,$88,$10
         EQUB    $18,$FF
-.obj_sprite_data_B_heavy_turret_down_right
+.obj_sprite_data_B_laser_turret_down_right
         EQUB    $30,$50,$50,$90,$90,$10,$10,$60
         EQUB    $10,$10,$80,$60,$E0,$10,$80,$F0
         EQUB    $F0,$60,$80,$80,$10,$80,$80,$60
         EQUB    $60,$10,$10,$90,$80,$60,$60,$70
         EQUB    $80
 
-.obj_sprite_data_A_heavy_turret_up_left
+.obj_sprite_data_A_laser_turret_up_left
         EQUB    $88,$10,$18,$88,$10,$18,$20,$88
         EQUB    $10,$20,$80,$08,$10,$20,$80,$08
         EQUB    $18,$20,$80,$08,$10,$80,$08,$10
         EQUB    $80,$08,$80,$08,$80,$80,$80,$80
         EQUB    $80,$FF
-.obj_sprite_data_B_heavy_turret_up_left
+.obj_sprite_data_B_laser_turret_up_left
         EQUB    $10,$E0,$60,$60,$10,$90,$80,$80
         EQUB    $60,$60,$10,$10,$80,$10,$10,$60
         EQUB    $F0,$F0,$10,$80,$70,$60,$10,$80
         EQUB    $80,$60,$80,$80,$90,$90,$A0,$A0
         EQUB    $C0
 
-.obj_sprite_data_A_heavy_turret_down_left
+.obj_sprite_data_A_laser_turret_down_left
         EQUB    $00,$80,$80,$80,$80,$80,$08,$80
         EQUB    $08,$80,$08,$10,$80,$08,$10,$80
         EQUB    $08,$18,$20,$80,$08,$10,$20,$88
         EQUB    $10,$20,$88,$10,$18,$20,$88,$10
         EQUB    $18,$FF
-.obj_sprite_data_B_heavy_turret_down_left
+.obj_sprite_data_B_laser_turret_down_left
         EQUB    $C0,$A0,$A0,$90,$90,$80,$80,$80
         EQUB    $60,$60,$10,$80,$10,$80,$70,$10
         EQUB    $60,$F0,$F0,$10,$10,$80,$10,$80
@@ -182,10 +182,10 @@
         EQUB    LO(obj_sprite_data_A_generator)
         EQUB    LO(obj_sprite_data_A_door_switch_right)
         EQUB    LO(obj_sprite_data_A_door_switch_left)
-        EQUB    LO(obj_sprite_data_A_heavy_turret_up_right)
-        EQUB    LO(obj_sprite_data_A_heavy_turret_down_right)
-        EQUB    LO(obj_sprite_data_A_heavy_turret_up_left)
-        EQUB    LO(obj_sprite_data_A_heavy_turret_down_left)
+        EQUB    LO(obj_sprite_data_A_laser_turret_up_right)
+        EQUB    LO(obj_sprite_data_A_laser_turret_down_right)
+        EQUB    LO(obj_sprite_data_A_laser_turret_up_left)
+        EQUB    LO(obj_sprite_data_A_laser_turret_down_left)
 
 .obj_sprite_data_A_table_HI
         EQUB    HI(obj_sprite_data_A_gun_up_right)
@@ -197,10 +197,10 @@
         EQUB    HI(obj_sprite_data_A_generator)
         EQUB    HI(obj_sprite_data_A_door_switch_right)
         EQUB    HI(obj_sprite_data_A_door_switch_left)
-        EQUB    HI(obj_sprite_data_A_heavy_turret_up_right)
-        EQUB    HI(obj_sprite_data_A_heavy_turret_down_right)
-        EQUB    HI(obj_sprite_data_A_heavy_turret_up_left)
-        EQUB    HI(obj_sprite_data_A_heavy_turret_down_left)
+        EQUB    HI(obj_sprite_data_A_laser_turret_up_right)
+        EQUB    HI(obj_sprite_data_A_laser_turret_down_right)
+        EQUB    HI(obj_sprite_data_A_laser_turret_up_left)
+        EQUB    HI(obj_sprite_data_A_laser_turret_down_left)
 
 .obj_sprite_data_B_table_LO
         EQUB    LO(obj_sprite_data_B_gun_up_right)
@@ -212,10 +212,10 @@
         EQUB    LO(obj_sprite_data_B_generator)
         EQUB    LO(obj_sprite_data_B_door_switch_right)
         EQUB    LO(obj_sprite_data_B_door_switch_left)
-        EQUB    LO(obj_sprite_data_B_heavy_turret_up_right)
-        EQUB    LO(obj_sprite_data_B_heavy_turret_down_right)
-        EQUB    LO(obj_sprite_data_B_heavy_turret_up_left)
-        EQUB    LO(obj_sprite_data_B_heavy_turret_down_left)
+        EQUB    LO(obj_sprite_data_B_laser_turret_up_right)
+        EQUB    LO(obj_sprite_data_B_laser_turret_down_right)
+        EQUB    LO(obj_sprite_data_B_laser_turret_up_left)
+        EQUB    LO(obj_sprite_data_B_laser_turret_down_left)
 
 .obj_sprite_data_B_table_HI
         EQUB    HI(obj_sprite_data_B_gun_up_right)
@@ -227,7 +227,7 @@
         EQUB    HI(obj_sprite_data_B_generator)
         EQUB    HI(obj_sprite_data_B_door_switch_right)
         EQUB    HI(obj_sprite_data_B_door_switch_left)
-        EQUB    HI(obj_sprite_data_B_heavy_turret_up_right)
-        EQUB    HI(obj_sprite_data_B_heavy_turret_down_right)
-        EQUB    HI(obj_sprite_data_B_heavy_turret_up_left)
-        EQUB    HI(obj_sprite_data_B_heavy_turret_down_left)
+        EQUB    HI(obj_sprite_data_B_laser_turret_up_right)
+        EQUB    HI(obj_sprite_data_B_laser_turret_down_right)
+        EQUB    HI(obj_sprite_data_B_laser_turret_up_left)
+        EQUB    HI(obj_sprite_data_B_laser_turret_down_left)

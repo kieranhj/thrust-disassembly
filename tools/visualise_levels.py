@@ -80,6 +80,10 @@ OBJECT_TYPE_NAMES = {
     0x06: "Generator",
     0x07: "Door switch (R)",
     0x08: "Door switch (L)",
+    0x09: "Laser turret (UR)",
+    0x0A: "Laser turret (DR)",
+    0x0B: "Laser turret (UL)",
+    0x0C: "Laser turret (DL)",
 }
 
 OBJECT_TYPE_MARKERS = {
@@ -92,6 +96,10 @@ OBJECT_TYPE_MARKERS = {
     0x06: ("s", "lime"),      # generator
     0x07: ("P", "magenta"),   # door switch right
     0x08: ("P", "violet"),    # door switch left
+    0x09: ("X", "crimson"),   # laser turret up-right
+    0x0A: ("x", "crimson"),   # laser turret down-right
+    0x0B: ("X", "darkred"),   # laser turret up-left
+    0x0C: ("x", "darkred"),   # laser turret down-left
 }
 
 # ---------------------------------------------------------------------------
