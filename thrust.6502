@@ -118,6 +118,7 @@ ENDIF
 
 OBJ_flag_drawn                      = $01       ; level_obj_flags bit 0: sprite was XOR-plotted (needs erase before redraw)
 OBJ_flag_alive                      = $02       ; level_obj_flags bit 1: object is active (update + draw + collide)
+OBJ_flag_laser_beam_drawn           = $04       ; level_obj_flags bit 2: laser_turret beam was XOR-plotted (needs erase before re-evaluation)
 
 PARTICLE_flag                       = $80       ; particle can be replaced
 PARTICLE_lifetime_bullet            = $28       ; bullet lifetime in ticks
@@ -1429,6 +1430,9 @@ ENDIF
 
 .end_of_objects_function
 {
+IF _TIMED_LASER
+        JSR     update_all_laser_beams              ; erase / re-draw timed laser beams
+ENDIF
         LDA     score_accumulation
         BEQ     skip_add_score
 
@@ -2047,16 +2051,6 @@ ENDIF
         LDA     plot_sprite_at_ptr+1
         STA     level_obj_plot_at_ptr_HI,X
         JSR     plot_static_sprite
-
-IF _TIMED_LASER
-        LDA     object_type
-        CMP     #OBJECT_laser_turret_up_right       ; $09
-        BCC     skip_laser_beam
-        CMP     #(OBJECT_laser_turret_down_left+1)  ; $0D
-        BCS     skip_laser_beam
-        JSR     draw_laser_beam_step3               ; one-shot XOR-draw; persists until next fresh draw
-    .skip_laser_beam
-ENDIF
 
     .next_object
         LDX     current_object
@@ -6896,6 +6890,12 @@ ENDIF
         STA     level_obj_type_addr_LO                    ; **MODIFIES CODE**
         LDA     level_obj_type_lookup_HI,X
         STA     level_obj_type_addr_HI                    ; **MODIFIES CODE**
+IF _TIMED_LASER
+        LDA     level_obj_type_lookup_LO,X
+        STA     laser_load_object_type_addr_LO            ; **MODIFIES CODE** (mirror for update_all_laser_beams)
+        LDA     level_obj_type_lookup_HI,X
+        STA     laser_load_object_type_addr_HI            ; **MODIFIES CODE**
+ENDIF
 
         LDA     level_gun_aim_lookup_LO,X
         STA     level_gun_aim_addr_LO                    ; **MODIFIES CODE**
@@ -10183,45 +10183,251 @@ ENDIF
 
 IF _TIMED_LASER
 \ ******************************************************************************
-\ * Function: draw_laser_beam_step3
-\ * Params: obj_screen_x, obj_screen_y (set by object_visibility_test for current
-\ *         laser turret object)
-\ * Returns: none (clobbers A; passes through draw_line which clobbers more)
-\ * Description: Step 3 placeholder. Draws a fixed-length up-right beam from the
-\ *   laser turret sprite centre using the existing Bresenham draw_line in the
-\ *   hostile-bullet pixel byte. Called once per visible-alive-fresh-draw frame:
-\ *   the dirty-rect skip in phase 11 means stationary lasers draw the beam once
-\ *   then leave the XOR pixels in place (giving "always on" semantics) until
-\ *   the next fresh draw, at which point the redraw XORs them out.
-\ *
-\ * TODO: replace with per-instance dx/dy and timer-driven on/off in step 4. The
-\ *   generic draw_line is per-pixel — a straight-line plotter would be faster
-\ *   for axis-aligned beams once profiling justifies it.
+\ * Per-orientation beam direction tables, indexed by (object_type - $09):
+\ *   $09 up_right    → ( +60, -30 )
+\ *   $0A down_right  → ( +60, +30 )
+\ *   $0B up_left     → ( -60, -30 )
+\ *   $0C down_left   → ( -60, +30 )
+\ * Stored as signed bytes; added with CLC+ADC (the carry is discarded).
 \ ******************************************************************************
 
-.draw_laser_beam_step3
-{
-        LDA     obj_screen_x                        ; sprite centre X (chars) → pixels
-        CLC
-        ADC     #$02                                ; +2 chars to centre 5-char sprite
-        ASL     A
-        ASL     A                                   ; *4 = pixel column
-        STA     draw_line_start_x
-        CLC
-        ADC     #60                                 ; +60 px (15 chars) to the right
-        STA     draw_line_end_x
+.laser_beam_dx_table
+        EQUB    60,   60,  -60,  -60
+.laser_beam_dy_table
+        EQUB   -30,   30,  -30,   30
 
-        LDA     obj_screen_y                        ; sprite centre Y (rows)
-        CLC
-        ADC     #$04                                ; +4 to centre 8-row sprite
+\ Scratch for proportional clipping in draw_laser_beam_at_obj_screen.
+.laser_clip_t_x_max     EQUB $00            ; max t (in y-axis units) before X exits screen
+.laser_clip_t           EQUB $00            ; final clipped t after min(t_x_max, t_y_max, 30)
+
+\ Per-object cached screen coords for the laser beam: when
+\ OBJ_flag_laser_beam_drawn is set in level_obj_flags[X], these hold the
+\ obj_screen_x/obj_screen_y from the frame the beam was XOR-drawn so
+\ update_all_laser_beams can XOR-erase at exactly those pixels next time
+\ around. Sized to the SWRAM-extended LEVEL_MAX_OBJECTS+1.
+.obj_laser_prev_screen_x
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+.obj_laser_prev_screen_y
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+
+\ ******************************************************************************
+\ * Function: update_all_laser_beams
+\ * Description: Per-frame state machine for every laser turret in the level.
+\ *   Walks the object type array (terminated by $FF) and for each object whose
+\ *   type is in $09..$0C runs update_one_laser_beam. Called from
+\ *   end_of_objects_function once the main object loop has finished.
+\ ******************************************************************************
+
+.update_all_laser_beams
+\\ {
+        LDX     #$00
+    .laser_pass_loop
+        STX     current_object
+    .laser_load_object_type
+        LDA     level_0_obj_type,X                  ; **SELF-MODIFIED CODE** (mirror of load_object_type)
+        laser_load_object_type_addr_LO = laser_load_object_type+1
+        laser_load_object_type_addr_HI = laser_load_object_type+2
+        CMP     #$FF
+        BEQ     laser_pass_done
+        STA     object_type
+        CMP     #OBJECT_laser_turret_up_right       ; $09
+        BCC     laser_pass_next
+        CMP     #(OBJECT_laser_turret_down_left+1)  ; $0D
+        BCS     laser_pass_next
+
+        JSR     update_one_laser_beam
+
+    .laser_pass_next
+        LDX     current_object
+        INX
+        JMP     laser_pass_loop
+    .laser_pass_done
+        RTS
+\\ }
+
+\ ******************************************************************************
+\ * Function: update_one_laser_beam
+\ * Params: X = current_object, object_type already loaded
+\ * Returns: none
+\ * Description: Erases this laser's previous beam (if any), then decides whether
+\ *   the beam should be on this frame and re-draws if so. Hardcoded period 128
+\ *   frames, duty 32 frames, no per-instance phase yet (TODO step 5: decode
+\ *   from the gun_aim byte). The "drawn last frame" state lives in bit 2 of
+\ *   level_obj_flags (OBJ_flag_laser_beam_drawn) and the screen coords used at
+\ *   draw time are cached in obj_laser_prev_screen_x/y, so window scrolling and
+\ *   destruction cleanly retire the old pixels via XOR.
+\ ******************************************************************************
+
+.update_one_laser_beam
+{
+        \\ Phase 1: erase previous beam (if drawn last frame) using cached coords.
+        LDA     level_obj_flags,X
+        AND     #OBJ_flag_laser_beam_drawn
+        BEQ     skip_erase
+
+        LDA     obj_laser_prev_screen_x,X
+        STA     obj_screen_x
+        LDA     obj_laser_prev_screen_y,X
+        STA     obj_screen_y
+        JSR     draw_laser_beam_at_obj_screen       ; XOR-erases (deterministic swap → same pixels)
+
+        LDX     current_object                      ; draw_line clobbers X
+        LDA     level_obj_flags,X
+        AND     #($FF EOR OBJ_flag_laser_beam_drawn)
+        STA     level_obj_flags,X
+
+    .skip_erase
+        \\ Phase 2: timer gate. ON for first 32 frames of every 128-frame cycle.
+        LDA     level_tick_counter
+        AND     #$7F                                ; modulo period (128)
+        CMP     #$20                                ; duty (32)
+        BCS     done                                ; off-phase → leave erased
+
+        \\ Phase 3: only redraw for alive, on-screen lasers. The reliable cull
+        \\ indicator is obj_plot_sprite_at_ptr+1, which calculate_object_plot_addr
+        \\ only writes when X-cull and Y-cull both pass; current_obj_visible_flag
+        \\ stays set to $01 even for Y-culled objects on the same world page.
+        LDA     level_obj_flags,X
+        AND     #OBJ_flag_alive
+        BEQ     done
+
+        LDA     #$00
+        STA     obj_plot_sprite_at_ptr+1
+        JSR     object_visibility_test
+        LDA     obj_plot_sprite_at_ptr+1
+        BEQ     done                                ; off-screen → leave erased
+
+        LDX     current_object
+
+        \\ Phase 4: cache the freshly computed screen coords, draw, set flag.
+        LDA     obj_screen_x
+        STA     obj_laser_prev_screen_x,X
+        LDA     obj_screen_y
+        STA     obj_laser_prev_screen_y,X
+
+        JSR     draw_laser_beam_at_obj_screen
+
+        LDX     current_object
+        LDA     level_obj_flags,X
+        ORA     #OBJ_flag_laser_beam_drawn
+        STA     level_obj_flags,X
+    .done
+        RTS
+}
+
+\ ******************************************************************************
+\ * Function: draw_laser_beam_at_obj_screen
+\ * Params: obj_screen_x, obj_screen_y (sprite cell), object_type (orientation)
+\ * Returns: none (XOR-plots in hostile bullet colour; clobbers A/X/Y)
+\ * Description: Builds Bresenham start/end coordinates from the sprite centre
+\ *   and the per-orientation (dx, dy) table, then tail-calls draw_line. Called
+\ *   for both draw and erase — draw_line's deterministic endpoint swap means
+\ *   passing the same inputs twice XORs the same pixels.
+\ *
+\ * TODO: a straight-line plotter would beat the generic Bresenham for
+\ *   axis-aligned beams once profiling justifies it.
+\ ******************************************************************************
+
+.draw_laser_beam_at_obj_screen
+{
+        \\ The beam is parameterised by t in "y-axis units" along its travel
+        \\ direction. Since |dy/dx| = 1/2 for every orientation, two pixel
+        \\ columns of x-travel correspond to one row of y-travel — so clipping
+        \\ to t_x_max (rows the beam can travel before x leaves the screen)
+        \\ and t_y_max (rows before y leaves the screen) keeps the slope intact.
+        \\ Final t = min(t_x_max, t_y_max, |dy|=30); end coords scale from there.
+        LDY     object_type
+        LDA     obj_screen_x                                          ; barrel X (chars): reuse gun bullet offsets
+        CLC                                                           ; (+4 chars right side / +1 left side)
+        ADC     gun_bullet_x_offset-OBJECT_laser_turret_up_right,Y
+        ASL     A
+        ASL     A                                                     ; chars → pixels (low 8 bits)
+        STA     draw_line_start_x
+
+        LDA     obj_screen_y                                          ; barrel Y (rows)
+        CLC                                                           ; (+0 top / +8 bottom)
+        ADC     gun_bullet_y_offset-OBJECT_laser_turret_up_right,Y
         STA     draw_line_start_y
+
+        \\ t_x_max: rows of y-travel before x-axis exits the screen.
+        \\ Right-facing → (255 - start_x) / 2; left-facing → start_x / 2.
+        LDA     laser_beam_dx_table-OBJECT_laser_turret_up_right,Y
+        BMI     left_facing
         SEC
-        SBC     #30                                 ; -30 rows up
+        LDA     #$FF
+        SBC     draw_line_start_x
+        LSR     A
+        STA     laser_clip_t_x_max
+        JMP     compute_t_y_max
+    .left_facing
+        LDA     draw_line_start_x
+        LSR     A
+        STA     laser_clip_t_x_max
+
+    .compute_t_y_max
+        \\ t_y_max: rows before y-axis exits. Down-facing → (255 - start_y);
+        \\ up-facing → start_y. Result left in A for the upcoming min.
+        LDA     laser_beam_dy_table-OBJECT_laser_turret_up_right,Y
+        BMI     up_facing
+        SEC
+        LDA     #$FF
+        SBC     draw_line_start_y
+        JMP     find_t_clip
+    .up_facing
+        LDA     draw_line_start_y
+
+    .find_t_clip
+        \\ A = t_y_max. Take min(t_x_max, A), then min with 30 (full beam length).
+        CMP     laser_clip_t_x_max
+        BCC     keep_t_y_max
+        LDA     laser_clip_t_x_max
+    .keep_t_y_max
+        CMP     #30
+        BCC     clip_within_full
+        LDA     #30
+    .clip_within_full
+        STA     laser_clip_t
+
+        \\ end_y = start_y ± t_clip
+        LDA     laser_beam_dy_table-OBJECT_laser_turret_up_right,Y
+        BMI     subtract_t_for_end_y
+        LDA     draw_line_start_y
+        CLC
+        ADC     laser_clip_t
+        JMP     store_end_y
+    .subtract_t_for_end_y
+        LDA     draw_line_start_y
+        SEC
+        SBC     laser_clip_t
+    .store_end_y
         STA     draw_line_end_y
 
-        LDA     hostile_bullet_pixel_byte           ; same colour as hostile bullets
+        \\ end_x = start_x ± (2 * t_clip)
+        LDA     laser_clip_t
+        ASL     A
+        STA     laser_clip_t                                          ; reuse: now holds 2*t_clip
+        LDA     laser_beam_dx_table-OBJECT_laser_turret_up_right,Y
+        BMI     subtract_2t_for_end_x
+        LDA     draw_line_start_x
+        CLC
+        ADC     laser_clip_t
+        JMP     store_end_x
+    .subtract_2t_for_end_x
+        LDA     draw_line_start_x
+        SEC
+        SBC     laser_clip_t
+    .store_end_x
+        STA     draw_line_end_x
+
+        LDA     hostile_bullet_pixel_byte
         STA     plot_line_pixels_byte
-        JMP     draw_line                           ; tail call
+        JMP     draw_line                                             ; tail call
 }
 ENDIF
 
