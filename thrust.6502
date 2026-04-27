@@ -10203,24 +10203,23 @@ ENDIF
 
 IF _TIMED_LASER
 \ ******************************************************************************
-\ * Per-orientation beam direction tables, indexed by (object_type - $09):
-\ *   $09 up_right    → ( +60, -30 )
-\ *   $0A down_right  → ( +60, +30 )
-\ *   $0B up_left     → ( -60, -30 )
-\ *   $0C down_left   → ( -60, +30 )
-\ * Stored as signed bytes; added with CLC+ADC (the carry is discarded).
+\ * Per-instance beam direction. dx/dy come from the per-level
+\ * level_N_laser_dx_pixels / level_N_laser_dy_rows arrays via laser_load_dx
+\ * and laser_load_dy in update_one_laser_beam. The scratch slots below feed
+\ * draw_laser_beam_at_obj_screen below.
 \ ******************************************************************************
 
-.laser_beam_dx_table
-        EQUB    60,   60,  -60,  -60
-.laser_beam_dy_table
-        EQUB   -30,   30,  -30,   30
-
-\ Scratch for proportional clipping in draw_laser_beam_at_obj_screen.
-.laser_clip_t_x_max     EQUB $00            ; max t (in y-axis units) before X exits screen
-.laser_clip_t           EQUB $00            ; final clipped t after min(t_x_max, t_y_max, 30)
+\ Scratch for draw_laser_beam_at_obj_screen.
 .laser_dx_temp          EQUB $00            ; per-instance dx (signed pixels), loaded by laser_load_dx
 .laser_dy_temp          EQUB $00            ; per-instance dy (signed rows), loaded by laser_load_dy
+.laser_clip_t_x_max     EQUB $00            ; doubles as duty stash in update_one_laser_beam timer gate
+.laser_abs_dx           EQUB $00            ; |dx|
+.laser_abs_dy           EQUB $00            ; |dy|
+.laser_range_x          EQUB $00            ; pixels to screen edge in dx direction
+.laser_range_y          EQUB $00            ; rows to screen edge in dy direction
+.laser_t_q              EQUB $00            ; clipped t in Q7 (0..127), 127 ~= full beam
+.laser_divisor          EQUB $00            ; divide_q7 input
+.laser_quotient         EQUB $00            ; divide_q7 accumulator
 
 \ Per-level lookup tables for the laser dx/dy arrays. Lives in SWRAM (native
 \ RAM is too tight in the SWRAM build to hold these alongside the existing
@@ -10396,6 +10395,7 @@ IF _TIMED_LASER
         STA     obj_laser_prev_screen_y,X
 
         JSR     draw_laser_beam_at_obj_screen
+        BCS     laser_one_done                      ; barrel off-screen → skip flag set
 
         LDX     current_object
         LDA     level_obj_flags,X
@@ -10419,100 +10419,189 @@ IF _TIMED_LASER
 \ ******************************************************************************
 
 .draw_laser_beam_at_obj_screen
-{
-        \\ The beam is parameterised by t in "y-axis units" along its travel
-        \\ direction. Since |dy/dx| = 1/2 for every orientation, two pixel
-        \\ columns of x-travel correspond to one row of y-travel — so clipping
-        \\ to t_x_max (rows the beam can travel before x leaves the screen)
-        \\ and t_y_max (rows before y leaves the screen) keeps the slope intact.
-        \\ Final t = min(t_x_max, t_y_max, |dy|=30); end coords scale from there.
+\\ {
+        \\ Per-instance dx, dy come from laser_dx_temp / laser_dy_temp (loaded
+        \\ at the top of update_one_laser_beam). Slope is no longer fixed at
+        \\ 2:1 so we parameterise by t in Q7 (0..127). t = 127 ~= "full beam",
+        \\ smaller values mean the beam has been clipped at a screen edge.
+        \\ End coords are start + (d_signed * t_q) >> 7 via signed multiply.
         LDY     object_type
         LDA     obj_screen_x                                          ; barrel X (chars): reuse gun bullet offsets
         CLC                                                           ; (+4 chars right side / +1 left side)
         ADC     gun_bullet_x_offset-OBJECT_laser_turret_up_right,Y
         ASL     A
-        ASL     A                                                     ; chars → pixels (low 8 bits)
+        BCS     laser_barrel_x_off                                    ; obj cull window allows up to 67 chars; >=64 → off-screen right
+        ASL     A
+        BCS     laser_barrel_x_off
         STA     draw_line_start_x
+        JMP     laser_barrel_x_ok
+    .laser_barrel_x_off
+        JMP     laser_barrel_off_screen
+    .laser_barrel_x_ok
 
         LDA     obj_screen_y                                          ; barrel Y (rows)
         CLC                                                           ; (+0 top / +8 bottom)
         ADC     gun_bullet_y_offset-OBJECT_laser_turret_up_right,Y
+        BCC     laser_barrel_y_ok                                     ; in range → continue
+        JMP     laser_barrel_off_screen                               ; obj scrolled off bottom: barrel past row 255
+    .laser_barrel_y_ok
         STA     draw_line_start_y
 
-        \\ t_x_max: rows of y-travel before x-axis exits the screen.
-        \\ Right-facing → (255 - start_x) / 2; left-facing → start_x / 2.
-        LDA     laser_beam_dx_table-OBJECT_laser_turret_up_right,Y
-        BMI     left_facing
-        SEC
+        \\ Compute |dx|, range_x (pixels remaining toward the dx direction).
+        LDA     laser_dx_temp
+        BMI     laser_range_x_left
+        STA     laser_abs_dx
         LDA     #$FF
-        SBC     draw_line_start_x
-        LSR     A
-        STA     laser_clip_t_x_max
-        JMP     compute_t_y_max
-    .left_facing
-        LDA     draw_line_start_x
-        LSR     A
-        STA     laser_clip_t_x_max
-
-    .compute_t_y_max
-        \\ t_y_max: rows before y-axis exits. Down-facing → (255 - start_y);
-        \\ up-facing → start_y. Result left in A for the upcoming min.
-        LDA     laser_beam_dy_table-OBJECT_laser_turret_up_right,Y
-        BMI     up_facing
         SEC
+        SBC     draw_line_start_x                                     ; range_x = 255 - start_x
+        STA     laser_range_x
+        JMP     laser_compute_abs_dy
+    .laser_range_x_left
+        EOR     #$FF
+        CLC
+        ADC     #1                                                    ; A = |dx|
+        STA     laser_abs_dx
+        LDA     draw_line_start_x                                     ; range_x = start_x
+        STA     laser_range_x
+
+    .laser_compute_abs_dy
+        LDA     laser_dy_temp
+        BMI     laser_range_y_up
+        STA     laser_abs_dy
         LDA     #$FF
-        SBC     draw_line_start_y
-        JMP     find_t_clip
-    .up_facing
-        LDA     draw_line_start_y
-
-    .find_t_clip
-        \\ A = t_y_max. Take min(t_x_max, A), then min with 30 (full beam length).
-        CMP     laser_clip_t_x_max
-        BCC     keep_t_y_max
-        LDA     laser_clip_t_x_max
-    .keep_t_y_max
-        CMP     #30
-        BCC     clip_within_full
-        LDA     #30
-    .clip_within_full
-        STA     laser_clip_t
-
-        \\ end_y = start_y ± t_clip
-        LDA     laser_beam_dy_table-OBJECT_laser_turret_up_right,Y
-        BMI     subtract_t_for_end_y
-        LDA     draw_line_start_y
-        CLC
-        ADC     laser_clip_t
-        JMP     store_end_y
-    .subtract_t_for_end_y
-        LDA     draw_line_start_y
         SEC
-        SBC     laser_clip_t
-    .store_end_y
-        STA     draw_line_end_y
+        SBC     draw_line_start_y                                     ; range_y = 255 - start_y
+        STA     laser_range_y
+        JMP     laser_test_clip
+    .laser_range_y_up
+        EOR     #$FF
+        CLC
+        ADC     #1
+        STA     laser_abs_dy
+        LDA     draw_line_start_y                                     ; range_y = start_y
+        STA     laser_range_y
 
-        \\ end_x = start_x ± (2 * t_clip)
-        LDA     laser_clip_t
-        ASL     A
-        STA     laser_clip_t                                          ; reuse: now holds 2*t_clip
-        LDA     laser_beam_dx_table-OBJECT_laser_turret_up_right,Y
-        BMI     subtract_2t_for_end_x
+    .laser_test_clip
+        \\ Clip path triggers when |dx| > range_x OR |dy| > range_y.
+        LDA     laser_abs_dx
+        CMP     laser_range_x
+        BEQ     laser_test_clip_y
+        BCS     laser_clip_path
+    .laser_test_clip_y
+        LDA     laser_abs_dy
+        CMP     laser_range_y
+        BEQ     laser_no_clip
+        BCC     laser_no_clip
+
+    .laser_clip_path
+        \\ Compute t_q = min(127, t_x, t_y). Each axis: if |d_axis| > range_axis
+        \\ then candidate = (range_axis << 7) / |d_axis| (always < 128).
+        LDA     #$7F
+        STA     laser_t_q
+
+        LDA     laser_abs_dx
+        CMP     laser_range_x
+        BEQ     laser_skip_x_div
+        BCC     laser_skip_x_div                                      ; |dx| <= range_x → no x-clip on this axis
+        STA     laser_divisor                                         ; A = |dx|
+        LDA     laser_range_x
+        JSR     laser_divide_q7
+        CMP     laser_t_q
+        BCS     laser_skip_x_div
+        STA     laser_t_q
+    .laser_skip_x_div
+
+        LDA     laser_abs_dy
+        CMP     laser_range_y
+        BEQ     laser_skip_y_div
+        BCC     laser_skip_y_div
+        STA     laser_divisor
+        LDA     laser_range_y
+        JSR     laser_divide_q7
+        CMP     laser_t_q
+        BCS     laser_skip_y_div
+        STA     laser_t_q
+    .laser_skip_y_div
+
+        \\ end_axis = start_axis + ((d_signed * t_q) >> 7). With t_q in [0, 127]
+        \\ the high bit stays clear so multiply_signed_8x8's sign handling
+        \\ leaves the result correctly signed; ASL/ROL gives the >>7.
+        LDA     laser_t_q
+        STA     multiply_operand_a
+        LDA     laser_dx_temp
+        JSR     multiply_signed_8x8
+        ASL     multiply_result_lo
+        ROL     multiply_result_hi
         LDA     draw_line_start_x
         CLC
-        ADC     laser_clip_t
-        JMP     store_end_x
-    .subtract_2t_for_end_x
-        LDA     draw_line_start_x
-        SEC
-        SBC     laser_clip_t
-    .store_end_x
+        ADC     multiply_result_hi
         STA     draw_line_end_x
 
+        LDA     laser_t_q
+        STA     multiply_operand_a
+        LDA     laser_dy_temp
+        JSR     multiply_signed_8x8
+        ASL     multiply_result_lo
+        ROL     multiply_result_hi
+        LDA     draw_line_start_y
+        CLC
+        ADC     multiply_result_hi
+        STA     draw_line_end_y
+        JMP     laser_do_draw
+
+    .laser_no_clip
+        \\ Both axes fit within the screen; just signed-add d to start.
+        LDA     draw_line_start_x
+        CLC
+        ADC     laser_dx_temp
+        STA     draw_line_end_x
+
+        LDA     draw_line_start_y
+        CLC
+        ADC     laser_dy_temp
+        STA     draw_line_end_y
+
+    .laser_do_draw
         LDA     hostile_bullet_pixel_byte
         STA     plot_line_pixels_byte
-        JMP     draw_line                                             ; tail call
-}
+        JSR     draw_line
+        CLC                                                           ; signal: beam was drawn
+        RTS
+
+    .laser_barrel_off_screen
+        SEC                                                           ; signal: barrel off-screen, no draw
+        RTS
+\\ }
+
+\ ******************************************************************************
+\ * Function: laser_divide_q7
+\ * Params: A = numerator (must be < laser_divisor); laser_divisor = divisor.
+\ * Returns: A = (numerator * 128) / divisor in [0, 127].
+\ * Corrupts: A, X, laser_quotient.
+\ * Description: Standard shift-and-subtract; 7 iterations develop 7 quotient
+\ *   bits since the dividend has 7 fractional zeros appended (the << 7).
+\ *   Caller must ensure numerator < divisor so the quotient fits in 7 bits.
+\ ******************************************************************************
+
+.laser_divide_q7
+\\ {
+        \\ A on entry = numerator (used as running remainder). Y is used to
+        \\ zero laser_quotient without disturbing A; X is the iteration count.
+        LDY     #$00
+        STY     laser_quotient
+        LDX     #$07
+    .laser_div_loop
+        ASL     A                                                     ; remainder *= 2 (no carry: remainder < divisor < 128)
+        CMP     laser_divisor
+        BCC     laser_div_no_sub
+        SBC     laser_divisor                                         ; remainder -= divisor; carry stays 1 → ROL shifts in 1
+    .laser_div_no_sub
+        ROL     laser_quotient                                        ; quotient bit (carry: 1 if subtracted, 0 otherwise)
+        DEX
+        BNE     laser_div_loop
+        LDA     laser_quotient
+        RTS
+\\ }
 ENDIF
 
 IF PARTICLE_table_max<>$1F
