@@ -131,10 +131,13 @@ COL_GUN_SPREAD = (255, 180, 80, 90)
 # instead of base angle / spread). Beam direction is fixed per orientation,
 # mirroring laser_beam_dx/dy_table in thrust.6502.
 OBJECT_LASER_TYPES = frozenset({0x09, 0x0A, 0x0B, 0x0C})
+# Per-orientation defaults for laser dx/dy (signed BBC pixels / rows). New
+# lasers and old exports without dx/dy arrays fall back to these.
 LASER_BEAM_DX_PIXELS = {0x09: +60, 0x0A: +60, 0x0B: -60, 0x0C: -60}
 LASER_BEAM_DY_ROWS   = {0x09: -30, 0x0A: +30, 0x0B: -30, 0x0C: +30}
 LASER_BARREL_X_CHARS = {0x09:   4, 0x0A:   4, 0x0B:   1, 0x0C:   1}
 LASER_BARREL_Y_ROWS  = {0x09:   0, 0x0A:   8, 0x0B:   0, 0x0C:   8}
+LASER_ENDPOINT_HANDLE_RADIUS = 6  # screen-px radius of draggable endpoint dot
 COL_LASER_BEAM       = (255, 110, 50)
 
 # ---------------------------------------------------------------------------
@@ -288,6 +291,8 @@ def import_beebasm(path):
         obj_y_ext = labels.get(f"level_{n}_obj_pos_Y_EXT", [])
         obj_type = labels.get(f"level_{n}_obj_type", [])
         gun_aim = labels.get(f"level_{n}_gun_aim", [])
+        laser_dx = labels.get(f"level_{n}_laser_dx_pixels", [])
+        laser_dy = labels.get(f"level_{n}_laser_dy_rows", [])
 
         # Remove $FF terminator from type list
         types = [t for t in obj_type if t != 0xFF]
@@ -297,11 +302,23 @@ def import_beebasm(path):
             y_world = ((obj_y_ext[i] if i < len(obj_y_ext) else 0) << 8) | \
                       (obj_y[i] if i < len(obj_y) else 0)
             gp = gun_aim[i] if i < len(gun_aim) else 0x00
+            t = types[i]
+            # Per-orientation default for lasers (matches what the asm shipped
+            # with before per-instance dx/dy was added). Non-laser slots get 0.
+            default_dx = LASER_BEAM_DX_PIXELS.get(t, 0)
+            default_dy = LASER_BEAM_DY_ROWS.get(t, 0)
+            dx_byte = laser_dx[i] if i < len(laser_dx) else (default_dx & 0xFF)
+            dy_byte = laser_dy[i] if i < len(laser_dy) else (default_dy & 0xFF)
+            # Convert from unsigned byte to signed int (-128..127).
+            dx_s = dx_byte - 256 if dx_byte >= 128 else dx_byte
+            dy_s = dy_byte - 256 if dy_byte >= 128 else dy_byte
             objects.append({
                 "x": obj_x[i] if i < len(obj_x) else 0,
                 "y": y_world,
-                "type": types[i],
+                "type": t,
                 "gun_aim": gp,
+                "laser_dx": dx_s,
+                "laser_dy": dy_s,
             })
 
         # Colours (may not be present in older exports)
@@ -669,8 +686,11 @@ class LevelData:
         for i in range(len(od["type"])):
             y_world = (od["Y_EXT"][i] << 8) | od["Y"][i]
             gp = gun_aims[i] if i < len(gun_aims) else 0x00
+            t = od["type"][i]
             objects.append({"x": od["X"][i], "y": y_world,
-                            "type": od["type"][i], "gun_aim": gp})
+                            "type": t, "gun_aim": gp,
+                            "laser_dx": LASER_BEAM_DX_PIXELS.get(t, 0),
+                            "laser_dy": LASER_BEAM_DY_ROWS.get(t, 0)})
         return cls(level_num, list(left), list(right), objects, terrain_rle)
 
     @property
@@ -963,6 +983,7 @@ class Editor:
         self.drag_start_y = None
         self.selected_object = None   # index into objects list
         self.dragging_object = None    # None or (grab_dx, grab_dy) world-coord offset
+        self.dragging_laser_endpoint = False  # True while dragging the selected laser's beam tip
         self.hovered_wall = None      # ("left"|"right", row)
         self.hovered_object = None    # index
         self.wall_tool = "draw"       # "draw" (freehand) or "line"
@@ -1145,6 +1166,9 @@ class Editor:
                            pygame.K_COMMA, pygame.K_PERIOD):
             self._adjust_selected_gun_aim(event.key)
 
+        elif event.key == pygame.K_BACKSLASH:
+            self._reset_selected_laser_endpoint()
+
         elif event.key == pygame.K_F5:
             self._reload_live_sprites()
 
@@ -1227,6 +1251,22 @@ class Editor:
         if new_aim != aim:
             self.undo.save(self.level)
             obj["gun_aim"] = new_aim
+            self.level.dirty = True
+
+    def _reset_selected_laser_endpoint(self):
+        """Restore the selected laser's dx/dy to its orientation default."""
+        if self.selected_object is None:
+            return
+        obj = self.level.objects[self.selected_object]
+        t = obj["type"]
+        if t not in OBJECT_LASER_TYPES:
+            return
+        new_dx = LASER_BEAM_DX_PIXELS[t]
+        new_dy = LASER_BEAM_DY_ROWS[t]
+        if obj.get("laser_dx") != new_dx or obj.get("laser_dy") != new_dy:
+            self.undo.save(self.level)
+            obj["laser_dx"] = new_dx
+            obj["laser_dy"] = new_dy
             self.level.dirty = True
 
     def _handle_mouse_down(self, event):
@@ -1325,6 +1365,14 @@ class Editor:
                     self.pan_start = (mx, my)
 
             elif self.mode == "object":
+                # Endpoint handle on selected laser takes priority over the
+                # object hit-test so the handle stays grabbable even when it
+                # overlaps another sprite.
+                if self._hit_test_laser_endpoint(mx, my):
+                    self.undo.save(self.level)
+                    self.dragging_laser_endpoint = True
+                    self._set_laser_endpoint_from_screen(mx, my)
+                    return
                 hit = self._hit_test_object(mx, my)
                 if hit is not None:
                     self.selected_object = hit
@@ -1357,6 +1405,9 @@ class Editor:
             if self.dragging_object:
                 self.level.dirty = True
                 self.dragging_object = None
+            if self.dragging_laser_endpoint:
+                self.level.dirty = True
+                self.dragging_laser_endpoint = False
             if self.dragging_checkpoint:
                 self.level.dirty = True
                 self.dragging_checkpoint = None
@@ -1427,6 +1478,10 @@ class Editor:
             else:  # "window"
                 cp["window_x"] = max(0, min(255, int(wx - grab_dx)))
                 cp["window_y"] = max(0, min(0xFFFF, int(wy - grab_dy - 73)))
+            return
+
+        if self.dragging_laser_endpoint and self.selected_object is not None:
+            self._set_laser_endpoint_from_screen(mx, my)
             return
 
         if self.dragging_object and self.selected_object is not None:
@@ -1618,6 +1673,57 @@ class Editor:
                 return i
         return None
 
+    def _hit_test_laser_endpoint(self, mx, my):
+        """If the selected object is a laser and (mx, my) is within the
+        endpoint drag handle, return True. Else False."""
+        if self.selected_object is None:
+            return False
+        obj = self.level.objects[self.selected_object]
+        if obj["type"] not in OBJECT_LASER_TYPES:
+            return False
+        sprite = self.sprite_cache.get(obj["type"], self.level)
+        if sprite is None:
+            return False
+        # Recompute beam screen coords using the same draw_w/draw_h as the
+        # renderer (sprite dimensions in screen px).
+        sx, sy = self.camera.world_to_screen(obj["x"], obj["y"] - 1)
+        ex, ey = self.camera.world_to_screen(
+            obj["x"] + sprite.get_width() / 4,
+            obj["y"] - 1 + sprite.get_height() / 2)
+        draw_w = ex - sx
+        draw_h = ey - sy
+        _, _, end_sx, end_sy = self._laser_beam_screen_coords(obj, sx, sy, draw_w, draw_h)
+        # Generous click radius so the handle's easy to grab.
+        r = LASER_ENDPOINT_HANDLE_RADIUS + 2
+        return (mx - end_sx) ** 2 + (my - end_sy) ** 2 <= r * r
+
+    def _set_laser_endpoint_from_screen(self, mx, my):
+        """Convert (mx, my) into per-instance laser_dx / laser_dy for the
+        selected laser. Inverse of _laser_beam_screen_coords."""
+        obj = self.level.objects[self.selected_object]
+        sprite = self.sprite_cache.get(obj["type"], self.level)
+        if sprite is None:
+            return
+        sx, sy = self.camera.world_to_screen(obj["x"], obj["y"] - 1)
+        ex, ey = self.camera.world_to_screen(
+            obj["x"] + sprite.get_width() / 4,
+            obj["y"] - 1 + sprite.get_height() / 2)
+        draw_w = ex - sx
+        draw_h = ey - sy
+        char_w_px = draw_w / 5.0
+        row_h_px  = draw_h / 8.0
+        barrel_sx = sx + LASER_BARREL_X_CHARS[obj["type"]] * char_w_px
+        barrel_sy = sy + LASER_BARREL_Y_ROWS[obj["type"]]  * row_h_px
+        scale = row_h_px / 2.0
+        if scale <= 0:
+            return
+        dx = round((mx - barrel_sx) / scale)
+        dy = round((my - barrel_sy) / scale)
+        # Clamp to signed 8-bit range so the asm export round-trips cleanly.
+        obj["laser_dx"] = max(-128, min(127, dx))
+        obj["laser_dy"] = max(-128, min(127, dy))
+        self.level.dirty = True
+
     def _handle_toolbar_click(self, mx, my):
         """Handle clicks in the toolbar area."""
         # Level tabs: 6 tabs of 60px each starting at x=10
@@ -1720,7 +1826,10 @@ class Editor:
             obj_type = types[idx]
             self.undo.save(self.level)
             wx, wy = self.obj_menu_world
-            self.level.objects.append({"x": wx, "y": wy, "type": obj_type, "gun_aim": 0x00})
+            self.level.objects.append({"x": wx, "y": wy, "type": obj_type,
+                                        "gun_aim": 0x00,
+                                        "laser_dx": LASER_BEAM_DX_PIXELS.get(obj_type, 0),
+                                        "laser_dy": LASER_BEAM_DY_ROWS.get(obj_type, 0)})
             self.level.dirty = True
             self.selected_object = len(self.level.objects) - 1
         self.show_obj_menu = False
@@ -2171,19 +2280,45 @@ class Editor:
         further factor of 2 keeps the beam's on-screen length proportional
         to the sprite the same way it is in-game (beam ≈ 3× sprite width).
         """
+        barrel_sx, barrel_sy, end_sx, end_sy = \
+            self._laser_beam_screen_coords(obj, sx, sy, draw_w, draw_h)
+        pygame.draw.line(self.screen, COL_LASER_BEAM,
+                         (int(barrel_sx), int(barrel_sy)),
+                         (int(end_sx), int(end_sy)), 2)
+        # Endpoint drag handle: filled circle at the beam tip when this laser
+        # is the selected object. Hit-tested in _hit_test_laser_endpoint.
+        if (self.selected_object is not None
+                and self.level.objects[self.selected_object] is obj):
+            pygame.draw.circle(self.screen, COL_LASER_BEAM,
+                               (int(end_sx), int(end_sy)),
+                               LASER_ENDPOINT_HANDLE_RADIUS)
+
+    def _laser_beam_screen_coords(self, obj, sx, sy, draw_w, draw_h):
+        """Return (barrel_sx, barrel_sy, end_sx, end_sy) screen positions for
+        the laser beam from this turret. Shared by _render_laser_beam (drawing)
+        and _hit_test_laser_endpoint (drag handle hit test).
+
+        Note on aspect: the editor compresses horizontals (ASPECT = 2) so 1
+        char draws as 2 row-heights, but on the BBC display 1 char displays
+        as ~4 row-heights (4:3 CRT, 320×256, 4 BBC pixels per char). Scaling
+        beam X by row_h_px keeps the in-game angle (60 BBC px × 30 rows ≈
+        2:1 → ~27°), but the editor's halved char width means dropping a
+        further factor of 2 keeps the beam's on-screen length proportional
+        to the sprite the same way it is in-game (beam ≈ 3× sprite width).
+        """
         obj_type = obj["type"]
         # Sprite cells are 5 chars wide × 8 rows tall for laser turrets.
         char_w_px = draw_w / 5.0
         row_h_px  = draw_h / 8.0
         barrel_sx = sx + LASER_BARREL_X_CHARS[obj_type] * char_w_px
         barrel_sy = sy + LASER_BARREL_Y_ROWS[obj_type]  * row_h_px
-        # Both axes scaled by row_h_px / 2 → preserves angle, halves length to
-        # match the editor's compressed view of the rest of the scene.
-        end_sx = barrel_sx + LASER_BEAM_DX_PIXELS[obj_type] * row_h_px / 2.0
-        end_sy = barrel_sy + LASER_BEAM_DY_ROWS[obj_type]   * row_h_px / 2.0
-        pygame.draw.line(self.screen, COL_LASER_BEAM,
-                         (int(barrel_sx), int(barrel_sy)),
-                         (int(end_sx), int(end_sy)), 2)
+        # Per-instance dx/dy (signed BBC pixels / rows). Both axes scaled by
+        # row_h_px / 2 → preserves angle, halves length to match the editor's
+        # compressed view of the rest of the scene.
+        scale = row_h_px / 2.0
+        end_sx = barrel_sx + obj["laser_dx"] * scale
+        end_sy = barrel_sy + obj["laser_dy"] * scale
+        return barrel_sx, barrel_sy, end_sx, end_sy
 
     def _render_checkpoints(self):
         """Draw checkpoint markers as horizontal lines with spawn position dots."""
@@ -2524,8 +2659,11 @@ class Editor:
                 duty_idx = (aim & 0xF0) >> 4
                 duty_frames = duty_idx * 4 + 4
                 phase_frames = phase_idx * 8
+                dx = obj.get("laser_dx", 0)
+                dy = obj.get("laser_dy", 0)
                 parts.append(
-                    f"aim=${aim:02X} duty={duty_frames}f phase={phase_frames}f  ([/] phase  ,/. duty)")
+                    f"dx={dx:+d} dy={dy:+d} duty={duty_frames}f phase={phase_frames}f  "
+                    f"(drag tip; \\ resets; [/] phase  ,/. duty)")
             elif obj["type"] in OBJECT_FIRING_TYPES:
                 aim = obj.get("gun_aim", 0x00)
                 base = aim & 0x1C
