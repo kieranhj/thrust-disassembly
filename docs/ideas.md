@@ -16,7 +16,8 @@ Implemented behind the `_THRUST_PARTICLES` build flag (SWRAM builds). Spawns deb
 
 ### Current enemies
 
-Only gun emplacements exist, in 4 directional variants (types $00-$03). They fire probabilistically using the shared particle pool with type `PARTICLE_type_hostile_bullet` ($03). Gun firing angle is determined by `gun_base_angle` (3 bits from `gun_aim`) plus random spread masked by `gun_angle_spread_mask` (2 bits from `gun_aim`).
+- **Gun emplacements** (types `$00..$03`, all builds). Fire probabilistically using the shared particle pool with type `PARTICLE_type_hostile_bullet` ($03). Firing angle is `gun_base_angle` (3 bits from `gun_aim`) plus random spread masked by `gun_angle_spread_mask` (2 bits from `gun_aim`).
+- **Timed laser turrets** (types `$09..$0C`, SWRAM build, behind `_TIMED_LASER`). Four orientations like the gun emplacements; the four heavy-turret-era sprites are reused. Each turret emits a fixed-direction beam (60 BBC px × 30 rows, ratio 2:1) on a periodic timer driven from `level_tick_counter`. The `gun_aim` byte is repurposed: low nibble = phase index (× 8 frames), high nibble = duty index (× 4 + 4 frames). Period stays hardcoded at 128 frames. The beam is drawn via the existing Bresenham `draw_line` in the hostile-bullet pixel byte; ship-vs-pixel collision destroys the player when the beam is on. See `update_all_laser_beams` and `draw_laser_beam_at_obj_screen` in `thrust.6502`.
 
 ### New enemy bullet types
 
@@ -58,11 +59,19 @@ Objects that modify gravity within a local radius:
 
 **Implementation notes:** the existing gravity constant is applied per frame in the physics update. A check against object position/radius could substitute a modified gravity value before integration. Multiple overlapping fields would need a priority rule. Bullet-affecting fields slot naturally into `particles_update_and_draw` (line 5799) — per-particle force application already exists for gravity.
 
-### Timed laser turrets
+### ~~Timed laser turrets~~ — IMPLEMENTED (`_TIMED_LASER`, SWRAM build)
 
-Fires a straight beam at a fixed spot on a periodic timer — the beam is always in the same place, the player just has to time passage through it. Telegraph the next shot with a warning flash a few frames before firing.
+Implemented as types `$09..$0C` (four orientations), replacing the old heavy-turret slot. The beam is XOR-drawn via the existing Bresenham `draw_line`, so erase + redraw uses the same pixels — no per-laser collision check, the existing ship-vs-pixel hit detection picks the beam up automatically. Per-laser state: bit 2 of `level_obj_flags` (`OBJ_flag_laser_beam_drawn`) plus a cached `obj_laser_prev_screen_x/y` so scroll, destruction, and the timer-off transition all retire the previous draw cleanly.
 
-**Implementation notes:** beam is a line between two authored points, EOR-drawn during its active frames. Collision is a point-to-line-segment distance check against the ship position. No particles needed — the beam is a static shape.
+**Per-instance config (via `gun_aim` byte):** low nibble → phase index (× 8 frames), high nibble → duty index (× 4 + 4 frames). Period fixed at 128 frames. Range is enough for "fast strobe" through "slow on/off"; the editor exposes `[`/`]` for phase and `,`/`.` for duty.
+
+**Beam direction and length:** hardcoded per orientation (60 BBC px × 30 rows, slope 2:1) — this is the next thing to make per-instance (see "Per-laser endpoint configuration" below).
+
+**Deferred / known caveats:**
+- No telegraph / warning before the on-phase. Rely on the cycle being long enough that the player can read the rhythm.
+- Endpoint clipping is proportional (preserves slope) but not range-perfect when the beam exits at a corner — only one axis hits its edge first.
+- The Bresenham line plotter is generic; a straight-line plotter for axis-aligned beams would be faster, but profiling hasn't been done yet.
+- Shield interaction: hasn't been investigated. Currently the beam destroys the player even with shield held — same path as terrain pixels do.
 
 ### Landing bubbles
 
