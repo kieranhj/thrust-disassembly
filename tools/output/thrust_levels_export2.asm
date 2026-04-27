@@ -78,12 +78,12 @@
 .level_0_gun_aim
         EQUB    $00,$00,$00,$F0,$FF
 .level_0_laser_dx_pixels
-        EQUB    $00,$00,$00,$3C,$3C
+        EQUB    $00,$00,$00,$79,$3B
 .level_0_laser_dy_rows
-        EQUB    $00,$00,$00,$E2,$E2
+        EQUB    $00,$00,$00,$F4,$E1
 
 .level_1_obj_pos_X
-        EQUB    $81,$64,$8B,$73,$75,$9D,$99
+        EQUB    $81,$64,$8B,$73,$75,$9C,$99
 .level_1_obj_pos_Y
         EQUB    $38,$B1,$3B,$34,$13,$09,$31
 .level_1_obj_pos_Y_EXT
@@ -91,11 +91,11 @@
 .level_1_obj_type
         EQUB    $05,$06,$04,$09,$0A,$0C,$0B,$FF
 .level_1_gun_aim
-        EQUB    $00,$00,$00,$54,$86,$0F,$3A
+        EQUB    $00,$00,$00,$8C,$80,$84,$88
 .level_1_laser_dx_pixels
-        EQUB    $00,$00,$00,$3C,$3C,$C4,$C4
+        EQUB    $00,$00,$00,$39,$75,$A0,$AB
 .level_1_laser_dy_rows
-        EQUB    $00,$00,$00,$E2,$1E,$1E,$E2
+        EQUB    $00,$00,$00,$A5,$45,$EE,$AB
 
 .level_2_obj_pos_X
         EQUB    $4E,$A4,$78,$97,$9D,$A3,$7D,$67,$81,$AC,$58,$5D,$3E

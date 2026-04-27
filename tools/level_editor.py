@@ -137,7 +137,8 @@ LASER_BEAM_DX_PIXELS = {0x09: +60, 0x0A: +60, 0x0B: -60, 0x0C: -60}
 LASER_BEAM_DY_ROWS   = {0x09: -30, 0x0A: +30, 0x0B: -30, 0x0C: +30}
 LASER_BARREL_X_CHARS = {0x09:   4, 0x0A:   4, 0x0B:   1, 0x0C:   1}
 LASER_BARREL_Y_ROWS  = {0x09:   0, 0x0A:   8, 0x0B:   0, 0x0C:   8}
-LASER_ENDPOINT_HANDLE_RADIUS = 6  # screen-px radius of draggable endpoint dot
+LASER_ENDPOINT_HANDLE_RADIUS = 8   # screen-px radius of draggable endpoint dot
+LASER_ENDPOINT_HIT_PADDING   = 6   # extra screen-px tolerance around the dot for click hit-test
 COL_LASER_BEAM       = (255, 110, 50)
 
 # ---------------------------------------------------------------------------
@@ -990,6 +991,7 @@ class Editor:
         self.selected_object = None   # index into objects list
         self.dragging_object = None    # None or (grab_dx, grab_dy) world-coord offset
         self.dragging_laser_endpoint = False  # True while dragging the selected laser's beam tip
+        self.hovered_laser_endpoint = False   # True when mouse is over the endpoint handle
         self.hovered_wall = None      # ("left"|"right", row)
         self.hovered_object = None    # index
         self.wall_tool = "draw"       # "draw" (freehand) or "line"
@@ -1506,6 +1508,9 @@ class Editor:
                 self.hovered_wall = self._hit_test_wall(mx, my)
             elif self.mode == "object":
                 self.hovered_object = self._hit_test_object(mx, my)
+                self.hovered_laser_endpoint = self._hit_test_laser_endpoint(mx, my)
+        else:
+            self.hovered_laser_endpoint = False
 
     def _hit_test_wall(self, mx, my):
         """Test if screen position is near a wall edge. Returns (side, row) or None."""
@@ -1700,7 +1705,7 @@ class Editor:
         draw_h = ey - sy
         _, _, end_sx, end_sy = self._laser_beam_screen_coords(obj, sx, sy, draw_w, draw_h)
         # Generous click radius so the handle's easy to grab.
-        r = LASER_ENDPOINT_HANDLE_RADIUS + 2
+        r = LASER_ENDPOINT_HANDLE_RADIUS + LASER_ENDPOINT_HIT_PADDING
         return (mx - end_sx) ** 2 + (my - end_sy) ** 2 <= r * r
 
     def _set_laser_endpoint_from_screen(self, mx, my):
@@ -1720,7 +1725,8 @@ class Editor:
         row_h_px  = draw_h / 8.0
         barrel_sx = sx + LASER_BARREL_X_CHARS[obj["type"]] * char_w_px
         barrel_sy = sy + LASER_BARREL_Y_ROWS[obj["type"]]  * row_h_px
-        scale = row_h_px / 2.0
+        # Must match _laser_beam_screen_coords scale.
+        scale = char_w_px / 4.0
         if scale <= 0:
             return
         dx = round((mx - barrel_sx) / scale)
@@ -2295,22 +2301,30 @@ class Editor:
         # is the selected object. Hit-tested in _hit_test_laser_endpoint.
         if (self.selected_object is not None
                 and self.level.objects[self.selected_object] is obj):
-            pygame.draw.circle(self.screen, COL_LASER_BEAM,
-                               (int(end_sx), int(end_sy)),
+            cx, cy = int(end_sx), int(end_sy)
+            highlight = (self.dragging_laser_endpoint
+                         or self.hovered_laser_endpoint)
+            pygame.draw.circle(self.screen, COL_LASER_BEAM, (cx, cy),
                                LASER_ENDPOINT_HANDLE_RADIUS)
+            ring_col = (255, 255, 255) if highlight else (180, 180, 180)
+            pygame.draw.circle(self.screen, ring_col, (cx, cy),
+                               LASER_ENDPOINT_HANDLE_RADIUS + 1, 1)
 
     def _laser_beam_screen_coords(self, obj, sx, sy, draw_w, draw_h):
         """Return (barrel_sx, barrel_sy, end_sx, end_sy) screen positions for
         the laser beam from this turret. Shared by _render_laser_beam (drawing)
         and _hit_test_laser_endpoint (drag handle hit test).
 
-        Note on aspect: the editor compresses horizontals (ASPECT = 2) so 1
-        char draws as 2 row-heights, but on the BBC display 1 char displays
-        as ~4 row-heights (4:3 CRT, 320×256, 4 BBC pixels per char). Scaling
-        beam X by row_h_px keeps the in-game angle (60 BBC px × 30 rows ≈
-        2:1 → ~27°), but the editor's halved char width means dropping a
-        further factor of 2 keeps the beam's on-screen length proportional
-        to the sprite the same way it is in-game (beam ≈ 3× sprite width).
+        Scaling: the game's draw_line uses 1 X-unit per BBC pixel (chars in
+        this game's encoding are 4 BBC pixels wide; the asm's ASL ASL turns
+        chars*4 into X-units = BBC pixels). 1 row is also 1 BBC pixel
+        vertically. The angle therefore matches between editor and game when
+        scale_x == scale_y. Using char_w_px / 4 on both axes maps each BBC
+        pixel of beam travel to the same proportion of sprite-width that the
+        game's beam covers (e.g. dx=60 X-units = 60 BBC px = 3 sprite-widths
+        in both editor and game). Sprite vertical proportion differs from
+        game (the source PNG is taller per row than the in-game 1-px row)
+        but the *beam's* angle matches what you'd see in BeebEm.
         """
         obj_type = obj["type"]
         # Sprite cells are 5 chars wide × 8 rows tall for laser turrets.
@@ -2318,10 +2332,7 @@ class Editor:
         row_h_px  = draw_h / 8.0
         barrel_sx = sx + LASER_BARREL_X_CHARS[obj_type] * char_w_px
         barrel_sy = sy + LASER_BARREL_Y_ROWS[obj_type]  * row_h_px
-        # Per-instance dx/dy (signed BBC pixels / rows). Both axes scaled by
-        # row_h_px / 2 → preserves angle, halves length to match the editor's
-        # compressed view of the rest of the scene.
-        scale = row_h_px / 2.0
+        scale = char_w_px / 4.0
         end_sx = barrel_sx + obj["laser_dx"] * scale
         end_sy = barrel_sy + obj["laser_dy"] * scale
         return barrel_sx, barrel_sy, end_sx, end_sy
