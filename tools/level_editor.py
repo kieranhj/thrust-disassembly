@@ -791,13 +791,28 @@ class SpriteCache:
         and use them as the rendering source. Raises on I/O / parse failure;
         callers can ignore the exception for silent best-effort loads.
         Returns the list of object type IDs that were replaced.
+
+        sprite_codec.decode_streams strips the first stream-A byte's advance
+        bit when normalising to a row-0 grid. The asm renderer does NOT skip
+        that advance — it lifts the plot pointer one row before the first
+        pixel — so sprites with first_byte_has_advance=True (pod_stand,
+        guns, laser turrets) appear one row lower in-game than in the
+        editor unless we re-add the blank top row here. visualise_levels'
+        static decoder already includes this row for the SPRITE_DATA
+        fallback; mirror it for the live path so live and static agree.
         """
         import sprite_codec
         sprites = sprite_codec.load_sprites_from_file(str(path))
         new_pixels = {}
         for type_id, name in enumerate(sprite_codec.OBJECT_NAMES):
-            if name in sprites:
-                new_pixels[type_id] = np.array(sprites[name].pixels, dtype=int)
+            if name not in sprites:
+                continue
+            spr = sprites[name]
+            pixels = spr.pixels
+            if spr.first_byte_has_advance and pixels:
+                blank = [0] * len(pixels[0])
+                pixels = [blank] + pixels
+            new_pixels[type_id] = np.array(pixels, dtype=int)
         self._live_pixels = new_pixels
         self.live_path = str(path)
         self._cache.clear()      # force re-render at next get()
@@ -947,7 +962,7 @@ class Editor:
         self.dragging_wall = None     # ("left"|"right", start_row, saved_snapshot)
         self.drag_start_y = None
         self.selected_object = None   # index into objects list
-        self.dragging_object = False
+        self.dragging_object = None    # None or (grab_dx, grab_dy) world-coord offset
         self.hovered_wall = None      # ("left"|"right", row)
         self.hovered_object = None    # index
         self.wall_tool = "draw"       # "draw" (freehand) or "line"
@@ -1313,7 +1328,11 @@ class Editor:
                 hit = self._hit_test_object(mx, my)
                 if hit is not None:
                     self.selected_object = hit
-                    self.dragging_object = True
+                    obj = self.level.objects[hit]
+                    wx, wy = self.camera.screen_to_world(mx, my)
+                    grab_dx = wx - obj["x"]
+                    grab_dy = wy - obj["y"]
+                    self.dragging_object = (grab_dx, grab_dy)
                     self.undo.save(self.level)
                 else:
                     self.selected_object = None
@@ -1337,7 +1356,7 @@ class Editor:
                 self.dragging_no_wrap = False
             if self.dragging_object:
                 self.level.dirty = True
-                self.dragging_object = False
+                self.dragging_object = None
             if self.dragging_checkpoint:
                 self.level.dirty = True
                 self.dragging_checkpoint = None
@@ -1411,10 +1430,11 @@ class Editor:
             return
 
         if self.dragging_object and self.selected_object is not None:
+            grab_dx, grab_dy = self.dragging_object
             wx, wy = self.camera.screen_to_world(mx, my)
             obj = self.level.objects[self.selected_object]
-            obj["x"] = max(0, min(255, int(wx)))
-            obj["y"] = max(0, int(wy))
+            obj["x"] = max(0, min(255, int(wx - grab_dx)))
+            obj["y"] = max(0, int(wy - grab_dy))
             return
 
         # Hover detection
@@ -1892,6 +1912,11 @@ class Editor:
             _, sy = cam.world_to_screen(0, row)
             _, sy_next = cam.world_to_screen(0, row + 1)
             row_h = max(1, int(sy_next - sy))
+            # Mimic BBC half-resolution rendering: each world row maps to
+            # 2 BBC scanlines but only the first is drawn — the second
+            # stays as background. Reflect that in the editor by filling
+            # the top half of the row's editor-pixel band only.
+            half_h = max(1, row_h // 2)
 
             if sy + row_h < VIEWPORT_Y or sy > VIEWPORT_Y + cam.viewport_h:
                 continue
@@ -1912,7 +1937,7 @@ class Editor:
             if x2 > x1 and x2 > 0 and x1 < sw:
                 x1 = max(0, x1)
                 pygame.draw.rect(screen, rock_rgb,
-                                 (x1, int(sy), x2 - x1, row_h))
+                                 (x1, int(sy), x2 - x1, half_h))
 
             # Right rock: right_x to world 256
             rsx, _ = cam.world_to_screen(right_x, row)
@@ -1921,13 +1946,13 @@ class Editor:
             if x2 > x1 and x2 > 0 and x1 < sw:
                 x1 = max(0, x1)
                 pygame.draw.rect(screen, rock_rgb,
-                                 (x1, int(sy), x2 - x1, row_h))
+                                 (x1, int(sy), x2 - x1, half_h))
 
             # Wall edge highlights (thin lines)
             pygame.draw.rect(screen, landscape_rgb,
-                             (int(lex) - 1, int(sy), 2, row_h))
+                             (int(lex) - 1, int(sy), 2, half_h))
             pygame.draw.rect(screen, landscape_rgb,
-                             (int(rsx) - 1, int(sy), 2, row_h))
+                             (int(rsx) - 1, int(sy), 2, half_h))
 
         # Fill solid rock above and below the cave
         # Find first and last cave rows
@@ -1947,12 +1972,18 @@ class Editor:
             rock_sx = max(0, int(wx0))
             rock_w = int(wx256) - rock_sx
 
-            # Rock below cave
-            _, below_sy = cam.world_to_screen(0, last_cave + 1)
-            _, bottom = cam.world_to_screen(0, lv.num_rows)
-            if below_sy < VIEWPORT_Y + cam.viewport_h:
+            # Rock below cave — per-row loop so half-res striping is
+            # consistent with the cave walls.
+            below_start = max(y_min, last_cave + 1)
+            below_end = min(y_max, lv.num_rows)
+            for row in range(below_start, below_end):
+                _, sy = cam.world_to_screen(0, row)
+                _, sy_next = cam.world_to_screen(0, row + 1)
+                row_h = max(1, int(sy_next - sy))
+                if sy + row_h < VIEWPORT_Y or sy > VIEWPORT_Y + cam.viewport_h:
+                    continue
                 pygame.draw.rect(screen, rock_rgb,
-                                 (rock_sx, int(below_sy), rock_w, int(bottom - below_sy) + 1))
+                                 (rock_sx, int(sy), rock_w, max(1, row_h // 2)))
 
             # Sky rows within the cave region that are "all rock"
             for row in range(max(y_min, first_cave), min(y_max, last_cave + 1)):
@@ -1963,7 +1994,7 @@ class Editor:
                     _, sy_next = cam.world_to_screen(0, row + 1)
                     row_h = max(1, int(sy_next - sy))
                     pygame.draw.rect(screen, rock_rgb,
-                                     (rock_sx, int(sy), rock_w, row_h))
+                                     (rock_sx, int(sy), rock_w, max(1, row_h // 2)))
 
         # In wall mode, draw wall edge markers for converged rows (gap <= 1)
         # on top of the rock fill so they're visible and editable
