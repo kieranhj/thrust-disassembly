@@ -10220,6 +10220,10 @@ IF _TIMED_LASER
 .laser_t_q              EQUB $00            ; clipped t in Q7 (0..127), 127 ~= full beam
 .laser_divisor          EQUB $00            ; divide_q7 input
 .laser_quotient         EQUB $00            ; divide_q7 accumulator
+.laser_save_start_x     EQUB $00            ; saved start_x (zp draw_line_start_x at $88 aliases multiply_operand_a)
+.laser_save_start_y     EQUB $00            ; saved start_y (zp draw_line_start_y at $89 aliases multiply_result_lo)
+.laser_save_end_x       EQUB $00            ; saved end_x (zp draw_line_end_x at $8A aliases multiply_result_hi)
+.laser_save_end_y       EQUB $00            ; saved end_y (zp draw_line_end_y at $8B aliases multiply_operand_b)
 
 \ Per-level lookup tables for the laser dx/dy arrays. Lives in SWRAM (native
 \ RAM is too tight in the SWRAM build to hold these alongside the existing
@@ -10490,8 +10494,11 @@ IF _TIMED_LASER
     .laser_test_clip_y
         LDA     laser_abs_dy
         CMP     laser_range_y
-        BEQ     laser_no_clip
-        BCC     laser_no_clip
+        BEQ     laser_no_clip_far
+        BCC     laser_no_clip_far
+        JMP     laser_clip_path
+    .laser_no_clip_far
+        JMP     laser_no_clip
 
     .laser_clip_path
         \\ Compute t_q = min(127, t_x, t_y). Each axis: if |d_axis| > range_axis
@@ -10523,6 +10530,15 @@ IF _TIMED_LASER
         STA     laser_t_q
     .laser_skip_y_div
 
+        \\ Save start coords because the upcoming multiplies will clobber zp $88-$8B
+        \\ (draw_line_start_x/y/end_x/y alias multiply_operand_a/result_lo/result_hi/
+        \\ operand_b respectively). We compute end coords into scratch too because
+        \\ the second multiply would overwrite the first's stored end value.
+        LDA     draw_line_start_x
+        STA     laser_save_start_x
+        LDA     draw_line_start_y
+        STA     laser_save_start_y
+
         \\ end_axis = start_axis + ((d_signed * t_q) >> 7). With t_q in [0, 127]
         \\ the high bit stays clear so multiply_signed_8x8's sign handling
         \\ leaves the result correctly signed; ASL/ROL gives the >>7.
@@ -10532,10 +10548,10 @@ IF _TIMED_LASER
         JSR     multiply_signed_8x8
         ASL     multiply_result_lo
         ROL     multiply_result_hi
-        LDA     draw_line_start_x
+        LDA     laser_save_start_x
         CLC
         ADC     multiply_result_hi
-        STA     draw_line_end_x
+        STA     laser_save_end_x
 
         LDA     laser_t_q
         STA     multiply_operand_a
@@ -10543,9 +10559,19 @@ IF _TIMED_LASER
         JSR     multiply_signed_8x8
         ASL     multiply_result_lo
         ROL     multiply_result_hi
-        LDA     draw_line_start_y
+        LDA     laser_save_start_y
         CLC
         ADC     multiply_result_hi
+        STA     laser_save_end_y
+
+        \\ Copy all four coords from scratch to zp draw_line slots.
+        LDA     laser_save_start_x
+        STA     draw_line_start_x
+        LDA     laser_save_start_y
+        STA     draw_line_start_y
+        LDA     laser_save_end_x
+        STA     draw_line_end_x
+        LDA     laser_save_end_y
         STA     draw_line_end_y
         JMP     laser_do_draw
 
