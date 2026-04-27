@@ -6906,6 +6906,16 @@ IF _TIMED_LASER
         STA     laser_load_gun_aim_addr_LO                ; **MODIFIES CODE** (mirror for update_one_laser_beam)
         LDA     level_gun_aim_lookup_HI,X
         STA     laser_load_gun_aim_addr_HI                ; **MODIFIES CODE**
+
+        LDA     level_laser_dx_lookup_LO,X
+        STA     laser_load_dx_addr_LO                     ; **MODIFIES CODE**
+        LDA     level_laser_dx_lookup_HI,X
+        STA     laser_load_dx_addr_HI                     ; **MODIFIES CODE**
+
+        LDA     level_laser_dy_lookup_LO,X
+        STA     laser_load_dy_addr_LO                     ; **MODIFIES CODE**
+        LDA     level_laser_dy_lookup_HI,X
+        STA     laser_load_dy_addr_HI                     ; **MODIFIES CODE**
 ENDIF
 
         TXA
@@ -7187,6 +7197,10 @@ ENDIF
         EQUB    LO(level_3_gun_aim), HI(level_3_gun_aim)
         EQUB    LO(level_4_gun_aim), HI(level_4_gun_aim)
         EQUB    LO(level_5_gun_aim), HI(level_5_gun_aim)
+
+\\ level_laser_dx_lookup_* / level_laser_dy_lookup_* are defined in SWRAM
+\\ alongside the IF _TIMED_LASER block (native RAM here is too tight in the
+\\ SWRAM build); see update_all_laser_beams.
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -10205,6 +10219,31 @@ IF _TIMED_LASER
 \ Scratch for proportional clipping in draw_laser_beam_at_obj_screen.
 .laser_clip_t_x_max     EQUB $00            ; max t (in y-axis units) before X exits screen
 .laser_clip_t           EQUB $00            ; final clipped t after min(t_x_max, t_y_max, 30)
+.laser_dx_temp          EQUB $00            ; per-instance dx (signed pixels), loaded by laser_load_dx
+.laser_dy_temp          EQUB $00            ; per-instance dy (signed rows), loaded by laser_load_dy
+
+\ Per-level lookup tables for the laser dx/dy arrays. Lives in SWRAM (native
+\ RAM is too tight in the SWRAM build to hold these alongside the existing
+\ level_*_lookup_LO/HI tables).
+.level_laser_dx_lookup_LO
+        EQUB    LO(level_0_laser_dx_pixels)
+.level_laser_dx_lookup_HI
+        EQUB    HI(level_0_laser_dx_pixels)
+        EQUB    LO(level_1_laser_dx_pixels), HI(level_1_laser_dx_pixels)
+        EQUB    LO(level_2_laser_dx_pixels), HI(level_2_laser_dx_pixels)
+        EQUB    LO(level_3_laser_dx_pixels), HI(level_3_laser_dx_pixels)
+        EQUB    LO(level_4_laser_dx_pixels), HI(level_4_laser_dx_pixels)
+        EQUB    LO(level_5_laser_dx_pixels), HI(level_5_laser_dx_pixels)
+
+.level_laser_dy_lookup_LO
+        EQUB    LO(level_0_laser_dy_rows)
+.level_laser_dy_lookup_HI
+        EQUB    HI(level_0_laser_dy_rows)
+        EQUB    LO(level_1_laser_dy_rows), HI(level_1_laser_dy_rows)
+        EQUB    LO(level_2_laser_dy_rows), HI(level_2_laser_dy_rows)
+        EQUB    LO(level_3_laser_dy_rows), HI(level_3_laser_dy_rows)
+        EQUB    LO(level_4_laser_dy_rows), HI(level_4_laser_dy_rows)
+        EQUB    LO(level_5_laser_dy_rows), HI(level_5_laser_dy_rows)
 
 \ Per-object cached screen coords for the laser beam: when
 \ OBJ_flag_laser_beam_drawn is set in level_obj_flags[X], these hold the
@@ -10273,6 +10312,21 @@ IF _TIMED_LASER
 
 .update_one_laser_beam
 \\ {
+        \\ Load per-instance beam direction (dx, dy) into scratch. The values
+        \\ are stable across frames so loading once at the top serves both the
+        \\ erase (Phase 1) and the draw (Phase 4) calls into
+        \\ draw_laser_beam_at_obj_screen. X is current_object on entry.
+    .laser_load_dx
+        LDA     level_0_laser_dx_pixels,X           ; **SELF-MODIFIED CODE** (mirror of laser_load_object_type)
+        laser_load_dx_addr_LO = laser_load_dx+1
+        laser_load_dx_addr_HI = laser_load_dx+2
+        STA     laser_dx_temp
+    .laser_load_dy
+        LDA     level_0_laser_dy_rows,X             ; **SELF-MODIFIED CODE**
+        laser_load_dy_addr_LO = laser_load_dy+1
+        laser_load_dy_addr_HI = laser_load_dy+2
+        STA     laser_dy_temp
+
         \\ Phase 1: erase previous beam (if drawn last frame) using cached coords.
         LDA     level_obj_flags,X
         AND     #OBJ_flag_laser_beam_drawn

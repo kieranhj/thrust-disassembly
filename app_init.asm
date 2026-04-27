@@ -530,8 +530,19 @@
 
 INCLUDE "mode7_instructions.asm"
 IF _SWRAM_BUILD
-PRINT "WARNING! SKIPPING ", ~(SCREEN_BASE_ADDR - P%), " BYTES AS PADDING FOR STATUS BAR"
+\\ Safety invariant: status_bar_bytes must land >= SCREEN_BASE_ADDR.
+\\ game_entry_relocated does a forward copy (status_bar_bytes -> SCREEN_BASE_ADDR,
+\\ &500 bytes). Forward copy corrupts the source iff src < dst within range; with
+\\ status_bar_bytes >= SCREEN_BASE_ADDR the copy is safe (src == dst is identity;
+\\ src > dst writes below the read pointer). The IF below pads to equality when
+\\ there's room and otherwise lets status_bar_bytes spill above SCREEN_BASE_ADDR
+\\ (also safe). It must never assemble status_bar_bytes BELOW SCREEN_BASE_ADDR.
+IF P% < SCREEN_BASE_ADDR
+PRINT "STATUS BAR PADDING: SKIPPING ", ~(SCREEN_BASE_ADDR - P%), " BYTES"
 SKIP (SCREEN_BASE_ADDR - P%)
+ELSE
+PRINT "STATUS BAR PADDING: app_init.asm RAN PAST SCREEN_BASE_ADDR BY ", ~(P% - SCREEN_BASE_ADDR), " BYTES (forward-copy still safe)"
+ENDIF
 ENDIF
 INCLUDE "status_bar_bytes.asm"
 
