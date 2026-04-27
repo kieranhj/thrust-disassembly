@@ -76,7 +76,7 @@
 .level_0_obj_type
         EQUB    $05,$06,$04,$09,$09,$FF
 .level_0_gun_aim
-        EQUB    $00,$00,$00,$00,$F4
+        EQUB    $00,$00,$00,$F0,$FF
 .level_0_laser_dx_pixels
         EQUB    $00,$00,$00,$3C,$3C
 .level_0_laser_dy_rows

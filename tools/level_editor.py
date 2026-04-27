@@ -557,6 +557,12 @@ def export_beebasm(levels):
             lines.append(f"        EQUB    {format_bytes([o['type'] for o in obj] + [0xFF])}")
             lines.append(f".level_{n}_gun_aim")
             lines.append(f"        EQUB    {format_bytes([o.get('gun_aim', 0x00) for o in obj])}")
+            # Per-laser beam direction (signed BBC pixels / rows). Non-laser
+            # slots emit 0 — the asm only reads these for laser turret types.
+            lines.append(f".level_{n}_laser_dx_pixels")
+            lines.append(f"        EQUB    {format_bytes([o.get('laser_dx', 0) & 0xFF for o in obj])}")
+            lines.append(f".level_{n}_laser_dy_rows")
+            lines.append(f"        EQUB    {format_bytes([o.get('laser_dy', 0) & 0xFF for o in obj])}")
             lines.append("")
 
     # Gravity table
