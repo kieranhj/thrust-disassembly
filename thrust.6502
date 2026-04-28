@@ -10443,9 +10443,10 @@ IF _TIMED_LASER
         JMP     laser_barrel_off_screen
     .laser_barrel_x_ok
 
-        LDA     obj_screen_y                                          ; barrel Y (rows)
-        CLC                                                           ; (+0 top / +8 bottom)
-        ADC     gun_bullet_y_offset-OBJECT_laser_turret_up_right,Y
+        LDA     gun_bullet_y_offset-OBJECT_laser_turret_up_right,Y    ; offset in world Y units
+        ASL     A                                                     ; (+0 top / +16 bottom in pixel rows)
+        CLC                                                           ; obj_screen_y was ROL'd to pixel rows
+        ADC     obj_screen_y                                          ; in calculate_object_plot_addr
         BCC     laser_barrel_y_ok                                     ; in range → continue
         JMP     laser_barrel_off_screen                               ; obj scrolled off bottom: barrel past row 255
     .laser_barrel_y_ok
