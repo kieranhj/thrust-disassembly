@@ -86,7 +86,7 @@ Implemented as types `$09..$0C` (four orientations), replacing the old heavy-tur
 - Shield interaction: hasn't been investigated. Currently the beam destroys the player even with shield held — same path as terrain pixels do.
 
 **Future ideas:**
-- **Shootable behaviour toggles.** Let the player change the world by shooting buttons or trigger objects: a button that toggles a laser on/off; flips it from horizontal to vertical; swaps duty/period to a different timing pattern. Mechanism could re-use the existing door-switch types ($07/$08), routing their toggle into `gun_aim` of the target laser instead of (or in addition to) terrain. Designer-friendly because each switch already has a destination object reference. Adds expressive level design without any new physics — the laser tick path doesn't change, only its config bytes.
+- **Shootable behaviour toggles.** Let the player change a laser's config by shooting a switch object — toggle on/off, swap horizontal/vertical orientation, change duty/period. The existing door-switch object types ($07/$08) become the carrier; their action targets `gun_aim` on the wired laser instead of (or as well as) terrain. The general design — per-switch wiring table, action codes, editor UX — is fleshed out in **Configurable switches and triggers** below.
 - **Rotating lasers.** Same idea as rotating gun emplacements but with the beam: increment the beam endpoint's `(dx, dy)` each frame around a circle. The expensive part is the per-frame Bresenham erase + re-draw, which a custom line-draw routine (below) makes feasible. Probably budget-constrained to one or two rotators per level until profiled.
 
 **Custom directional line drawing routine.** Generalise the laser draw path: given a start pixel and direction `(dx, dy)`, walk along the ray and plot pixels until either the screen edge or an existing non-background pixel (landscape, sprite) is hit. Acts as both renderer and collision query. Uses:
@@ -133,6 +133,97 @@ Distinct from the flooding-mine scenario above: water as a static (or slowly-ani
 - **Bubbles released by thrust** when submerged, using the existing particle pool
 
 **Implementation notes:** rendering-wise, the timer-based palette switch described in the flooding-mine section works for a static water line too. Physics changes would branch on `ship_ypos > water_line_y` to swap in alternate gravity/damping constants.
+
+---
+
+## Configurable switches and triggers
+
+A meta-mechanic that lets the level designer wire shoot-the-button switches to changes in other objects (lasers, doors, fields), entirely from the editor. This is the foundation for puzzles: ordering challenges, gated laser grids, "shoot all four switches to unlock the exit" rooms, etc.
+
+### Current state (level 3/4/5 doors)
+
+The existing system is the bare minimum that the original game needed and is hardcoded:
+
+- **Two switch object types** ($07 right, $08 left) that, when shot, set the global byte `door_switch_counter_A = $FF` (`thrust.6502:1817`). All switches on a level set the same byte — there is no per-switch state.
+- `tick_door_logic` (`thrust.6502:3294`) runs every frame: decrements `door_switch_counter_A` toward zero, then `CMP level_number` and dispatches to one of three hardcoded routines: `level_3_door_logic`, `do_level_4_door_logic`, `do_level_5_door_logic`.
+- Each per-level routine hardcodes:
+  - **Where the door is** (window-Y test before doing anything: `LDA #$69 SBC window_ypos_INT` etc.)
+  - **What the door looks like** (writes specific bytes into specific `terrain_left_wall,Y` rows — width 13 for level 3, 21 for level 4, two-segment diamond for level 5)
+  - **Animation curve** (`door_switch_counter_B` chases `_A` while open, increments back when closing)
+- Outcome: a single one-shot timed door per level, written into the *left wall* only, that re-closes on a fixed timer. No level can have two independent doors. No switch can target anything other than terrain. Levels 0/1/2 ignore switches entirely.
+
+### Proposed generalised model
+
+Introduce a per-level **wiring table** that maps each switch object to a target object and an action. Replace the `level_number` dispatch with a generic walker.
+
+**Switch state.** Per-switch latch byte instead of one global counter — either an array indexed by object index, or a small bit field if 8 switches per level is enough. State is one of:
+- `latched` (just shot, action is firing or pulsing)
+- `idle` (default)
+
+For toggle-style targets the state is the *target's* state, not the switch's; the switch only fires the transition.
+
+**Wiring entry (per switch):**
+
+| Field | Bytes | Purpose |
+|-------|-------|---------|
+| target object index | 1 | which level object to act on (`$FF` = "modify terrain", same as today) |
+| action code | 1 | toggle / pulse / cycle / set / `gun_aim` mask write |
+| value or duration | 1-2 | action argument (e.g. new `gun_aim`, pulse frame count, cycle list pointer) |
+
+Three wiring bytes per switch × ~8 switches per level = ~24 bytes per level. Comparable to the existing per-laser endpoint arrays.
+
+**Action codes worth supporting:**
+
+- **`toggle_laser`** — flip a bit in the target's `gun_aim` (e.g. swap horizontal/vertical orientation, or invert duty bit) so the laser visibly changes behaviour. Cheapest to implement: just XOR a stored mask into `gun_aim,X`.
+- **`set_laser_aim`** — write a stored value into target's `gun_aim`. Lets a switch reset a laser to a specific phase / duty.
+- **`cycle_laser`** — step `gun_aim` through a small list of values (stored inline in the wiring table or as a separate list). Each shot advances by one. Ordering puzzles fall out of this naturally.
+- **`pulse_door`** — mimic current behaviour: write a hole into terrain for N frames then close. Door geometry now travels in the wiring entry (row, width, location) rather than being hardcoded. Probably needs a separate "door object" type so the geometry is editor-placeable.
+- **`flip_well`** — invert a gravity well's `strength` sign. Pull becomes push, opens routes that were previously closed.
+- **`destroy_object` / `spawn_object`** — wholesale enable/disable a target by setting/clearing its `OBJ_flag_alive` bit. Useful for "shoot the switch to drop the force field" without animating anything.
+
+The dispatch for these is a single jump table indexed by action code, so adding new actions is cheap.
+
+### State and ordering
+
+The single global counter has to go. Two replacements depending on ambition:
+
+1. **Per-target state byte.** Each *target* object has a "current mode" byte (already true for lasers via `gun_aim`). Switches just write into it. Easy. No ordering memory.
+2. **Per-level switch bit field.** A byte (or two) of "switch-was-triggered" flags. Targets can read the field and react to combinations (e.g. "laser turns off only if all four switches are set"). This is the path to ordering puzzles — combinations and sequences become expressible by giving the target a small predicate over the bit field.
+
+Approach 1 alone covers most cases. Approach 2 layered on top opens up puzzle design without changing the action set.
+
+### Editor UX
+
+- Switch placement is unchanged — drop a $07/$08 object as today.
+- Selecting a switch shows its **wiring**: a thin coloured line drawn from the switch sprite to its target object. The target is also subtly highlighted while the switch is selected.
+- Right-click on a target while a switch is selected = "rewire to this object". Very direct, no menu navigation.
+- A small popup (or status-bar field, in the same style as the laser `(dx, dy)` readout) shows the current action code and value. `[`/`]` cycles action codes; up/down nudges the value byte.
+- Doors stop being level-specific: a door-object type with editable position and width, triggered via a switch's `pulse_door` action. Levels 3/4/5 of the original game become regular wirings against this generic door object — no hardcoded routines.
+- Visual feedback in-editor for puzzle authoring: when a switch is hovered, draw the resulting state delta (e.g. show the laser in its post-shot config) so the designer can see the puzzle without simulating it.
+
+### Engine implications
+
+- `tick_door_logic` becomes `tick_switch_logic`: walk the wiring table, advance any pulses/cycles, write the resulting bytes into target objects' state. No more `level_number` test. The current per-level door routines collapse into the `pulse_door` action's body — generic door drawing into terrain given a (row, width, screen-Y) tuple.
+- Hostile-bullet collision against switch objects already exists (it's how shooting them is detected). The collision hook just sets the switch's per-instance latch byte instead of the global counter.
+- Per-level wiring table lives alongside the existing object arrays in `tools/output/thrust_levels_export*.asm`, exported by the editor like everything else.
+
+### Puzzle implications
+
+Once switches can target anything and the editor exposes wiring, a few puzzle archetypes follow naturally:
+
+- **Sequence locks.** Four switches must be shot in a specific order. Each switch's `cycle_laser` action depends on the previous laser being in a specific state, so out-of-order shots reset the chain.
+- **Mutually-exclusive switches.** Two switches each toggle the *same* laser between horizontal and vertical; the player must pick the orientation that matches the path they need. Re-shootable, encouraging trial.
+- **Field flips for routing bullets.** A switch flips a gravity well from pull to push so the player's bullets curve to a hidden target — combines with the "fields act on bullets" idea.
+- **Timed corridors.** A switch sets a laser's duty to a long-off phase; the player has a window to fly through before duty creeps back up via a separate `cycle_laser` somewhere else.
+
+### Migration path
+
+Don't break the original game. Two-step rollout:
+
+1. Implement the wiring system behind a build flag (`_CONFIGURABLE_SWITCHES`). Original level-3/4/5 doors keep their hardcoded routines while the flag is off, anchoring the canonical CRC.
+2. With the flag on, generate equivalent wiring entries for the original doors during level export — the editor reads the original level 3/4/5 doors and writes them out as a wired pulse_door + generic door object pair. New levels use the system natively.
+
+This mirrors how `_TIMED_LASER` and `_GRAVITY_WELL` were introduced.
 
 ---
 
