@@ -65,11 +65,10 @@ Implemented as types `$09..$0C` (four orientations), replacing the old heavy-tur
 
 **Per-instance config (via `gun_aim` byte):** low nibble → phase index (× 8 frames), high nibble → duty index (× 4 + 4 frames). Period fixed at 128 frames. Range is enough for "fast strobe" through "slow on/off"; the editor exposes `[`/`]` for phase and `,`/`.` for duty.
 
-**Beam direction and length:** hardcoded per orientation (60 BBC px × 30 rows, slope 2:1) — this is the next thing to make per-instance (see "Per-laser endpoint configuration" below).
+**Per-instance beam endpoint:** `(dx, dy)` stored per laser in `level_N_laser_dx_pixels` / `level_N_laser_dy_rows` (signed bytes). Arbitrary slope; clipping picks the first screen edge to be hit. Editor lets the designer drag the beam tip; `\` resets to the orientation-type default.
 
 **Deferred / known caveats:**
 - No telegraph / warning before the on-phase. Rely on the cycle being long enough that the player can read the rhythm.
-- Endpoint clipping is proportional (preserves slope) but not range-perfect when the beam exits at a corner — only one axis hits its edge first.
 - The Bresenham line plotter is generic; a straight-line plotter for axis-aligned beams would be faster, but profiling hasn't been done yet.
 - Shield interaction: hasn't been investigated. Currently the beam destroys the player even with shield held — same path as terrain pixels do.
 
