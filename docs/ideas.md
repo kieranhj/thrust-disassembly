@@ -69,7 +69,7 @@ Implemented as types `$09..$0C` (four orientations), replacing the old heavy-tur
 
 **Deferred / known caveats:**
 - No telegraph / warning before the on-phase. Rely on the cycle being long enough that the player can read the rhythm.
-- The Bresenham line plotter is generic; a straight-line plotter for axis-aligned beams would be faster, but profiling hasn't been done yet.
+- The Bresenham line plotter is generic; an optimised line drawing routine will be needed later on as the laser count grows (per-laser draw + erase XORs every frame). Worth profiling once a level uses several lasers at once.
 - Shield interaction: hasn't been investigated. Currently the beam destroys the player even with shield held — same path as terrain pixels do.
 
 ### Landing bubbles
