@@ -401,6 +401,64 @@ This would be the most ambitious addition. A simpler version could follow a pre-
 
 ---
 
+## Engine refactors
+
+### Generic per-object extra-data slots
+
+Today's per-level object data is struct-of-arrays with one array per *named* per-type field. After timed lasers and gravity wells, each level now exports:
+
+```
+level_N_obj_pos_X
+level_N_obj_pos_Y
+level_N_obj_pos_Y_EXT
+level_N_obj_type
+level_N_gun_aim
+level_N_laser_dx_pixels
+level_N_laser_dy_rows
+level_N_well_radius
+level_N_well_strength
+```
+
+Every new object type that needs config bytes (rotating laser sweep rate, fan force vector, switch wiring, mine bob period, …) currently means N more arrays × 6 levels and another self-modifying-code patch point per array (`LDA level_0_<thing>,X` mirrored at level init for each table). The cost shows up in three places:
+
+1. **Source clutter and SMC bookkeeping** — every new field needs a patch list entry. This is the part that actually slows feature work down.
+2. **Editor + export schema** — `tools/level_editor.py` and the export writer need a new branch per array.
+3. **Wasted bytes in object slots** — most slots zero out the type-specific arrays they don't apply to (a generator's `well_radius` is 0, etc.). At ~6 objects × 4 type-specific bytes per level, ~80% of those bytes are placeholders.
+
+**Proposal: a small, fixed-size scratchpad per object.** Replace the named per-type arrays with N generic "obj_data" arrays (probably 3 or 4):
+
+```
+level_N_obj_data_0    ; gun_aim / well_radius / fan_dx / ...
+level_N_obj_data_1    ; laser_dx / well_strength / fan_dy / ...
+level_N_obj_data_2    ; laser_dy / switch_target / ...
+level_N_obj_data_3    ; (reserved)
+```
+
+Each object type defines what each slot means. Source readability is preserved by per-type aliasing constants:
+
+```asm
+LASER_DX_SLOT    = 1   ; level_N_obj_data_1,X
+LASER_DY_SLOT    = 2   ; level_N_obj_data_2,X
+WELL_RADIUS_SLOT = 0
+WELL_STRENGTH_SLOT = 1
+```
+
+The SMC patch list becomes fixed at N entries regardless of how many object types are added. Adding a new object type is a code change only — no data-format churn, no editor export plumbing.
+
+**Storage is roughly even.** With 3 slots × 6 objects × 6 levels = 108 bytes, vs current 5 named type-specific arrays × 6 × 6 ≈ 180 bytes (`gun_aim` + `laser_dx` + `laser_dy` + `well_radius` + `well_strength`). 4 slots breaks even but leaves headroom. Either way the dominant win is the *flat schema*, not the byte savings.
+
+**Migration sketch:**
+
+1. Add the new arrays alongside the existing ones (no patch point changes yet) and have the editor export both. Verify the binaries and CRC are unchanged.
+2. Switch the SMC patch points and access sites to the new arrays, drop the old ones, regenerate exports. New object types from this point onward only touch the new schema.
+3. Settle on the slot count by usage. 3 slots covers everything in flight (laser dx/dy + gun_aim, well radius/strength, switch target/action). 4 leaves room for a length / sub-config byte per object. Use `EQUB` constants so widening later is cosmetic.
+
+**What stays separate.** Position (`obj_pos_X / Y / Y_EXT`) and type are universal — keep them as their own arrays. The proposal only consolidates the variable, type-specific config; it doesn't try to be a full SoA→AoS rework.
+
+**What this enables.** The configurable-switches design above wants ~3 bytes per switch (target index, action code, value). Without consolidation that's three more named arrays × 6 levels and three SMC patches. With the scratchpad it's three slot assignments and zero schema work — exactly the kind of low-friction extensibility a level editor benefits from.
+
+---
+
 ## Engine constraints to be aware of
 
 ### Pod must be object index 0
