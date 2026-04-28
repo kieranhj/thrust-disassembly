@@ -30,6 +30,7 @@
 _SWRAM_BUILD         = TRUE
 
 _DEBUG_RASTERS       = (_SWRAM_BUILD AND FALSE)   ; Raster timing
+_DEBUG_FRAME_TIME    = (_SWRAM_BUILD AND TRUE)    ; Show frame time in status bar
 _UNROLL_TERRAIN      = (_SWRAM_BUILD AND TRUE)    ; Faster terrain plotting
 _FRIENDLY_KEYS       = (_SWRAM_BUILD AND TRUE)    ; Emulator friendly key map
 _THRUST_PARTICLES    = (_SWRAM_BUILD AND TRUE)    ; Generate thrust particles
@@ -3783,6 +3784,20 @@ ENDIF
 {
         RTS
 }
+
+IF _DEBUG_FRAME_TIME
+.debug_frame_time_cs EQUB $00
+
+.plot_debug_frame_time
+{
+        LDX     #$61
+        LDY     #$3F
+        JSR     plot_char_set_scr_addr_XY
+
+        LDA     debug_frame_time_cs
+        JMP     plot_number_zero_space
+}
+ENDIF
 
 \ ******************************************************************************
 \ * Function: plot_fuel_value
@@ -8943,6 +8958,9 @@ SET_BG_COL PAL_green
         JSR     test_for_pause
         JSR     calculate_player_position_from_midpoint
         JSR     plot_fuel_value
+        IF _DEBUG_FRAME_TIME
+        JSR     plot_debug_frame_time
+        ENDIF
         JSR     update_sound_timer
         JSR     ship_input_thrust_calculate_force
 SET_BG_COL PAL_black
@@ -9500,6 +9518,10 @@ SET_BG_COL PAL_black
         LDA     system_clock_value
         CMP     #$03
         BCC     loop                      ; wait minimum 0.03s
+
+        IF _SWRAM_BUILD
+        STA     debug_frame_time_cs
+        ENDIF
 
         LDA     #$00
         STA     system_clock_value        ; reset system clock.

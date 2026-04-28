@@ -68,19 +68,19 @@
 \ ******************************************************************************
 
 .level_0_obj_pos_X
-        EQUB    $8F,$A0,$6E,$7C,$5A
+        EQUB    $8F,$A0,$6E,$7C,$5B
 .level_0_obj_pos_Y
-        EQUB    $BD,$AB,$B3,$BA,$AC
+        EQUB    $BD,$AB,$B3,$BA,$AD
 .level_0_obj_pos_Y_EXT
         EQUB    $01,$01,$01,$01,$01
 .level_0_obj_type
-        EQUB    $05,$06,$04,$09,$09,$FF
+        EQUB    $05,$06,$04,$09,$00,$FF
 .level_0_gun_aim
-        EQUB    $00,$00,$00,$F0,$FF
+        EQUB    $00,$00,$00,$F0,$02
 .level_0_laser_dx_pixels
-        EQUB    $00,$00,$00,$79,$3B
+        EQUB    $00,$00,$00,$79,$00
 .level_0_laser_dy_rows
-        EQUB    $00,$00,$00,$F4,$E1
+        EQUB    $00,$00,$00,$F4,$00
 
 .level_1_obj_pos_X
         EQUB    $81,$64,$8B,$73,$75,$9C,$99
