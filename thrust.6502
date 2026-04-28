@@ -6622,6 +6622,20 @@ ENDIF
 {
         JSR     clear_screen_and_init
 
+IF _TIMED_LASER
+\\ Screen is now blank, but level_obj_flags bit 2 (OBJ_flag_laser_beam_drawn)
+\\ may still be set on lasers that were on-screen at the moment of death.
+\\ Clear it here, otherwise update_one_laser_beam's Phase 1 XOR-erase will
+\\ paint the cached beam back onto the freshly cleared screen.
+        LDX     #LEVEL_MAX_OBJECTS
+    .level_reset_clear_laser_drawn
+        LDA     level_obj_flags,X
+        AND     #($FF EOR OBJ_flag_laser_beam_drawn)
+        STA     level_obj_flags,X
+        DEX
+        BPL     level_reset_clear_laser_drawn
+ENDIF
+
         LDY     #$1B
         JSR     wait_time_out_Y
 
