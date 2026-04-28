@@ -1609,7 +1609,7 @@ ENDIF
 
 \ --- 1. Unpack gun_aim byte: bits 2..4 = base angle (shifted), bits 0..1 = spread ---
     .load_gun_aim
-        LDA     level_0_gun_aim,X                    ; **SELF-MODIFIED CODE**
+        LDA     level_0_obj_data_0,X                 ; **SELF-MODIFIED CODE** (slot 0 = gun_aim)
         level_gun_aim_addr_LO   = load_gun_aim+1
         level_gun_aim_addr_HI   = load_gun_aim+2
 {
@@ -6959,24 +6959,24 @@ IF _TIMED_LASER
         STA     laser_load_object_type_addr_HI            ; **MODIFIES CODE**
 ENDIF
 
-        LDA     level_gun_aim_lookup_LO,X
+        LDA     level_obj_data_0_lookup_LO,X
         STA     level_gun_aim_addr_LO                    ; **MODIFIES CODE**
-        LDA     level_gun_aim_lookup_HI,X
+        LDA     level_obj_data_0_lookup_HI,X
         STA     level_gun_aim_addr_HI                    ; **MODIFIES CODE**
 IF _TIMED_LASER
-        LDA     level_gun_aim_lookup_LO,X
+        LDA     level_obj_data_0_lookup_LO,X
         STA     laser_load_gun_aim_addr_LO                ; **MODIFIES CODE** (mirror for update_one_laser_beam)
-        LDA     level_gun_aim_lookup_HI,X
+        LDA     level_obj_data_0_lookup_HI,X
         STA     laser_load_gun_aim_addr_HI                ; **MODIFIES CODE**
 
-        LDA     level_laser_dx_lookup_LO,X
-        STA     laser_load_dx_addr_LO                     ; **MODIFIES CODE**
-        LDA     level_laser_dx_lookup_HI,X
+        LDA     level_obj_data_1_lookup_LO,X
+        STA     laser_load_dx_addr_LO                     ; **MODIFIES CODE** (slot 1 = laser dx)
+        LDA     level_obj_data_1_lookup_HI,X
         STA     laser_load_dx_addr_HI                     ; **MODIFIES CODE**
 
-        LDA     level_laser_dy_lookup_LO,X
-        STA     laser_load_dy_addr_LO                     ; **MODIFIES CODE**
-        LDA     level_laser_dy_lookup_HI,X
+        LDA     level_obj_data_2_lookup_LO,X
+        STA     laser_load_dy_addr_LO                     ; **MODIFIES CODE** (slot 2 = laser dy)
+        LDA     level_obj_data_2_lookup_HI,X
         STA     laser_load_dy_addr_HI                     ; **MODIFIES CODE**
 ENDIF
 IF _GRAVITY_WELL
@@ -7000,14 +7000,14 @@ IF _GRAVITY_WELL
         LDA     level_obj_pos_Y_EXT_lookup_HI,X
         STA     well_load_obj_pos_y_ext_addr_HI           ; **MODIFIES CODE**
 
-        LDA     level_well_radius_lookup_LO,X
-        STA     well_load_radius_addr_LO                  ; **MODIFIES CODE**
-        LDA     level_well_radius_lookup_HI,X
+        LDA     level_obj_data_1_lookup_LO,X
+        STA     well_load_radius_addr_LO                  ; **MODIFIES CODE** (slot 1 = well radius)
+        LDA     level_obj_data_1_lookup_HI,X
         STA     well_load_radius_addr_HI                  ; **MODIFIES CODE**
 
-        LDA     level_well_strength_lookup_LO,X
-        STA     well_load_strength_addr_LO                ; **MODIFIES CODE**
-        LDA     level_well_strength_lookup_HI,X
+        LDA     level_obj_data_2_lookup_LO,X
+        STA     well_load_strength_addr_LO                ; **MODIFIES CODE** (slot 2 = well strength)
+        LDA     level_obj_data_2_lookup_HI,X
         STA     well_load_strength_addr_HI                ; **MODIFIES CODE**
 ENDIF
 
@@ -7281,19 +7281,25 @@ ENDIF
         EQUB    LO(level_4_obj_type), HI(level_4_obj_type)
         EQUB    LO(level_5_obj_type), HI(level_5_obj_type)
 
-.level_gun_aim_lookup_LO
-        EQUB    LO(level_0_gun_aim)
-.level_gun_aim_lookup_HI
-        EQUB    HI(level_0_gun_aim)
-        EQUB    LO(level_1_gun_aim), HI(level_1_gun_aim)
-        EQUB    LO(level_2_gun_aim), HI(level_2_gun_aim)
-        EQUB    LO(level_3_gun_aim), HI(level_3_gun_aim)
-        EQUB    LO(level_4_gun_aim), HI(level_4_gun_aim)
-        EQUB    LO(level_5_gun_aim), HI(level_5_gun_aim)
+\\ Per-level pointers to the generic obj_data slot arrays. Slot 0 is the
+\\ "primary config" byte (gun_aim for guns/lasers; unused for other types).
+\\ Slots 1 and 2 are interpreted per object type (laser dx/dy, well
+\\ radius/strength, future per-type fields). Each new object type that
+\\ needs config bytes claims slot offsets without growing the schema.
+.level_obj_data_0_lookup_LO
+        EQUB    LO(level_0_obj_data_0)
+.level_obj_data_0_lookup_HI
+        EQUB    HI(level_0_obj_data_0)
+        EQUB    LO(level_1_obj_data_0), HI(level_1_obj_data_0)
+        EQUB    LO(level_2_obj_data_0), HI(level_2_obj_data_0)
+        EQUB    LO(level_3_obj_data_0), HI(level_3_obj_data_0)
+        EQUB    LO(level_4_obj_data_0), HI(level_4_obj_data_0)
+        EQUB    LO(level_5_obj_data_0), HI(level_5_obj_data_0)
 
-\\ level_laser_dx_lookup_* / level_laser_dy_lookup_* are defined in SWRAM
-\\ alongside the IF _TIMED_LASER block (native RAM here is too tight in the
-\\ SWRAM build); see update_all_laser_beams.
+\\ level_obj_data_1_lookup_* / level_obj_data_2_lookup_* are defined in
+\\ SWRAM alongside the IF _TIMED_LASER / _GRAVITY_WELL blocks (native RAM
+\\ here is too tight in the SWRAM build); see update_all_laser_beams and
+\\ apply_gravity_wells_to_force.
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -10325,28 +10331,32 @@ IF _TIMED_LASER
 .laser_save_end_x       EQUB $00            ; saved end_x (zp draw_line_end_x at $8A aliases multiply_result_hi)
 .laser_save_end_y       EQUB $00            ; saved end_y (zp draw_line_end_y at $8B aliases multiply_operand_b)
 
-\ Per-level lookup tables for the laser dx/dy arrays. Lives in SWRAM (native
+\ Per-level lookup tables for obj_data slots 1 and 2. Lives in SWRAM (native
 \ RAM is too tight in the SWRAM build to hold these alongside the existing
-\ level_*_lookup_LO/HI tables).
-.level_laser_dx_lookup_LO
-        EQUB    LO(level_0_laser_dx_pixels)
-.level_laser_dx_lookup_HI
-        EQUB    HI(level_0_laser_dx_pixels)
-        EQUB    LO(level_1_laser_dx_pixels), HI(level_1_laser_dx_pixels)
-        EQUB    LO(level_2_laser_dx_pixels), HI(level_2_laser_dx_pixels)
-        EQUB    LO(level_3_laser_dx_pixels), HI(level_3_laser_dx_pixels)
-        EQUB    LO(level_4_laser_dx_pixels), HI(level_4_laser_dx_pixels)
-        EQUB    LO(level_5_laser_dx_pixels), HI(level_5_laser_dx_pixels)
+\ level_*_lookup_LO/HI tables). Slot 1 carries laser_dx_pixels for laser
+\ types and well_radius for gravity-well types; slot 2 carries laser_dy_rows
+\ or well_strength. The two consumers are mutually exclusive on any single
+\ object slot, so the same lookup is used by both code paths via separate
+\ self-modifying-code sites.
+.level_obj_data_1_lookup_LO
+        EQUB    LO(level_0_obj_data_1)
+.level_obj_data_1_lookup_HI
+        EQUB    HI(level_0_obj_data_1)
+        EQUB    LO(level_1_obj_data_1), HI(level_1_obj_data_1)
+        EQUB    LO(level_2_obj_data_1), HI(level_2_obj_data_1)
+        EQUB    LO(level_3_obj_data_1), HI(level_3_obj_data_1)
+        EQUB    LO(level_4_obj_data_1), HI(level_4_obj_data_1)
+        EQUB    LO(level_5_obj_data_1), HI(level_5_obj_data_1)
 
-.level_laser_dy_lookup_LO
-        EQUB    LO(level_0_laser_dy_rows)
-.level_laser_dy_lookup_HI
-        EQUB    HI(level_0_laser_dy_rows)
-        EQUB    LO(level_1_laser_dy_rows), HI(level_1_laser_dy_rows)
-        EQUB    LO(level_2_laser_dy_rows), HI(level_2_laser_dy_rows)
-        EQUB    LO(level_3_laser_dy_rows), HI(level_3_laser_dy_rows)
-        EQUB    LO(level_4_laser_dy_rows), HI(level_4_laser_dy_rows)
-        EQUB    LO(level_5_laser_dy_rows), HI(level_5_laser_dy_rows)
+.level_obj_data_2_lookup_LO
+        EQUB    LO(level_0_obj_data_2)
+.level_obj_data_2_lookup_HI
+        EQUB    HI(level_0_obj_data_2)
+        EQUB    LO(level_1_obj_data_2), HI(level_1_obj_data_2)
+        EQUB    LO(level_2_obj_data_2), HI(level_2_obj_data_2)
+        EQUB    LO(level_3_obj_data_2), HI(level_3_obj_data_2)
+        EQUB    LO(level_4_obj_data_2), HI(level_4_obj_data_2)
+        EQUB    LO(level_5_obj_data_2), HI(level_5_obj_data_2)
 
 \ Per-object cached screen coords for the laser beam: when
 \ OBJ_flag_laser_beam_drawn is set in level_obj_flags[X], these hold the
@@ -10420,12 +10430,12 @@ IF _TIMED_LASER
         \\ ~8 cycles on the fast path that returns without drawing — cheap
         \\ relative to the full erase+redraw it replaces.)
     .laser_load_dx
-        LDA     level_0_laser_dx_pixels,X           ; **SELF-MODIFIED CODE** (mirror of laser_load_object_type)
+        LDA     level_0_obj_data_1,X                ; **SELF-MODIFIED CODE** (slot 1 = laser dx)
         laser_load_dx_addr_LO = laser_load_dx+1
         laser_load_dx_addr_HI = laser_load_dx+2
         STA     laser_dx_temp
     .laser_load_dy
-        LDA     level_0_laser_dy_rows,X             ; **SELF-MODIFIED CODE**
+        LDA     level_0_obj_data_2,X                ; **SELF-MODIFIED CODE** (slot 2 = laser dy)
         laser_load_dy_addr_LO = laser_load_dy+1
         laser_load_dy_addr_HI = laser_load_dy+2
         STA     laser_dy_temp
@@ -10436,7 +10446,7 @@ IF _TIMED_LASER
         \\ Beam is ON while ((tick + phase_offset) AND $7F) < duty. Reuses
         \\ laser_clip_t_x_max as scratch (not read until draw_laser_beam_at_obj_screen).
     .laser_load_gun_aim
-        LDA     level_0_gun_aim,X                   ; **SELF-MODIFIED CODE** (mirror of load_gun_aim)
+        LDA     level_0_obj_data_0,X                ; **SELF-MODIFIED CODE** (slot 0 = gun_aim)
         laser_load_gun_aim_addr_LO = laser_load_gun_aim+1
         laser_load_gun_aim_addr_HI = laser_load_gun_aim+2
         TAY                                         ; Y = gun_aim (saved)
@@ -10765,27 +10775,12 @@ IF _TIMED_LASER
 ENDIF
 
 IF _GRAVITY_WELL
-\ Per-level gravity well data (level_N_well_radius / level_N_well_strength)
-\ is provided by the editor's level export — see tools/level_editor.py
-\ export_beebasm. Lookup tables here reference those labels.
-
-.level_well_radius_lookup_LO
-        EQUB    LO(level_0_well_radius), LO(level_1_well_radius)
-        EQUB    LO(level_2_well_radius), LO(level_3_well_radius)
-        EQUB    LO(level_4_well_radius), LO(level_5_well_radius)
-.level_well_radius_lookup_HI
-        EQUB    HI(level_0_well_radius), HI(level_1_well_radius)
-        EQUB    HI(level_2_well_radius), HI(level_3_well_radius)
-        EQUB    HI(level_4_well_radius), HI(level_5_well_radius)
-
-.level_well_strength_lookup_LO
-        EQUB    LO(level_0_well_strength), LO(level_1_well_strength)
-        EQUB    LO(level_2_well_strength), LO(level_3_well_strength)
-        EQUB    LO(level_4_well_strength), LO(level_5_well_strength)
-.level_well_strength_lookup_HI
-        EQUB    HI(level_0_well_strength), HI(level_1_well_strength)
-        EQUB    HI(level_2_well_strength), HI(level_3_well_strength)
-        EQUB    HI(level_4_well_strength), HI(level_5_well_strength)
+\ Per-level gravity-well config bytes live in obj_data slots 1 (radius) and
+\ 2 (strength) of the shared level_N_obj_data_* arrays — laser turrets
+\ reuse the same slots for dx/dy, the two object types are mutually
+\ exclusive on any single slot. The lookup tables for slots 1 and 2 are
+\ defined above next to the laser code; the well code's SMC sites are
+\ patched from those same tables.
 
 \ Scratch for apply_gravity_wells_to_force.
 .well_radius_save     EQUB $00          ; current well's radius (1..127)
@@ -10854,7 +10849,7 @@ WELL_DEBRIS_SPAWN_MASK    = $01          ; emit one particle every 8 ticks per w
 
         \\ Radius == 0 means well is disabled (default for non-well slots too).
     .well_load_radius
-        LDA     level_0_well_radius,X                     ; **SELF-MODIFIED CODE**
+        LDA     level_0_obj_data_1,X                      ; **SELF-MODIFIED CODE** (slot 1 = well radius)
         well_load_radius_addr_LO = well_load_radius+1
         well_load_radius_addr_HI = well_load_radius+2
         BNE     well_radius_nonzero
@@ -10882,7 +10877,7 @@ WELL_DEBRIS_SPAWN_MASK    = $01          ; emit one particle every 8 ticks per w
         well_load_obj_pos_y_ext_addr_HI = well_load_obj_pos_y_ext+2
         STA     well_obj_y_hi_save
     .well_load_strength
-        LDA     level_0_well_strength,X                   ; **SELF-MODIFIED CODE**
+        LDA     level_0_obj_data_2,X                      ; **SELF-MODIFIED CODE** (slot 2 = well strength)
         well_load_strength_addr_LO = well_load_strength+1
         well_load_strength_addr_HI = well_load_strength+2
         STA     well_strength_save

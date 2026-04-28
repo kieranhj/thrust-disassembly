@@ -304,11 +304,21 @@ def import_beebasm(path):
         obj_y = labels.get(f"level_{n}_obj_pos_Y", [])
         obj_y_ext = labels.get(f"level_{n}_obj_pos_Y_EXT", [])
         obj_type = labels.get(f"level_{n}_obj_type", [])
-        gun_aim = labels.get(f"level_{n}_gun_aim", [])
-        laser_dx = labels.get(f"level_{n}_laser_dx_pixels", [])
-        laser_dy = labels.get(f"level_{n}_laser_dy_rows", [])
-        well_radius   = labels.get(f"level_{n}_well_radius", [])
-        well_strength = labels.get(f"level_{n}_well_strength", [])
+        # Per-object data slots (current schema). Fall back to the legacy
+        # named arrays if obj_data_* aren't present so we can still load
+        # exports made before the consolidation. When the new schema is
+        # active, slots 1/2 carry the laser-or-well field for that slot —
+        # the per-type interpretation happens in the loop below using
+        # obj_type[i] to pick which field the byte belongs to.
+        data_0 = labels.get(f"level_{n}_obj_data_0", [])
+        data_1 = labels.get(f"level_{n}_obj_data_1", [])
+        data_2 = labels.get(f"level_{n}_obj_data_2", [])
+        new_schema = bool(data_0 or data_1 or data_2)
+        gun_aim = data_0 if new_schema else labels.get(f"level_{n}_gun_aim", [])
+        legacy_laser_dx = labels.get(f"level_{n}_laser_dx_pixels", [])
+        legacy_laser_dy = labels.get(f"level_{n}_laser_dy_rows", [])
+        legacy_well_radius = labels.get(f"level_{n}_well_radius", [])
+        legacy_well_strength = labels.get(f"level_{n}_well_strength", [])
 
         # Remove $FF terminator from type list
         types = [t for t in obj_type if t != 0xFF]
@@ -323,15 +333,28 @@ def import_beebasm(path):
             # with before per-instance dx/dy was added). Non-laser slots get 0.
             default_dx = LASER_BEAM_DX_PIXELS.get(t, 0)
             default_dy = LASER_BEAM_DY_ROWS.get(t, 0)
-            dx_byte = laser_dx[i] if i < len(laser_dx) else (default_dx & 0xFF)
-            dy_byte = laser_dy[i] if i < len(laser_dy) else (default_dy & 0xFF)
+            if new_schema:
+                # Slots 1/2 are shared. Pick interpretation by object type:
+                # lasers -> dx/dy bytes; wells -> radius/strength; others 0.
+                slot_1 = data_1[i] if i < len(data_1) else 0
+                slot_2 = data_2[i] if i < len(data_2) else 0
+                if t in LASER_BEAM_DX_PIXELS:
+                    dx_byte, dy_byte = slot_1, slot_2
+                    wr, ws = 0, 0
+                elif t == OBJECT_GRAVITY_WELL:
+                    dx_byte, dy_byte = default_dx & 0xFF, default_dy & 0xFF
+                    wr, ws = slot_1, slot_2
+                else:
+                    dx_byte, dy_byte = default_dx & 0xFF, default_dy & 0xFF
+                    wr, ws = 0, 0
+            else:
+                dx_byte = legacy_laser_dx[i] if i < len(legacy_laser_dx) else (default_dx & 0xFF)
+                dy_byte = legacy_laser_dy[i] if i < len(legacy_laser_dy) else (default_dy & 0xFF)
+                wr = legacy_well_radius[i] if i < len(legacy_well_radius) else 0
+                ws = legacy_well_strength[i] if i < len(legacy_well_strength) else 0
             # Convert from unsigned byte to signed int (-128..127).
             dx_s = dx_byte - 256 if dx_byte >= 128 else dx_byte
             dy_s = dy_byte - 256 if dy_byte >= 128 else dy_byte
-            # Gravity well: radius is unsigned, strength signed. Older exports
-            # without these arrays default to 0 (inactive).
-            wr = well_radius[i] if i < len(well_radius) else 0
-            ws = well_strength[i] if i < len(well_strength) else 0
             ws_s = ws - 256 if ws >= 128 else ws
             objects.append({
                 "x": obj_x[i] if i < len(obj_x) else 0,
@@ -578,21 +601,28 @@ def export_beebasm(levels):
             lines.append(f"        EQUB    {format_bytes([o['y'] >> 8 for o in obj])}")
             lines.append(f".level_{n}_obj_type")
             lines.append(f"        EQUB    {format_bytes([o['type'] for o in obj] + [0xFF])}")
-            lines.append(f".level_{n}_gun_aim")
-            lines.append(f"        EQUB    {format_bytes([o.get('gun_aim', 0x00) for o in obj])}")
-            # Per-laser beam direction (signed BBC pixels / rows). Non-laser
-            # slots emit 0 — the asm only reads these for laser turret types.
-            lines.append(f".level_{n}_laser_dx_pixels")
-            lines.append(f"        EQUB    {format_bytes([o.get('laser_dx', 0) & 0xFF for o in obj])}")
-            lines.append(f".level_{n}_laser_dy_rows")
-            lines.append(f"        EQUB    {format_bytes([o.get('laser_dy', 0) & 0xFF for o in obj])}")
-            # Per-gravity-well radius (unsigned) and strength (signed). Non-well
-            # slots emit 0 — apply_gravity_wells_to_force only reads these for
-            # OBJECT_gravity_well types and a 0 radius means inactive anyway.
-            lines.append(f".level_{n}_well_radius")
-            lines.append(f"        EQUB    {format_bytes([o.get('well_radius', 0) & 0xFF for o in obj])}")
-            lines.append(f".level_{n}_well_strength")
-            lines.append(f"        EQUB    {format_bytes([o.get('well_strength', 0) & 0xFF for o in obj])}")
+            # Generic per-object data slots. Each object type interprets each
+            # slot in its own way (see thrust.6502 OBJ_DATA_* offsets):
+            #   slot 0: gun_aim (guns/lasers); unused (zero) for other types
+            #   slot 1: laser_dx_pixels (lasers) / well_radius (wells)
+            #   slot 2: laser_dy_rows  (lasers) / well_strength (wells)
+            # Lasers and wells are mutually exclusive on a single object slot,
+            # so slots 1/2 carry whichever per-type field applies (or 0).
+            data_0 = [o.get('gun_aim', 0x00) & 0xFF for o in obj]
+            data_1 = [
+                (o.get('laser_dx', 0) & 0xFF) | (o.get('well_radius', 0) & 0xFF)
+                for o in obj
+            ]
+            data_2 = [
+                (o.get('laser_dy', 0) & 0xFF) | (o.get('well_strength', 0) & 0xFF)
+                for o in obj
+            ]
+            lines.append(f".level_{n}_obj_data_0")
+            lines.append(f"        EQUB    {format_bytes(data_0)}")
+            lines.append(f".level_{n}_obj_data_1")
+            lines.append(f"        EQUB    {format_bytes(data_1)}")
+            lines.append(f".level_{n}_obj_data_2")
+            lines.append(f"        EQUB    {format_bytes(data_2)}")
             lines.append("")
 
     # Gravity table
