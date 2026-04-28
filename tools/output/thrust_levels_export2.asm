@@ -217,7 +217,7 @@
 
 .level_0_reset_data
         EQUB    $01
-        EQUB    $AB
+        EQUB    $9C
         EQUB    $56
         EQUB    $01
         EQUB    $24

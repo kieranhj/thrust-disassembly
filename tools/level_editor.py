@@ -808,6 +808,13 @@ class Camera:
 # Pixel x range in the decoded sprite is 9-23 (out of a 32-pixel plotting area).
 # The offset of 9 Mode 1 pixels = 2.25 world X units from the plotting origin.
 _SHIP_PIXEL_OFFSET_X = 9  # leftmost pixel column in the decoded sprite
+
+# Vertical offset between the spawn_y stored in the level reset table
+# (which becomes midpoint_ypos at reset) and the ship's actual plot Y in
+# the game. Derived from calculate_attached_pod_vector at level start:
+# angle_ship_to_pod = 1, top_nibble_index = $0E, so midpoint_deltay ≈
+# -2.5 * cos(11.25°) * (14+2) / 4 ≈ -9.8 world Y units. Round to 10.
+_SPAWN_MIDPOINT_TO_SHIP_DY = 10
 _SHIP_BITMAP = [
     ".......#.......",
     "......#.#......",
@@ -1697,11 +1704,15 @@ class Editor:
         ship_world_h = ship_surf.get_height() / 2
         ship_offset_x = _SHIP_PIXEL_OFFSET_X / 4
         for i, cp in enumerate(lv.checkpoints):
-            # Check spawn marker (ship sprite bounding box)
+            # Check spawn marker (ship sprite bounding box).
+            # spawn_y is the midpoint Y the game writes into midpoint_ypos at
+            # reset; the ship plots above that by midpoint_deltay at the
+            # default tether angle (≈ _SPAWN_MIDPOINT_TO_SHIP_DY world Y).
+            ship_top_y = cp["spawn_y"] - _SPAWN_MIDPOINT_TO_SHIP_DY
             sx, sy = cam.world_to_screen(cp["spawn_x"] + ship_offset_x,
-                                         cp["spawn_y"])
+                                         ship_top_y)
             ex, ey = cam.world_to_screen(cp["spawn_x"] + ship_offset_x + ship_world_w,
-                                         cp["spawn_y"] + ship_world_h)
+                                         ship_top_y + ship_world_h)
             if sx <= mx < ex and sy <= my < ey:
                 return ("spawn", i)
             # Check viewport rectangle edges (72x111, offset 73 from window_y)
@@ -1733,10 +1744,12 @@ class Editor:
                 self.level.dirty = True
                 self.selected_checkpoint = None
         else:
-            # Add new checkpoint at click position
+            # Add new checkpoint at click position. The click marks where the
+            # ship sprite top should appear; spawn_y stored in the reset table
+            # is the midpoint Y, _SPAWN_MIDPOINT_TO_SHIP_DY world units below.
             wx, wy = self.camera.screen_to_world(mx, my)
             spawn_x = max(0, min(255, int(wx)))
-            spawn_y = max(0, min(0xFFFF, int(wy)))
+            spawn_y = max(0, min(0xFFFF, int(wy + _SPAWN_MIDPOINT_TO_SHIP_DY)))
             # Window position offset: camera centred roughly 110 rows above spawn
             window_y = max(0, spawn_y - 110)
             window_x = max(0, min(255, spawn_x - 22))
@@ -2538,15 +2551,19 @@ class Editor:
         ship_offset_x = _SHIP_PIXEL_OFFSET_X / 4   # plotting origin to first pixel
 
         for i, cp in enumerate(lv.checkpoints):
-            # Sprite is plotted at top-left origin + inherent pixel offset
+            # spawn_y is the midpoint Y stored in the reset table. The game's
+            # plotted ship lands midpoint_deltay above that — at level start
+            # ≈ _SPAWN_MIDPOINT_TO_SHIP_DY world Y units upward. Render the
+            # sprite at that offset so the editor matches the in-game position.
+            ship_top_y = cp["spawn_y"] - _SPAWN_MIDPOINT_TO_SHIP_DY
             sx_tl, sy_tl = cam.world_to_screen(
-                cp["spawn_x"] + ship_offset_x, cp["spawn_y"])
+                cp["spawn_x"] + ship_offset_x, ship_top_y)
             sx_win, sy_win = cam.world_to_screen(cp["window_x"], cp["window_y"])
 
             # Scale ship sprite to match current zoom
             ex, ey = cam.world_to_screen(
                 cp["spawn_x"] + ship_offset_x + ship_world_w,
-                cp["spawn_y"] + ship_world_h)
+                ship_top_y + ship_world_h)
             draw_w = max(1, int(ex - sx_tl))
             draw_h = max(1, int(ey - sy_tl))
 
@@ -2554,12 +2571,15 @@ class Editor:
                 continue
 
             if self.mode == "checkpoint":
-                # Dashed horizontal line at spawn Y — only in checkpoint mode
+                # Dashed horizontal line at the raw spawn_y — this is the
+                # threshold the game uses for zone matching, independent of
+                # the rendered sprite's vertical offset.
+                _, sy_thresh = cam.world_to_screen(0, cp["spawn_y"])
                 line_col = (100, 200, 255)
                 dash_len = 8
                 for dx in range(0, sw, dash_len * 2):
                     pygame.draw.line(screen, line_col,
-                                     (dx, int(sy_tl)), (min(dx + dash_len, sw), int(sy_tl)))
+                                     (dx, int(sy_thresh)), (min(dx + dash_len, sw), int(sy_thresh)))
 
             # Draw ship sprite at top-left
             highlight = (self.mode == "checkpoint" and
