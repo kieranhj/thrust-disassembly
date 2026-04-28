@@ -1824,12 +1824,14 @@ class Editor:
     def _well_screen_geometry(self, obj):
         """Return (cx, cy, rx_screen, ry_screen) for a gravity well in screen
         pixels: centre and per-axis screen-pixel projection of the radius.
-        rx_screen ≠ ry_screen because the editor's camera maps 1 world X unit
-        and 1 world Y unit to different pixel sizes (ASPECT)."""
+        The game's pull region is a pixel-square diamond — 2*|dx_world| +
+        |dy_world| < radius — so X reach is r/2 world units and Y reach is r
+        world units. The camera then applies its own world→screen aspect
+        on top, so rx_screen ≈ ry_screen for a true visual diamond."""
         cx_w, cy_w = obj["x"], obj["y"]
         cx, cy = self.camera.world_to_screen(cx_w, cy_w)
         r = obj.get("well_radius", 0)
-        rx_end, _ = self.camera.world_to_screen(cx_w + r, cy_w)
+        rx_end, _ = self.camera.world_to_screen(cx_w + r / 2.0, cy_w)
         _, ry_end = self.camera.world_to_screen(cx_w, cy_w + r)
         return cx, cy, rx_end - cx, ry_end - cy
 
@@ -1861,16 +1863,17 @@ class Editor:
 
     def _set_well_radius_from_screen(self, mx):
         """Inverse of _well_screen_geometry's X axis: convert mouse X into
-        world-coord radius for the selected well, clamped 0..127."""
+        world-coord radius for the selected well, clamped 0..127. The X
+        vertex sits at cx_w + r/2 (pixel-square diamond), so radius is twice
+        the world-X distance from the centre."""
         obj = self.level.objects[self.selected_object]
         cx_w = obj["x"]
         cx, _ = self.camera.world_to_screen(cx_w, 0)
-        # 1 world-X unit in screen pixels (right of cx). Use a unit step.
         unit_x, _ = self.camera.world_to_screen(cx_w + 1, 0)
         scale = unit_x - cx
         if scale <= 0:
             return
-        r = round((mx - cx) / scale)
+        r = round(2 * (mx - cx) / scale)
         obj["well_radius"] = max(0, min(127, r))
         self.level.dirty = True
 

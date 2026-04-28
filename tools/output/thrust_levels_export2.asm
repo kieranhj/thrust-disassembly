@@ -68,9 +68,9 @@
 \ ******************************************************************************
 
 .level_0_obj_pos_X
-        EQUB    $8F,$A0,$6E,$7C,$5B,$78
+        EQUB    $8F,$A0,$6E,$7C,$5B,$77
 .level_0_obj_pos_Y
-        EQUB    $BD,$AB,$B3,$BA,$AD,$82
+        EQUB    $BD,$AB,$B3,$BA,$AD,$7F
 .level_0_obj_pos_Y_EXT
         EQUB    $01,$01,$01,$01,$01,$01
 .level_0_obj_type

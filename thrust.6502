@@ -10789,11 +10789,40 @@ IF _GRAVITY_WELL
 
 \ Scratch for apply_gravity_wells_to_force.
 .well_radius_save     EQUB $00          ; current well's radius (1..127)
+.well_strength_save   EQUB $00          ; current well's signed strength
 .well_dx_signed       EQUB $00          ; signed dx = obj_x - midpoint_x (8-bit, X wraps)
 .well_dy_signed       EQUB $00          ; signed dy_lo from 16-bit subtract; reused as pull_signed scratch
 .well_abs_dx          EQUB $00
 .well_abs_dy          EQUB $00
 .well_pull            EQUB $00          ; reused: r → delta_r → signed pull magnitude
+
+\ Saved well world position (so the debris emitter can spawn relative to it
+\ even after the pull math has consumed obj_pos into well_dx/dy_signed).
+.well_obj_x_save      EQUB $00
+.well_obj_y_lo_save   EQUB $00
+.well_obj_y_hi_save   EQUB $00
+
+\ Scratch for well_emit_debris_particle.
+.well_emit_dir        EQUB $00
+.well_emit_offset_x   EQUB $00          ; signed perimeter X offset (world units, ~ -radius..+radius)
+.well_emit_offset_y   EQUB $00          ; signed perimeter Y offset
+.well_emit_slot       EQUB $00          ; saved particle slot index (X is clobbered by multiply_signed_8x8)
+
+\ Direction lookup for the 8-way Manhattan-diamond perimeter. Each entry is
+\ a Q0.7 signed factor. World X has twice the pixel resolution of world Y
+\ (1 world X = 4 BBC px wide, 1 world Y = 2 px rows), so the X factors are
+\ half the Y factors — that gives a diamond that's pixel-square rather than
+\ "stretched horizontally". Pairs with the 2*|dx|+|dy| radius test below.
+\ dir 0 = right vertex, increasing CCW around the diamond.
+.well_dir_dx_factor                              ; dir 0..7
+        EQUB    $3F, $1F, $00, $E1, $C1, $E1, $00, $1F
+.well_dir_dy_factor
+        EQUB    $00, $3F, $7F, $3F, $00, $C1, $81, $C1
+
+\ Constants. Lifetime is a power of 2 to make the velocity computation a shift.
+\ With lifetime 16 and offset = ±radius, peak speed = ±radius/16 world units/frame.
+WELL_DEBRIS_LIFETIME      = $10
+WELL_DEBRIS_SPAWN_MASK    = $01          ; emit one particle every 8 ticks per well
 
 \ ******************************************************************************
 \ * Function: apply_gravity_wells_to_force
@@ -10833,19 +10862,58 @@ IF _GRAVITY_WELL
     .well_radius_nonzero
         STA     well_radius_save
 
-        \\ Compute dy = obj_pos_Y - midpoint_ypos_INT as 16-bit signed; reject
-        \\ if outside -128..+127 (i.e. high byte != 0 sign-consistent with low).
-        SEC
+        \\ Save the well's absolute world position (X, Y_lo, Y_hi) and strength
+        \\ before the pull math consumes them. The debris emitter (always-on,
+        \\ even when the ship is outside the radius) needs absolute world
+        \\ coords; the pull math below works from the saved values too.
+    .well_load_obj_pos_x
+        LDA     level_0_obj_pos_X,X                       ; **SELF-MODIFIED CODE**
+        well_load_obj_pos_x_addr_LO = well_load_obj_pos_x+1
+        well_load_obj_pos_x_addr_HI = well_load_obj_pos_x+2
+        STA     well_obj_x_save
     .well_load_obj_pos_y
         LDA     level_0_obj_pos_Y,X                       ; **SELF-MODIFIED CODE**
         well_load_obj_pos_y_addr_LO = well_load_obj_pos_y+1
         well_load_obj_pos_y_addr_HI = well_load_obj_pos_y+2
-        SBC     midpoint_ypos_INT
-        STA     well_dy_signed                            ; tentative dy_lo
+        STA     well_obj_y_lo_save
     .well_load_obj_pos_y_ext
         LDA     level_0_obj_pos_Y_EXT,X                   ; **SELF-MODIFIED CODE**
         well_load_obj_pos_y_ext_addr_LO = well_load_obj_pos_y_ext+1
         well_load_obj_pos_y_ext_addr_HI = well_load_obj_pos_y_ext+2
+        STA     well_obj_y_hi_save
+    .well_load_strength
+        LDA     level_0_well_strength,X                   ; **SELF-MODIFIED CODE**
+        well_load_strength_addr_LO = well_load_strength+1
+        well_load_strength_addr_HI = well_load_strength+2
+        STA     well_strength_save
+
+        \\ Emit gate. apply_gravity_wells_to_force is itself only called on
+        \\ gravity ticks (level_tick_counter & $0F ∈ {0,3,5,8,B,D} — 6 of 16
+        \\ frames), which already rate-limits per-well emits. The earlier
+        \\ AND #$07 gate combined poorly with that restricted tick set: tick&7
+        \\ is only ever 0/3/5, so wells whose slot&7 wasn't 0/3/5 never emitted.
+        \\ Stagger by parity instead — adjacent slots fire on opposite gravity
+        \\ ticks. Runs whether the ship is in range or not (position marker).
+        LDA     level_tick_counter
+        EOR     current_object
+        AND     #$01
+        BNE     well_emit_skip
+        JSR     well_emit_debris_particle
+    .well_emit_skip
+
+        \\ Compute dy = (Y_hi:Y_lo) - midpoint_ypos as 16-bit signed; reject
+        \\ if outside -128..+127. midpoint_* is the centre of mass of the
+        \\ ship+pod system when tethered (and falls back to a ship-relative
+        \\ point otherwise), so pulling that point keeps tethered physics
+        \\ consistent. The visual offset between the particles (at obj_pos)
+        \\ and the ship's resting position is a consequence of this — the
+        \\ debris marks the well's actual world position, which is what
+        \\ matters for "where is the well?".
+        SEC
+        LDA     well_obj_y_lo_save
+        SBC     midpoint_ypos_INT
+        STA     well_dy_signed                            ; tentative dy_lo
+        LDA     well_obj_y_hi_save
         SBC     midpoint_ypos_INT_HI
         BEQ     well_dy_hi_zero
         CMP     #$FF
@@ -10863,12 +10931,9 @@ IF _GRAVITY_WELL
         JMP     well_loop_next                            ; dy_lo >= $80 → actual dy > 127
     .well_dy_in_range
 
-        \\ Compute dx = obj_pos_X - midpoint_xpos_INT (8-bit signed; X wraps).
+        \\ Compute dx = obj_x - midpoint_xpos_INT (8-bit signed; X wraps).
         SEC
-    .well_load_obj_pos_x
-        LDA     level_0_obj_pos_X,X                       ; **SELF-MODIFIED CODE**
-        well_load_obj_pos_x_addr_LO = well_load_obj_pos_x+1
-        well_load_obj_pos_x_addr_HI = well_load_obj_pos_x+2
+        LDA     well_obj_x_save
         SBC     midpoint_xpos_INT
         STA     well_dx_signed
 
@@ -10888,12 +10953,18 @@ IF _GRAVITY_WELL
     .well_dy_was_pos
         STA     well_abs_dy
 
-        \\ r = |dx| + |dy|; if r >= radius, no force.
-        CLC
+        \\ r = 2*|dx| + |dy|; if r >= radius, no force. The 2× on |dx|
+        \\ compensates for world X being twice the pixel scale of world Y,
+        \\ so the pull region is a pixel-square diamond rather than stretched
+        \\ horizontally. Matches the 0.5× X factor in well_dir_dx_factor.
         LDA     well_abs_dx
-        ADC     well_abs_dy
+        ASL     A
+        BCC     well_dx_doubled
+        JMP     well_loop_next                            ; 2*|dx| overflowed → out of range
+    .well_dx_doubled
+        ADC     well_abs_dy                               ; C=0 from ASL not branching
         BCC     well_sum_ok
-        JMP     well_loop_next                            ; |dx|+|dy| overflowed 8-bit → out of range
+        JMP     well_loop_next                            ; sum overflowed 8-bit → out of range
     .well_sum_ok
         CMP     well_radius_save
         BCC     well_in_radius
@@ -10907,10 +10978,7 @@ IF _GRAVITY_WELL
         STA     well_pull                                 ; well_pull = delta_r
 
         \\ Signed pull magnitude = high byte of (strength * delta_r).
-    .well_load_strength
-        LDA     level_0_well_strength,X                   ; **SELF-MODIFIED CODE**
-        well_load_strength_addr_LO = well_load_strength+1
-        well_load_strength_addr_HI = well_load_strength+2
+        LDA     well_strength_save
         STA     multiply_operand_a
         LDA     well_pull
         JSR     multiply_signed_8x8                       ; result_hi:result_lo = strength * delta_r
@@ -10975,6 +11043,139 @@ IF _GRAVITY_WELL
         INX
         JMP     well_loop
     .well_loop_done
+        RTS
+\\ }
+
+\ ******************************************************************************
+\ * Function: well_emit_debris_particle
+\ * Description: Spawn one PARTICLE_type_debris (non-lethal) at a random point
+\ *   on the well's Manhattan-radius perimeter, with velocity toward the centre
+\ *   sized so the particle reaches the centre as it expires. For repulsors
+\ *   (strength < 0) the velocity sign is flipped so debris flies outward from
+\ *   the perimeter instead.
+\ * Params: X = current_object, well_radius_save / well_strength_save /
+\ *         well_obj_{x,y_lo,y_hi}_save populated by the caller.
+\ * Returns: none. X is restored to current_object.
+\ * Clobbers: A, Y, multiply_* zp.
+\ ******************************************************************************
+.well_emit_debris_particle
+\\ {
+        \\ Random direction 0..7 around the diamond.
+        JSR     rnd
+        AND     #$07
+        STA     well_emit_dir
+        TAY
+
+        \\ offset_x = (factor_x[dir] * radius) >> 7. Treat factor as Q0.7 signed
+        \\ and radius as Q7.0 unsigned; the 16-bit product is Q7.7. Shift left 1
+        \\ then take the high byte to get the integer Q7.0 offset (signed).
+        LDA     well_dir_dx_factor,Y
+        STA     multiply_operand_a
+        LDA     well_radius_save
+        JSR     multiply_signed_8x8
+        ASL     multiply_result_lo
+        ROL     multiply_result_hi
+        LDA     multiply_result_hi
+        STA     well_emit_offset_x
+
+        LDY     well_emit_dir
+        LDA     well_dir_dy_factor,Y
+        STA     multiply_operand_a
+        LDA     well_radius_save
+        JSR     multiply_signed_8x8
+        ASL     multiply_result_lo
+        ROL     multiply_result_hi
+        LDA     multiply_result_hi
+        STA     well_emit_offset_y
+
+        \\ Get a free particle slot. Y on return = slot. Save it because the
+        \\ velocity multiplies below clobber X (multiply_signed_8x8 uses LDX #$08).
+        JSR     particle_return_free_slot_in_Y
+        STY     well_emit_slot
+        TYA
+        TAX                                               ; X = particle slot
+
+        \\ Spawn position X = obj_x + offset_x (8-bit, X wraps mod 256).
+        LDA     well_obj_x_save
+        CLC
+        ADC     well_emit_offset_x
+        STA     particles_xpos_INT,X
+        LDA     #$00
+        STA     particles_xpos_FRAC,X
+
+        \\ Spawn position Y = (obj_y_hi:obj_y_lo) + sign_extended(offset_y).
+        CLC
+        LDA     well_obj_y_lo_save
+        ADC     well_emit_offset_y
+        STA     particles_ypos_INT,X
+        LDA     well_emit_offset_y
+        BMI     well_emit_y_signext_neg
+        LDA     #$00
+        JMP     well_emit_y_signext_done
+    .well_emit_y_signext_neg
+        LDA     #$FF
+    .well_emit_y_signext_done
+        ADC     well_obj_y_hi_save
+        STA     particles_ypos_INT_HI,X
+        LDA     #$00
+        STA     particles_ypos_FRAC,X
+
+        \\ Velocity: pull → -offset/16 (toward centre); push (strength < 0) →
+        \\ +offset/16 (outward from perimeter). Compute as multiply by ±16 to
+        \\ get a 16-bit signed Q8.8 directly into (vel_INT:vel_FRAC).
+        \\ multiply_signed_8x8 clobbers X, so reload from well_emit_slot before
+        \\ each store.
+        LDA     well_strength_save
+        BMI     well_emit_repulsor_x
+
+        \\ Pull: vel_x = -offset_x * 16.
+        LDA     well_emit_offset_x
+        EOR     #$FF
+        CLC
+        ADC     #$01
+        JMP     well_emit_vel_x_mul
+    .well_emit_repulsor_x
+        \\ Push: vel_x = +offset_x * 16.
+        LDA     well_emit_offset_x
+    .well_emit_vel_x_mul
+        STA     multiply_operand_a
+        LDA     #$10
+        JSR     multiply_signed_8x8
+        LDX     well_emit_slot
+        LDA     multiply_result_lo
+        STA     particles_dx_FRAC,X
+        LDA     multiply_result_hi
+        STA     particles_dx_INT,X
+
+        LDA     well_strength_save
+        BMI     well_emit_repulsor_y
+        LDA     well_emit_offset_y
+        EOR     #$FF
+        CLC
+        ADC     #$01
+        JMP     well_emit_vel_y_mul
+    .well_emit_repulsor_y
+        LDA     well_emit_offset_y
+    .well_emit_vel_y_mul
+        STA     multiply_operand_a
+        LDA     #$10
+        JSR     multiply_signed_8x8
+        LDX     well_emit_slot
+        LDA     multiply_result_lo
+        STA     particles_dy_FRAC,X
+        LDA     multiply_result_hi
+        STA     particles_dy_INT,X
+
+        \\ Type and lifetime. Preserve PARTICLE_flag bit per existing convention.
+        LDA     #PARTICLE_type_debris
+        STA     particles_type,X
+        LDA     particles_lifetime,X
+        AND     #PARTICLE_flag
+        ORA     #WELL_DEBRIS_LIFETIME
+        STA     particles_lifetime,X
+
+        \\ Restore X = current_object so the caller's loop indexing still works.
+        LDX     current_object
         RTS
 \\ }
 ENDIF
