@@ -60,6 +60,7 @@ Object type `$0D`. While the ship's midpoint is inside the well's Manhattan radi
 - **Sprite:** the engine currently early-exits to `next_object` for type `$0D` to avoid plotting a non-existent sprite. A real sprite would let the well show up in-game (subtle field shimmer, swirl, etc.) and remove the early-exit.
 - **Centre-case symmetry:** at exact `dx == dy == 0` the per-axis sign multiplication yields `+pull` on both axes (BPL treats 0 as positive). Minor visual artefact only; gravity drags the ship out anyway.
 - **Per-axis half-scaling:** v1 applies the full pull to each axis. At a 45° corner this is √2 stronger than on-axis — flip to per-axis `pull/2` if it feels too aggressive in play.
+- **Apply pull to thrust particles too.** Currently the well pulls the ship and emits its own debris ring; routing the same per-frame force into active `PARTICLE_type_debris` particles spawned by the ship's exhaust would let the player *see* the field bend their trail as a visual cue, without needing a sprite. Slot naturally next to the existing well walker.
 
 ### Gravity field objects (other variants)
 
@@ -83,6 +84,15 @@ Implemented as types `$09..$0C` (four orientations), replacing the old heavy-tur
 - No telegraph / warning before the on-phase. Rely on the cycle being long enough that the player can read the rhythm.
 - The Bresenham line plotter is generic; an optimised line drawing routine will be needed later on as the laser count grows (per-laser draw + erase XORs every frame). Worth profiling once a level uses several lasers at once.
 - Shield interaction: hasn't been investigated. Currently the beam destroys the player even with shield held — same path as terrain pixels do.
+
+**Future ideas:**
+- **Shootable behaviour toggles.** Let the player change the world by shooting buttons or trigger objects: a button that toggles a laser on/off; flips it from horizontal to vertical; swaps duty/period to a different timing pattern. Mechanism could re-use the existing door-switch types ($07/$08), routing their toggle into `gun_aim` of the target laser instead of (or in addition to) terrain. Designer-friendly because each switch already has a destination object reference. Adds expressive level design without any new physics — the laser tick path doesn't change, only its config bytes.
+- **Rotating lasers.** Same idea as rotating gun emplacements but with the beam: increment the beam endpoint's `(dx, dy)` each frame around a circle. The expensive part is the per-frame Bresenham erase + re-draw, which a custom line-draw routine (below) makes feasible. Probably budget-constrained to one or two rotators per level until profiled.
+
+**Custom directional line drawing routine.** Generalise the laser draw path: given a start pixel and direction `(dx, dy)`, walk along the ray and plot pixels until either the screen edge or an existing non-background pixel (landscape, sprite) is hit. Acts as both renderer and collision query. Uses:
+- Lasers terminate naturally at terrain instead of clipping to a fixed length, so a beam through a tunnel mouth lights up only the open part.
+- A "feeler" for AI or homing rockets — same routine, returning the hit point instead of plotting.
+- Cheaper than full Bresenham draw + separate collision because the early-out on first non-background pixel does both jobs in one walk. Would replace the current generic `draw_line` for laser beams once it's written.
 
 ### Landing bubbles
 
