@@ -528,7 +528,7 @@
 \ ******************************************************************************
 \ ******************************************************************************
 
-INCLUDE "mode7_instructions.asm"
+INCLUDE "thrust1/mode7_instructions.asm"
 IF _SWRAM_BUILD
 \\ Safety invariant: status_bar_bytes must land >= SCREEN_BASE_ADDR.
 \\ game_entry_relocated does a forward copy (status_bar_bytes -> SCREEN_BASE_ADDR,
@@ -544,7 +544,7 @@ ELSE
 PRINT "STATUS BAR PADDING: app_init.asm RAN PAST SCREEN_BASE_ADDR BY ", ~(P% - SCREEN_BASE_ADDR), " BYTES (forward-copy still safe)"
 ENDIF
 ENDIF
-INCLUDE "status_bar_bytes.asm"
+INCLUDE "thrust1/status_bar_bytes.asm"
 
 \ ******************************************************************************
 \ ******************************************************************************

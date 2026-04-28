@@ -6203,7 +6203,7 @@ ENDIF
 }
 
 IF _SWRAM_BUILD==FALSE
-INCLUDE "level_data.asm"
+INCLUDE "thrust1/level_data.asm"
 ENDIF
 
 \ ******************************************************************************
@@ -8618,7 +8618,7 @@ ENDIF
 \ ******************************************************************************
 
 IF _SWRAM_BUILD=FALSE
-INCLUDE "obj_sprite_data.asm"
+INCLUDE "thrust1/obj_sprite_data.asm"
 ENDIF ; _SWRAM_BUILD=FALSE
 
 \ ******************************************************************************
