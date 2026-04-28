@@ -4,20 +4,76 @@ Working title: **Thrust Next** — essentially Thrust meets Exile.
 
 ---
 
-## Particle effects
+## Index
 
-### ~~Thrust particles from ship exhaust~~ — IMPLEMENTED (`_THRUST_PARTICLES`)
+Open work items, one line each. Full details in the sections below; completed work in [Completed](#completed) at the bottom.
 
-Implemented behind the `_THRUST_PARTICLES` build flag (SWRAM builds). Spawns debris particles at the ship exhaust point using angle-derived velocity with random spread.
+### Enemies, weapons & hazards
+- [New enemy bullet types](#new-enemy-bullet-types) — heavy / explosive / laser / rocket / guided / EMP variants on the existing particle system
+- [Mini power nodes](#mini-power-nodes) — shootable destructibles that punch authored holes in terrain
+- [Landing bubbles](#landing-bubbles) — soft capture points that hold the ship and recharge it
+- [Fans / turbines](#fans--turbines) — directional force emitters over rectangular regions
+- [Rotating gun emplacements](#rotating-gun-emplacements) — per-frame angle sweep, fires when aim crosses player
+- [Bobbing mines](#bobbing-mines) — passive sine-wave hazards with destroy-on-contact
+- [Hot areas](#hot-areas) — heat accumulation degrades flight; offset by a heatsink upgrade
+- [Water as a general element](#water-as-a-general-element) — submerged regions with modified physics
+
+### Gravity wells — open follow-ups
+- [Well sprite](#gravity-well-follow-ups) — replace the type $0D early-exit with a real non-lethal sprite
+- [Centre-case symmetry fix](#gravity-well-follow-ups) — handle `dx == dy == 0` cleanly
+- [Per-axis half-scaling](#gravity-well-follow-ups) — drop pull/2 at 45° so corner pull isn't √2 stronger
+- [Apply pull to thrust particles](#gravity-well-follow-ups) — ship's exhaust bends through the field as a cue
+
+### Gravity field variants
+- [Gravity flipper / null / paired / bullet-affecting fields](#gravity-field-objects-other-variants) — siblings of the implemented well
+
+### Timed lasers — open follow-ups
+- [Beam telegraph](#timed-lasers-follow-ups) — visual warning before the on-phase
+- [Optimised line draw](#timed-lasers-follow-ups) — Bresenham erase + redraw per laser per frame is generic
+- [Shield interaction](#timed-lasers-follow-ups) — beam currently kills through shield; investigate
+- [Shootable behaviour toggles](#timed-lasers-follow-ups) — switch retargets a laser's `gun_aim` (see switch system)
+- [Rotating lasers](#timed-lasers-follow-ups) — per-frame `(dx, dy)` sweep; depends on faster line draw
+
+### Engine / editor
+- [Custom directional line drawing routine](#custom-directional-line-drawing-routine) — walk-until-hit; renderer + collision query in one
+- [Configurable switches and triggers](#configurable-switches-and-triggers) — per-level wiring tables and editor UX for shoot-to-toggle puzzles
+
+### Ship upgrades
+- [Upgrade system](#ship-upgrades) — nine candidate upgrades feeding the Metroidvania reward loop
+
+### Levels & worldbuilding
+- [More than 6 levels / level packs](#more-than-6-levels--level-packs) — bake more or stream from disc per gravity cycle
+- [Metroidvania structure](#metroidvania-structure) — one large interconnected map with gated upgrades
+- [Escape the flooding mine](#escape-the-flooding-mine) — race upward against a rising water line
+- [Puzzle-oriented levels](#puzzle-oriented-levels) — compose mechanics into self-contained logic puzzles
+- [Multiple / split landscape paths](#multiple--split-paths) — replace the two-wall corridor model
+- [Standalone landscape segments](#standalone-landscape-segments) — floating islands / isolated obstacles
+
+### Mission types
+- [Land safely / collect-and-deliver / briefings / popups](#new-mission-types) — table of new mission requirements
+- [Rescue NPCs](#rescue-npcs) — Choplifter-style pickups paying into the upgrade economy
+- [Keys and doors](#keys-and-doors) — full key/door system extending the existing $07/$08 switches
+
+### Stretch goals
+- [Enemy Thrust ship](#enemy-thrust-ship) — AI-piloted ship sharing the player's physics model
+
+### Engine constraints (acknowledged, not currently planned)
+- [Pod must be object index 0](#pod-must-be-object-index-0)
+- [Support for multiple pods per level](#support-for-multiple-pods-per-level)
+- [First 255 terrain rows are fixed](#first-255-terrain-rows-are-fixed)
+- [32 shared particle slots](#shared-particle-slots)
+- [Expanding X axis to 16 bits](#expanding-x-axis-to-16-bits) — currently infeasible
+- [Variable wall slopes](#variable-wall-slopes) — currently infeasible
 
 ---
 
-## New enemy types
+## Enemies, weapons & hazards
 
-### Current enemies
+### Current enemies (for reference)
 
 - **Gun emplacements** (types `$00..$03`, all builds). Fire probabilistically using the shared particle pool with type `PARTICLE_type_hostile_bullet` ($03). Firing angle is `gun_base_angle` (3 bits from `gun_aim`) plus random spread masked by `gun_angle_spread_mask` (2 bits from `gun_aim`).
-- **Timed laser turrets** (types `$09..$0C`, SWRAM build, behind `_TIMED_LASER`). Four orientations like the gun emplacements; the four heavy-turret-era sprites are reused. Each turret emits a fixed-direction beam (60 BBC px × 30 rows, ratio 2:1) on a periodic timer driven from `level_tick_counter`. The `gun_aim` byte is repurposed: low nibble = phase index (× 8 frames), high nibble = duty index (× 4 + 4 frames). Period stays hardcoded at 128 frames. The beam is drawn via the existing Bresenham `draw_line` in the hostile-bullet pixel byte; ship-vs-pixel collision destroys the player when the beam is on. See `update_all_laser_beams` and `draw_laser_beam_at_obj_screen` in `thrust.6502`.
+- **Timed laser turrets** (types `$09..$0C`, SWRAM). See [Completed](#completed) for the implementation summary and [follow-ups](#timed-lasers-follow-ups) below.
+- **Gravity well** (type `$0D`, SWRAM). See [Completed](#completed) and [follow-ups](#gravity-well-follow-ups).
 
 ### New enemy bullet types
 
@@ -38,61 +94,11 @@ The particle system's `particles_type` field ($07A0) could be extended with new 
 - New bullet types would need new `particles_type` values and corresponding collision branches
 - Guided rockets need per-frame angle updates, adding CPU cost proportional to active guided missiles
 
----
-
-## Environmental objects and hazards
-
 ### Mini power nodes
 
 Small destructible objects that, when shot, explode and take out a pre-defined chunk of the landscape around them. Not landscape deformation — each node has an authored "hole shape" that gets blitted into the terrain wall buffers when triggered. Could open up hidden passages, create shortcuts, or remove terrain blocking a mission objective.
 
 **Implementation notes:** the hole shape could be stored as a list of (row, new-left, new-right) triples patched into `terrain_left_wall`/`terrain_right_wall` on trigger. Visual effect reuses the existing explosion particle burst.
-
-### ~~Gravity well~~ — IMPLEMENTED (`_GRAVITY_WELL`, SWRAM build)
-
-Object type `$0D`. While the ship's midpoint is inside the well's Manhattan radius, a linear-ramp pull toward the centre is added to `force_vector{x,y}` once per gravity tick. Hooked from `apply_gravity_wells_to_force` after the constant-gravity add at `thrust.6502:4096`. The walker mirrors `update_all_laser_beams` — SMC-patched LDAs over `level_obj_type` / `obj_pos_X/Y/Y_EXT` plus the per-instance `level_N_well_radius` / `level_N_well_strength` arrays.
-
-**Per-instance config:** `radius` (unsigned 0..127, 0 = inactive) and `strength` (signed Q0.7-ish). Pull magnitude is the high byte of `strength * (radius − r)` where `r = |dx| + |dy|`; per-axis component is `sign(dx) * pull` and `sign(dy) * pull`. No divides; one signed 8×8 multiply per active well per gravity tick.
-
-**Editor:** `$0D` in the placement menu. The well draws as a centre dot plus a Manhattan-radius diamond (blue for pull, red for repulsor). Drag the right vertex to resize; `[`/`]` nudge strength ±1 (shift = ±10).
-
-**Open follow-ups:**
-- **Sprite:** the engine currently early-exits to `next_object` for type `$0D` to avoid plotting a non-existent sprite. A real sprite would let the well show up in-game (subtle field shimmer, swirl, etc.) and remove the early-exit.
-- **Centre-case symmetry:** at exact `dx == dy == 0` the per-axis sign multiplication yields `+pull` on both axes (BPL treats 0 as positive). Minor visual artefact only; gravity drags the ship out anyway.
-- **Per-axis half-scaling:** v1 applies the full pull to each axis. At a 45° corner this is √2 stronger than on-axis — flip to per-axis `pull/2` if it feels too aggressive in play.
-- **Apply pull to thrust particles too.** Currently the well pulls the ship and emits its own debris ring; routing the same per-frame force into active `PARTICLE_type_debris` particles spawned by the ship's exhaust would let the player *see* the field bend their trail as a visual cue, without needing a sprite. Slot naturally next to the existing well walker.
-
-### Gravity field objects (other variants)
-
-Objects that modify gravity within a local radius. The gravity-well variant is implemented; these are still ideas:
-- **Gravity flipper:** inverts the Y component of gravity while the ship is inside the radius.
-- **Gravity null:** zeroes gravity inside the radius (fly like in open space). Could share the well's data layout — reserve `strength == 0` to mean "null mode" or use a separate flag bit. Implementation needs the loop to run *before* `add_gravity_to_force_vector` so it can suppress the gravity add, instead of the current "add on top".
-- **Paired generators/repulsors acting on ship *and* pod:** the pod has its own physics state (`pod_xpos`, `pod_ypos`, velocity) — extending the field check to the pod as well means the tethered system can be yanked around by the environment, not just the ship. Since the tether is a rigid rod, asymmetric forces on ship vs pod create interesting angular dynamics.
-- **Fields that act on bullets:** apply the same force to active particles of type `PARTICLE_type_player_bullet` and/or hostile bullet. Bending a player bullet around a corner to hit a turret tucked in an alcove opens up real puzzle geometry. Costs more per frame (force applied to every bullet inside every field) but the bullet count is bounded by the 32-slot particle pool.
-
-**Implementation notes:** the existing gravity constant is applied per frame in the physics update. A check against object position/radius could substitute a modified gravity value before integration. Multiple overlapping fields would need a priority rule. Bullet-affecting fields slot naturally into `particles_update_and_draw` (line 5799) — per-particle force application already exists for gravity.
-
-### ~~Timed laser turrets~~ — IMPLEMENTED (`_TIMED_LASER`, SWRAM build)
-
-Implemented as types `$09..$0C` (four orientations), replacing the old heavy-turret slot. The beam is XOR-drawn via the existing Bresenham `draw_line`, so erase + redraw uses the same pixels — no per-laser collision check, the existing ship-vs-pixel hit detection picks the beam up automatically. Per-laser state: bit 2 of `level_obj_flags` (`OBJ_flag_laser_beam_drawn`) plus a cached `obj_laser_prev_screen_x/y` so scroll, destruction, and the timer-off transition all retire the previous draw cleanly.
-
-**Per-instance config (via `gun_aim` byte):** low nibble → phase index (× 8 frames), high nibble → duty index (× 4 + 4 frames). Period fixed at 128 frames. Range is enough for "fast strobe" through "slow on/off"; the editor exposes `[`/`]` for phase and `,`/`.` for duty.
-
-**Per-instance beam endpoint:** `(dx, dy)` stored per laser in `level_N_laser_dx_pixels` / `level_N_laser_dy_rows` (signed bytes). Arbitrary slope; clipping picks the first screen edge to be hit. Editor lets the designer drag the beam tip; `\` resets to the orientation-type default.
-
-**Deferred / known caveats:**
-- No telegraph / warning before the on-phase. Rely on the cycle being long enough that the player can read the rhythm.
-- The Bresenham line plotter is generic; an optimised line drawing routine will be needed later on as the laser count grows (per-laser draw + erase XORs every frame). Worth profiling once a level uses several lasers at once.
-- Shield interaction: hasn't been investigated. Currently the beam destroys the player even with shield held — same path as terrain pixels do.
-
-**Future ideas:**
-- **Shootable behaviour toggles.** Let the player change a laser's config by shooting a switch object — toggle on/off, swap horizontal/vertical orientation, change duty/period. The existing door-switch object types ($07/$08) become the carrier; their action targets `gun_aim` on the wired laser instead of (or as well as) terrain. The general design — per-switch wiring table, action codes, editor UX — is fleshed out in **Configurable switches and triggers** below.
-- **Rotating lasers.** Same idea as rotating gun emplacements but with the beam: increment the beam endpoint's `(dx, dy)` each frame around a circle. The expensive part is the per-frame Bresenham erase + re-draw, which a custom line-draw routine (below) makes feasible. Probably budget-constrained to one or two rotators per level until profiled.
-
-**Custom directional line drawing routine.** Generalise the laser draw path: given a start pixel and direction `(dx, dy)`, walk along the ray and plot pixels until either the screen edge or an existing non-background pixel (landscape, sprite) is hit. Acts as both renderer and collision query. Uses:
-- Lasers terminate naturally at terrain instead of clipping to a fixed length, so a beam through a tunnel mouth lights up only the open part.
-- A "feeler" for AI or homing rockets — same routine, returning the hit point instead of plotting.
-- Cheaper than full Bresenham draw + separate collision because the early-out on first non-background pixel does both jobs in one walk. Would replace the current generic `draw_line` for laser beams once it's written.
 
 ### Landing bubbles
 
@@ -126,13 +132,57 @@ Regions (near reactors, lava, engines) where the ship accumulates heat over time
 
 ### Water as a general element
 
-Distinct from the flooding-mine scenario above: water as a static (or slowly-animated) environmental feature that the ship can enter, not just avoid. Possibilities:
+Distinct from the flooding-mine scenario below: water as a static (or slowly-animated) environmental feature that the ship can enter, not just avoid. Possibilities:
 - **Submerged regions** with modified physics: reduced gravity, heavy damping on velocity (drag), thrust still works but is weaker
 - **Water as terrain hazard:** instant destruction on contact (simple version, matches the flooding mine)
 - **Floating objects:** pods or pickups that float on the water surface
 - **Bubbles released by thrust** when submerged, using the existing particle pool
 
 **Implementation notes:** rendering-wise, the timer-based palette switch described in the flooding-mine section works for a static water line too. Physics changes would branch on `ship_ypos > water_line_y` to swap in alternate gravity/damping constants.
+
+---
+
+## Gravity well follow-ups
+
+The well object (type `$0D`) is implemented — see [Completed](#completed). Open items:
+
+- **Sprite:** the engine currently early-exits to `next_object` for type `$0D` to avoid plotting a non-existent sprite. A real sprite would let the well show up in-game (subtle field shimmer, swirl, etc.) and remove the early-exit.
+- **Centre-case symmetry:** at exact `dx == dy == 0` the per-axis sign multiplication yields `+pull` on both axes (BPL treats 0 as positive). Minor visual artefact only; gravity drags the ship out anyway.
+- **Per-axis half-scaling:** v1 applies the full pull to each axis. At a 45° corner this is √2 stronger than on-axis — flip to per-axis `pull/2` if it feels too aggressive in play.
+- **Apply pull to thrust particles too.** Currently the well pulls the ship and emits its own debris ring; routing the same per-frame force into active `PARTICLE_type_debris` particles spawned by the ship's exhaust would let the player *see* the field bend their trail as a visual cue, without needing a sprite. Slot naturally next to the existing well walker.
+
+### Gravity field objects (other variants)
+
+Siblings of the implemented well, sharing the same data layout:
+
+- **Gravity flipper:** inverts the Y component of gravity while the ship is inside the radius.
+- **Gravity null:** zeroes gravity inside the radius (fly like in open space). Could share the well's data layout — reserve `strength == 0` to mean "null mode" or use a separate flag bit. Implementation needs the loop to run *before* `add_gravity_to_force_vector` so it can suppress the gravity add, instead of the current "add on top".
+- **Paired generators/repulsors acting on ship *and* pod:** the pod has its own physics state (`pod_xpos`, `pod_ypos`, velocity) — extending the field check to the pod as well means the tethered system can be yanked around by the environment, not just the ship. Since the tether is a rigid rod, asymmetric forces on ship vs pod create interesting angular dynamics.
+- **Fields that act on bullets:** apply the same force to active particles of type `PARTICLE_type_player_bullet` and/or hostile bullet. Bending a player bullet around a corner to hit a turret tucked in an alcove opens up real puzzle geometry. Costs more per frame (force applied to every bullet inside every field) but the bullet count is bounded by the 32-slot particle pool.
+
+**Implementation notes:** the existing gravity constant is applied per frame in the physics update. A check against object position/radius could substitute a modified gravity value before integration. Multiple overlapping fields would need a priority rule. Bullet-affecting fields slot naturally into `particles_update_and_draw` (line 5799) — per-particle force application already exists for gravity.
+
+---
+
+## Timed lasers follow-ups
+
+Timed laser turrets (types `$09..$0C`) are implemented — see [Completed](#completed). Open items:
+
+- **No telegraph / warning before the on-phase.** Rely on the cycle being long enough that the player can read the rhythm.
+- **Optimised line draw.** The Bresenham line plotter is generic; a faster routine will be needed as the laser count grows (per-laser draw + erase XORs every frame). Worth profiling once a level uses several lasers at once. See [custom directional line drawing routine](#custom-directional-line-drawing-routine).
+- **Shield interaction.** Hasn't been investigated. Currently the beam destroys the player even with shield held — same path as terrain pixels do.
+- **Shootable behaviour toggles.** Let the player change a laser's config by shooting a switch object — toggle on/off, swap horizontal/vertical orientation, change duty/period. The existing door-switch object types ($07/$08) become the carrier; their action targets `gun_aim` on the wired laser instead of (or as well as) terrain. The general design — per-switch wiring table, action codes, editor UX — is in [Configurable switches and triggers](#configurable-switches-and-triggers).
+- **Rotating lasers.** Same idea as rotating gun emplacements but with the beam: increment the beam endpoint's `(dx, dy)` each frame around a circle. The expensive part is the per-frame Bresenham erase + re-draw, which a custom line-draw routine makes feasible. Probably budget-constrained to one or two rotators per level until profiled.
+
+---
+
+## Custom directional line drawing routine
+
+Generalise the laser draw path: given a start pixel and direction `(dx, dy)`, walk along the ray and plot pixels until either the screen edge or an existing non-background pixel (landscape, sprite) is hit. Acts as both renderer and collision query. Uses:
+
+- Lasers terminate naturally at terrain instead of clipping to a fixed length, so a beam through a tunnel mouth lights up only the open part.
+- A "feeler" for AI or homing rockets — same routine, returning the hit point instead of plotting.
+- Cheaper than full Bresenham draw + separate collision because the early-out on first non-background pixel does both jobs in one walk. Would replace the current generic `draw_line` for laser beams once it's written.
 
 ---
 
@@ -229,7 +279,7 @@ This mirrors how `_TIMED_LASER` and `_GRAVITY_WELL` were introduced.
 
 ## Ship upgrades
 
-An upgrade system feeds directly into the Metroidvania structure — and with rescue NPCs (see Mission types) acting as the currency, upgrades become the reward loop. Candidates:
+An upgrade system feeds directly into the Metroidvania structure — and with rescue NPCs (see [Rescue NPCs](#rescue-npcs)) acting as the currency, upgrades become the reward loop. Candidates:
 
 | Upgrade | Effect | Implementation notes |
 |---------|--------|---------------------|
@@ -240,16 +290,16 @@ An upgrade system feeds directly into the Metroidvania structure — and with re
 | Improved handling | Faster rotation, finer aim increments | Scale the rotation delta applied per frame by the upgrade factor |
 | Docking computer | Auto-hover mode: engine automatically applies gravity-cancelling thrust | When enabled, substitute a computed thrust value that zeroes net Y force; drains fuel faster than idle |
 | Bigger fuel tank | Higher max fuel, longer flight time | Raise the fuel cap; no other physics change |
-| Heatsink | Extends safe time in hot areas (see Environmental objects) | Scale `ship_heat` accumulation rate down |
+| Heatsink | Extends safe time in hot areas (see [Hot areas](#hot-areas)) | Scale `ship_heat` accumulation rate down |
 | Tractor range / strength | Longer tether, faster pod slew, or tolerates more angle stress | Adjust tether constants; the physics already reads these as values |
 
 Upgrades could be persistent across a run (Metroidvania) or per-level purchases at a shop screen between levels.
 
 ---
 
-## Larger levels
+## Levels & worldbuilding
 
-### Current limits
+### Current limits (for reference)
 
 - **Y axis:** Q16.8 format supports worlds up to 65535 rows deep. Existing levels use ~700-1500 rows. No hard limit here.
 - **X axis:** 8-bit world X (0-255), wrapping at ~$B8-$DC. The visible viewport is 72 columns. World is ~184 columns wide.
@@ -257,7 +307,7 @@ Upgrades could be persistent across a run (Metroidvania) or per-level purchases 
 - **Wall buffers:** 256-byte circular buffers. Only 73 rows are visible at once, so 256 entries provide comfortable margin. Not a practical limit.
 - **Object count:** terminated by $FF sentinel in the type array. No explicit limit, but all objects are checked every frame for visibility/collision, so very large counts would impact performance.
 
-**Practical approach:** levels can be made significantly deeper without engine changes. Wider levels would require extending the X coordinate to 16 bits, which would touch many parts of the codebase.
+Levels can be made significantly deeper without engine changes. Wider levels would require extending the X coordinate to 16 bits, which is currently infeasible — see [engine constraints](#expanding-x-axis-to-16-bits).
 
 ### More than 6 levels / level packs
 
@@ -272,18 +322,6 @@ The game ships with 6 levels baked into `level_data.6502` (`terrain_left_wall_co
 - Disc access between levels is noticeable but acceptable (Thrust already loads from disc at boot)
 - Opens the door to user-authored level packs via the level editor's export — just drop a new pack file onto the disc image
 - Save-game support (current level number + pack identifier) becomes more important since players won't grind through all content in one sitting
-
-### ~~Expand X axis to 16 bits~~ — CURRENTLY INFEASIBLE
-
-Widening the world X coordinate from 8 to 16 bits would touch the physics integration, `landscape_draw` world-to-screen conversion, terrain wall decoder, X wrap logic, object visibility checks, and every ZP variable and lookup derived from `window_xpos_INT` / `ship_xpos_INT`. The cycle budget is already tight, and adding a high byte to every per-frame X computation would push multiple hot paths (landscape_draw, particles, object iteration) over frame. Parked for now — revisit only if a specific level design genuinely needs a world wider than 256 columns, and budget a significant refactor.
-
-### ~~Disabling X wrap underground (`_NO_WRAP_UNDERGROUND`)~~ — DONE (behind feature flag)
-
-A per-level Y threshold can skip the X wrap logic when the player is below a configurable depth. The build flag, ZP variables, per-level data tables, level editor support (draggable no-wrap line), and a simple skip check at `check_x_wrap` are implemented. Currently works correctly for the right-hand wrap (forward) but **not the left-hand wrap** — when the player's X position reaches <= ~$18, the landscape wall lookup goes wrong and the right wall is drawn filling the screen with terrain, which destroys the player. The root cause is likely the `landscape_draw` world-to-screen subtraction or terrain wall array indexing breaking down when `window_xpos_INT` is near zero. The right side works because the window position stays in a valid range for the subtraction. Needs further investigation — may require rethinking how `landscape_draw` handles low window X values, or moving to 16-bit world X first. Flag is left `FALSE` for now.
-
----
-
-## Gameplay / level concepts
 
 ### Metroidvania structure
 
@@ -305,7 +343,6 @@ Start at the bottom of a deep vertical mine and race upward. A rising water leve
 **Water rendering:** two approaches:
 
 1. **Timer-based palette switch (Exile style):** set up a raster interrupt that fires at the water line's screen position. Below the interrupt, swap the palette so all colours shift to blue/dark variants. Cheap in CPU — just a palette write in the IRQ handler. The water line advances by moving the timer trigger point up by a few scanlines each frame. Limitation: only works for a horizontal water line, no waves or splashing.
-
 2. **Software rendering:** EOR-draw a horizontal band of colour across the screen below the water line. Since the water rises slowly (a few rows per frame), only the newly-flooded rows need drawing each frame — similar to how the terrain delta rendering works. More flexible (could add wave effects at the surface) but costs more CPU.
 
 **Gameplay mechanics:**
@@ -327,17 +364,10 @@ Levels designed as self-contained logic puzzles rather than pure dexterity chall
 
 Each level becomes a small "what order do I do this in" problem rather than "how fast can I fly through." Fits well with the Metroidvania structure — optional puzzle rooms gate extra upgrades.
 
----
-
-## Advanced landscape features
-
-### Current architecture
-
-The terrain is fundamentally a corridor defined by two walls (left X and right X per Y row). The RLE format encodes each wall as a series of (count, x-increment) segments. The renderer draws exactly two wall edges per scanline using EOR delta plotting.
-
 ### Multiple / split paths
 
-Would require replacing the single left/right wall model. Options:
+The terrain is fundamentally a corridor defined by two walls (left X and right X per Y row). The RLE format encodes each wall as a series of (count, x-increment) segments. The renderer draws exactly two wall edges per scanline using EOR delta plotting. Multiple paths would require replacing the single left/right wall model. Options:
+
 - **Segment list per scanline:** store multiple (left, right) pairs per Y row. The renderer would iterate through segments instead of reading two fixed values. The RLE format would need to encode segment starts/ends.
 - **Tile map:** replace the wall system entirely with a character-based tile map. Simpler data format but loses the smooth diagonal walls and would need a completely new renderer.
 
@@ -347,10 +377,6 @@ Floating islands, pillars, or isolated walls cannot be represented in the curren
 - A separate "obstacle" layer rendered after the main walls
 - Each obstacle defined as a rectangular or polygon region
 - Collision detection against obstacle bounds in addition to wall checks at lines 5871-5874
-
-### ~~Variable wall slopes~~ — CURRENTLY INFEASIBLE
-
-Currently walls move by 0 or 1 column per scanline (the increment is applied every row). Steeper slopes are possible (increment > 1 per row), but shallow slopes (< 1 column per row) would require fractional increments. The 8-bit increment already supports this via unsigned wrapping — a value like $80 moves half a column per row on average, but the discrete steps would look jagged. True sub-pixel slopes would need a fixed-point accumulator in the RLE decoder, which changes the format and the hot-path decoder. Not worth it without a concrete design need.
 
 ---
 
@@ -381,9 +407,12 @@ Little characters scattered around the level — civilians, stranded miners, sur
 ### Keys and doors
 
 Door switches (types $07 and $08) already exist in the object system. The current implementation likely toggles a terrain section. Extending this to a full key/door system would need:
+
 - Key objects that disappear when the ship touches them, setting a flag
 - Door objects that check the flag and open/close terrain sections
 - Visual feedback (door animation, key collection effect)
+
+See also [Configurable switches and triggers](#configurable-switches-and-triggers), which subsumes much of this.
 
 ---
 
@@ -392,6 +421,7 @@ Door switches (types $07 and $08) already exist in the object system. The curren
 ### Enemy Thrust ship
 
 An AI-controlled ship using the same physics model as the player. Would need:
+
 - Separate state variables for position, velocity, angle, thrust
 - AI decision loop: navigate toward player, avoid terrain, fire weapons
 - Terrain avoidance using the wall arrays (check `terrain_left_wall` and `terrain_right_wall` ahead of travel direction)
@@ -401,73 +431,13 @@ This would be the most ambitious addition. A simpler version could follow a pre-
 
 ---
 
-## Engine refactors
-
-### ~~Generic per-object extra-data slots~~ — DONE
-
-Implemented: per-level object data is now `level_N_obj_data_0/1/2`, with each object type interpreting the slots itself (slot 0 = gun_aim for guns/lasers; slots 1/2 = laser dx/dy or well radius/strength). The two well-specific lookup tables were dropped — laser and well code share the same slot 1/2 lookups via separate SMC sites. Adding a new object type with config bytes is now a code change only: no new export array, no new SMC patch, no new lookup table. SWRAM build shrank by 256 bytes; non-SWRAM CRC remains anchored at `6389c446`. The notes below are kept as a record of the design rationale.
-
----
-
-Today's per-level object data is struct-of-arrays with one array per *named* per-type field. After timed lasers and gravity wells, each level now exports:
-
-```
-level_N_obj_pos_X
-level_N_obj_pos_Y
-level_N_obj_pos_Y_EXT
-level_N_obj_type
-level_N_gun_aim
-level_N_laser_dx_pixels
-level_N_laser_dy_rows
-level_N_well_radius
-level_N_well_strength
-```
-
-Every new object type that needs config bytes (rotating laser sweep rate, fan force vector, switch wiring, mine bob period, …) currently means N more arrays × 6 levels and another self-modifying-code patch point per array (`LDA level_0_<thing>,X` mirrored at level init for each table). The cost shows up in three places:
-
-1. **Source clutter and SMC bookkeeping** — every new field needs a patch list entry. This is the part that actually slows feature work down.
-2. **Editor + export schema** — `tools/level_editor.py` and the export writer need a new branch per array.
-3. **Wasted bytes in object slots** — most slots zero out the type-specific arrays they don't apply to (a generator's `well_radius` is 0, etc.). At ~6 objects × 4 type-specific bytes per level, ~80% of those bytes are placeholders.
-
-**Proposal: a small, fixed-size scratchpad per object.** Replace the named per-type arrays with N generic "obj_data" arrays (probably 3 or 4):
-
-```
-level_N_obj_data_0    ; gun_aim / well_radius / fan_dx / ...
-level_N_obj_data_1    ; laser_dx / well_strength / fan_dy / ...
-level_N_obj_data_2    ; laser_dy / switch_target / ...
-level_N_obj_data_3    ; (reserved)
-```
-
-Each object type defines what each slot means. Source readability is preserved by per-type aliasing constants:
-
-```asm
-LASER_DX_SLOT    = 1   ; level_N_obj_data_1,X
-LASER_DY_SLOT    = 2   ; level_N_obj_data_2,X
-WELL_RADIUS_SLOT = 0
-WELL_STRENGTH_SLOT = 1
-```
-
-The SMC patch list becomes fixed at N entries regardless of how many object types are added. Adding a new object type is a code change only — no data-format churn, no editor export plumbing.
-
-**Storage is roughly even.** With 3 slots × 6 objects × 6 levels = 108 bytes, vs current 5 named type-specific arrays × 6 × 6 ≈ 180 bytes (`gun_aim` + `laser_dx` + `laser_dy` + `well_radius` + `well_strength`). 4 slots breaks even but leaves headroom. Either way the dominant win is the *flat schema*, not the byte savings.
-
-**Migration sketch:**
-
-1. Add the new arrays alongside the existing ones (no patch point changes yet) and have the editor export both. Verify the binaries and CRC are unchanged.
-2. Switch the SMC patch points and access sites to the new arrays, drop the old ones, regenerate exports. New object types from this point onward only touch the new schema.
-3. Settle on the slot count by usage. 3 slots covers everything in flight (laser dx/dy + gun_aim, well radius/strength, switch target/action). 4 leaves room for a length / sub-config byte per object. Use `EQUB` constants so widening later is cosmetic.
-
-**What stays separate.** Position (`obj_pos_X / Y / Y_EXT`) and type are universal — keep them as their own arrays. The proposal only consolidates the variable, type-specific config; it doesn't try to be a full SoA→AoS rework.
-
-**What this enables.** The configurable-switches design above wants ~3 bytes per switch (target index, action code, value). Without consolidation that's three more named arrays × 6 levels and three SMC patches. With the scratchpad it's three slot assignments and zero schema work — exactly the kind of low-friction extensibility a level editor benefits from.
-
----
-
 ## Engine constraints to be aware of
+
+Acknowledged limits of the current architecture. Not active work items unless a feature explicitly needs them lifted.
 
 ### Pod must be object index 0
 
-The tractor beam check at `thrust.6502:4572` reads `level_obj_flags` without an `,X` index, hardcoding it to object 0. All pod physics use single-instance variables. The level editor export enforces this by sorting type $05 first. See the "Support for multiple pods" section below for details on what would need to change.
+The tractor beam check at `thrust.6502:4572` reads `level_obj_flags` without an `,X` index, hardcoding it to object 0. All pod physics use single-instance variables. The level editor export enforces this by sorting type $05 first. See [Support for multiple pods](#support-for-multiple-pods-per-level) for what changing this would entail.
 
 ### Support for multiple pods per level
 
@@ -486,41 +456,33 @@ The game's dual-triple terrain decoder initialises both triples with a hardcoded
 
 All particle effects (player bullets, enemy bullets, debris, stars, exhaust) share a single 32-entry pool. Player bullets are limited to 4 simultaneous. Adding new particle-based features (thrust exhaust, new weapon types) increases contention for this fixed pool.
 
+### Expanding X axis to 16 bits
+
+Widening the world X coordinate from 8 to 16 bits would touch the physics integration, `landscape_draw` world-to-screen conversion, terrain wall decoder, X wrap logic, object visibility checks, and every ZP variable and lookup derived from `window_xpos_INT` / `ship_xpos_INT`. The cycle budget is already tight, and adding a high byte to every per-frame X computation would push multiple hot paths (landscape_draw, particles, object iteration) over frame. Parked for now — revisit only if a specific level design genuinely needs a world wider than 256 columns, and budget a significant refactor.
+
+### Variable wall slopes
+
+Currently walls move by 0 or 1 column per scanline (the increment is applied every row). Steeper slopes are possible (increment > 1 per row), but shallow slopes (< 1 column per row) would require fractional increments. The 8-bit increment already supports this via unsigned wrapping — a value like $80 moves half a column per row on average, but the discrete steps would look jagged. True sub-pixel slopes would need a fixed-point accumulator in the RLE decoder, which changes the format and the hot-path decoder. Not worth it without a concrete design need.
+
 ---
 
-## Investigation tasks
+## Completed
 
-### ~~Make a test level~~ — DONE
+Implemented features and finished investigations, newest first. Each entry links to the relevant code or documentation.
 
-Use the level editor (`tools/level_editor.py`) to design a sandbox level for experimenting with new features. Export via `--import`/Ctrl+S and build with BeebAsm. The editor already supports terrain editing, object placement, and round-trip import/export.
+### Features
 
-### ~~Understand the landscape drawing routine~~ — DONE
+- **Generic per-object extra-data slots** — `level_N_obj_data_0/1/2`, with each object type interpreting the slots itself (slot 0 = gun_aim; slots 1/2 = laser dx/dy or well radius/strength). Laser and well code share the slot 1/2 lookups via separate SMC sites; the two well-specific lookup tables were dropped. SWRAM build shrank by 256 bytes; non-SWRAM CRC remains anchored at `6389c446`. Adding a new object type with config bytes is now a code change only — no new export array, no new SMC patch, no new lookup table.
+- **Lasers draw in object colour** — beam now uses `OBJECT_COLOUR_BYTE` (`$FF`, logical colour 3) instead of `hostile_bullet_pixel_byte` so it reads as part of the level palette. Ship-vs-pixel collision still works (any non-zero pixel under the ship triggers it).
+- **Gravity well** (`_GRAVITY_WELL`, SWRAM build, type `$0D`). While the ship's midpoint is inside the well's Manhattan radius, a linear-ramp pull toward the centre is added to `force_vector{x,y}` once per gravity tick. Hooked from `apply_gravity_wells_to_force` after the constant-gravity add. Per-instance `radius` (unsigned 0..127, 0 = inactive) and `strength` (signed). Pull magnitude is the high byte of `strength * (radius − r)` where `r = |dx| + |dy|`. Editor places `$0D` with a centre dot plus Manhattan-radius diamond (blue pull, red repulsor). Debris ring spawned around each well per gravity tick visualises the field. Open follow-ups in [main body](#gravity-well-follow-ups).
+- **Timed laser turrets** (`_TIMED_LASER`, SWRAM build, types `$09..$0C`). Four orientations replacing the old heavy-turret slot. Beam is XOR-drawn via Bresenham `draw_line`; ship-vs-pixel hit detection picks it up automatically. Per-laser state in `level_obj_flags` bit 2 (`OBJ_flag_laser_beam_drawn`) plus cached `obj_laser_prev_screen_x/y`. Per-instance config: `gun_aim` low nibble = phase index (×8 frames), high nibble = duty index (×4+4 frames); period fixed at 128 frames. Per-instance beam endpoint `(dx, dy)` stored in obj_data slots 1/2. Editor lets the designer drag the beam tip and adjust phase/duty live. Open follow-ups in [main body](#timed-lasers-follow-ups).
+- **Thrust particles from ship exhaust** (`_THRUST_PARTICLES`, SWRAM build) — debris particles spawned at the ship exhaust point with angle-derived velocity and random spread.
+- **Disabling X wrap underground** (`_NO_WRAP_UNDERGROUND`, build flag). Per-level Y threshold can skip the X wrap logic when the player is below a configurable depth. Build flag, ZP variables, per-level data tables, level editor support (draggable no-wrap line), and a skip check at `check_x_wrap` are implemented. Right-side wrap works; left-side wrap is broken (when `window_xpos_INT` approaches zero, wall lookup goes wrong and the right wall fills the screen with terrain). Likely root cause: `landscape_draw` world-to-screen subtraction or terrain wall array indexing breaking down at low window X. Flag is left `FALSE` for now — revisit alongside any 16-bit world X work.
 
-Now documented in `docs/landscape-drawing.md`. Key points:
-- RLE delta-compressed terrain with two interleaved decoder triples per wall
-- 256-byte circular wall buffers at $0400/$0500
-- EOR-based incremental rendering (only changed columns are redrawn each frame)
-- Half-resolution vertical rendering (every other pixel row)
+### Investigations
 
-### ~~Understand the dynamics implementation~~ — DONE
-
-Now documented in `docs/ship-physics.md`. Key points:
-- Midpoint-based physics: all forces act on the centre of mass of the ship-pod system
-- One-frame-behind Euler integration
-- Q7.16 for X force, Q7.8 for Y force, Q8.16 for X position, Q16.8 for Y position
-- Tether modelled as a rigid rod with angular velocity and damping
-- Thrust magnitude halved when pod is attached (5 right shifts vs 4)
-
-### ~~Raster timing / cycle budget~~ — DONE
-
-No raster timing or cycle-counting infrastructure currently exists in the code. The IRQ handler (`thrust.6502:5296`) distinguishes vsync from Timer1 via `irq1_timer1_signal` but there are no budget annotations.
-
-**To instrument:** set up Timer1 to fire at a known point in the frame, toggle a palette register or border colour at the start/end of key routines (landscape_draw, particles_update_and_draw, draw_player). This would reveal how much of each frame is spent on each system.
-
-### ~~Identify slowest code paths~~ — DONE
-
-Likely candidates based on code structure:
-- `landscape_draw` (line 755): iterates all 73 visible scanlines, computing deltas and EOR-drawing columns
-- `particles_update_and_draw` (line 5799): updates and redraws all 32 particles every frame
-- `update_objects_loop` (line 1393): iterates all level objects for visibility, rendering, and collision
-- Ship sprite plotting: 17 rotation frames + shield sprite, XOR-plotted with clipping
+- **Test level made.** Sandbox level for experimenting with new features, edited via `tools/level_editor.py` and round-tripped through `--import` / Ctrl+S.
+- **Landscape drawing** — documented in `docs/landscape-drawing.md`. RLE delta-compressed terrain with two interleaved decoder triples per wall; 256-byte circular wall buffers at $0400/$0500; EOR-based incremental rendering; half-resolution vertical rendering.
+- **Ship dynamics** — documented in `docs/ship-physics.md`. Midpoint-based physics; one-frame-behind Euler integration; Q7.16 X force, Q7.8 Y force, Q8.16 X position, Q16.8 Y position; tether modelled as a rigid rod with angular velocity and damping; thrust halved when pod attached.
+- **Raster timing / cycle budget.** No raster timing or cycle-counting infrastructure currently exists. The IRQ handler (`thrust.6502:5296`) distinguishes vsync from Timer1 via `irq1_timer1_signal` but there are no budget annotations. To instrument: set up Timer1 to fire at a known point in the frame, toggle a palette register or border colour at the start/end of key routines (landscape_draw, particles_update_and_draw, draw_player) to reveal how much of each frame is spent on each system.
+- **Slowest code paths.** Likely candidates based on code structure: `landscape_draw` (line 755) iterates all 73 visible scanlines; `particles_update_and_draw` (line 5799) updates and redraws all 32 particles; `update_objects_loop` (line 1393) iterates all level objects; ship sprite plotting renders 17 rotation frames + shield, XOR-plotted with clipping.
