@@ -6965,6 +6965,17 @@ IF _TIMED_LASER
         LDA     level_laser_dy_lookup_HI,X
         STA     laser_load_dy_addr_HI                     ; **MODIFIES CODE**
 ENDIF
+IF _GRAVITY_WELL
+        LDA     level_well_radius_lookup_LO,X
+        STA     well_load_radius_addr_LO                  ; **MODIFIES CODE** (mirror for apply_gravity_wells_to_force)
+        LDA     level_well_radius_lookup_HI,X
+        STA     well_load_radius_addr_HI                  ; **MODIFIES CODE**
+
+        LDA     level_well_strength_lookup_LO,X
+        STA     well_load_strength_addr_LO                ; **MODIFIES CODE**
+        LDA     level_well_strength_lookup_HI,X
+        STA     well_load_strength_addr_HI                ; **MODIFIES CODE**
+ENDIF
 
         TXA
         ROR     A                                        ; level_number /= 2
@@ -10715,6 +10726,62 @@ IF _TIMED_LASER
         DEX
         BNE     laser_div_loop
         LDA     laser_quotient
+        RTS
+\\ }
+ENDIF
+
+IF _GRAVITY_WELL
+\ Per-level gravity well data. Sized to match each level's object count
+\ so an [X] index into level_obj_type lands at the same slot here. Stubs
+\ for now: all zeros means radius=0 → no wells active. Step 5 moves these
+\ into the editor's level export with designer-authored values.
+.level_0_well_radius    SKIP 5
+.level_0_well_strength  SKIP 5
+.level_1_well_radius    SKIP 7
+.level_1_well_strength  SKIP 7
+.level_2_well_radius    SKIP 13
+.level_2_well_strength  SKIP 13
+.level_3_well_radius    SKIP 12
+.level_3_well_strength  SKIP 12
+.level_4_well_radius    SKIP 19
+.level_4_well_strength  SKIP 19
+.level_5_well_radius    SKIP 17
+.level_5_well_strength  SKIP 17
+
+.level_well_radius_lookup_LO
+        EQUB    LO(level_0_well_radius), LO(level_1_well_radius)
+        EQUB    LO(level_2_well_radius), LO(level_3_well_radius)
+        EQUB    LO(level_4_well_radius), LO(level_5_well_radius)
+.level_well_radius_lookup_HI
+        EQUB    HI(level_0_well_radius), HI(level_1_well_radius)
+        EQUB    HI(level_2_well_radius), HI(level_3_well_radius)
+        EQUB    HI(level_4_well_radius), HI(level_5_well_radius)
+
+.level_well_strength_lookup_LO
+        EQUB    LO(level_0_well_strength), LO(level_1_well_strength)
+        EQUB    LO(level_2_well_strength), LO(level_3_well_strength)
+        EQUB    LO(level_4_well_strength), LO(level_5_well_strength)
+.level_well_strength_lookup_HI
+        EQUB    HI(level_0_well_strength), HI(level_1_well_strength)
+        EQUB    HI(level_2_well_strength), HI(level_3_well_strength)
+        EQUB    HI(level_4_well_strength), HI(level_5_well_strength)
+
+\ ******************************************************************************
+\ * Function: apply_gravity_wells_to_force (stub)
+\ * Description: SMC sites declared here so initialise_level_pointers has patch
+\ *   targets. Step 3 of plan-gravity-well.md fills in the walker + ramp math.
+\ *   Currently does nothing (RTS) and is not called from anywhere.
+\ ******************************************************************************
+.apply_gravity_wells_to_force
+\\ {
+    .well_load_radius
+        LDA     level_0_well_radius,X                     ; **SELF-MODIFIED CODE**
+        well_load_radius_addr_LO = well_load_radius+1
+        well_load_radius_addr_HI = well_load_radius+2
+    .well_load_strength
+        LDA     level_0_well_strength,X                   ; **SELF-MODIFIED CODE**
+        well_load_strength_addr_LO = well_load_strength+1
+        well_load_strength_addr_HI = well_load_strength+2
         RTS
 \\ }
 ENDIF
