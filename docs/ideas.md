@@ -403,7 +403,11 @@ This would be the most ambitious addition. A simpler version could follow a pre-
 
 ## Engine refactors
 
-### Generic per-object extra-data slots
+### ~~Generic per-object extra-data slots~~ — DONE
+
+Implemented: per-level object data is now `level_N_obj_data_0/1/2`, with each object type interpreting the slots itself (slot 0 = gun_aim for guns/lasers; slots 1/2 = laser dx/dy or well radius/strength). The two well-specific lookup tables were dropped — laser and well code share the same slot 1/2 lookups via separate SMC sites. Adding a new object type with config bytes is now a code change only: no new export array, no new SMC patch, no new lookup table. SWRAM build shrank by 256 bytes; non-SWRAM CRC remains anchored at `6389c446`. The notes below are kept as a record of the design rationale.
+
+---
 
 Today's per-level object data is struct-of-arrays with one array per *named* per-type field. After timed lasers and gravity wells, each level now exports:
 
