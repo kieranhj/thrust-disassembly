@@ -2462,12 +2462,8 @@ class Editor:
         cx, cy, rx_screen, ry_screen = self._well_screen_geometry(obj)
         cxi, cyi = int(cx), int(cy)
 
-        # Diamond outline at radius. Hue depends on strength sign.
         s = obj.get("well_strength", 0)
-        if s < 0:
-            ring_col = (255, 140, 140, 110)   # repulsor — reddish
-        else:
-            ring_col = COL_GRAVITY_WELL_RING
+        ring_col = (255, 140, 140, 110) if s < 0 else COL_GRAVITY_WELL_RING
         if obj.get("well_radius", 0) > 0 and rx_screen > 0 and ry_screen > 0:
             pts = [(cxi + rx_screen, cyi),
                    (cxi, cyi + ry_screen),
@@ -2477,10 +2473,8 @@ class Editor:
             pygame.draw.polygon(ring_surf, ring_col, pts, 1)
             self.screen.blit(ring_surf, (0, 0))
 
-        # Centre dot.
         pygame.draw.circle(self.screen, COL_GRAVITY_WELL,
                            (cxi, cyi), GRAVITY_WELL_CENTRE_RADIUS)
-        # Selection / hover ring on the centre dot.
         if i == self.selected_object:
             pygame.draw.circle(self.screen, COL_SELECT, (cxi, cyi),
                                GRAVITY_WELL_CENTRE_RADIUS + 2, 2)
@@ -2488,7 +2482,6 @@ class Editor:
             pygame.draw.circle(self.screen, (200, 200, 200), (cxi, cyi),
                                GRAVITY_WELL_CENTRE_RADIUS + 1, 1)
 
-        # Radius drag handle (only when selected and radius > 0).
         if i == self.selected_object and obj.get("well_radius", 0) > 0:
             hx, hy = cxi + rx_screen, cyi
             highlight = (self.dragging_well_radius or self.hovered_well_radius)

@@ -68,9 +68,9 @@
 \ ******************************************************************************
 
 .level_0_obj_pos_X
-        EQUB    $8F,$A0,$6E,$7C,$5B,$7E
+        EQUB    $8F,$A0,$6E,$7C,$5B,$78
 .level_0_obj_pos_Y
-        EQUB    $BD,$AB,$B3,$BA,$AD,$83
+        EQUB    $BD,$AB,$B3,$BA,$AD,$82
 .level_0_obj_pos_Y_EXT
         EQUB    $01,$01,$01,$01,$01,$01
 .level_0_obj_type
@@ -84,7 +84,7 @@
 .level_0_well_radius
         EQUB    $00,$00,$00,$00,$00,$28
 .level_0_well_strength
-        EQUB    $00,$00,$00,$00,$00,$3C
+        EQUB    $00,$00,$00,$00,$00,$7F
 
 .level_1_obj_pos_X
         EQUB    $81,$64,$8B,$73,$75,$9C,$99

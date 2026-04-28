@@ -1614,8 +1614,10 @@ ENDIF
         level_gun_aim_addr_HI   = load_gun_aim+2
 {
 IF _GRAVITY_WELL
-        \\ Gravity wells have no sprite and no per-object behaviour; skip the
-        \\ entire update body. They are handled in apply_gravity_wells_to_force.
+        \\ Gravity wells are invisible field objects: no sprite, no collision,
+        \\ no per-object dispatch. The pull on the ship is computed in
+        \\ apply_gravity_wells_to_force; visualisation is by debris particles
+        \\ spawned elsewhere. Skip the entire update body.
         LDY     object_type
         CPY     #OBJECT_gravity_well
         BNE     not_gravity_well

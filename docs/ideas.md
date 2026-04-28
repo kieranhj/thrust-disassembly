@@ -48,12 +48,24 @@ Small destructible objects that, when shot, explode and take out a pre-defined c
 
 **Implementation notes:** the hole shape could be stored as a list of (row, new-left, new-right) triples patched into `terrain_left_wall`/`terrain_right_wall` on trigger. Visual effect reuses the existing explosion particle burst.
 
-### Gravity field objects
+### ~~Gravity well~~ — IMPLEMENTED (`_GRAVITY_WELL`, SWRAM build)
 
-Objects that modify gravity within a local radius:
-- **Gravity flipper:** inverts the Y component of gravity while the ship is inside the radius
-- **Gravity null:** zeroes gravity inside the radius (fly like in open space)
-- **Gravity well:** pulls the ship toward the node (radial gravity instead of vertical)
+Object type `$0D`. While the ship's midpoint is inside the well's Manhattan radius, a linear-ramp pull toward the centre is added to `force_vector{x,y}` once per gravity tick. Hooked from `apply_gravity_wells_to_force` after the constant-gravity add at `thrust.6502:4096`. The walker mirrors `update_all_laser_beams` — SMC-patched LDAs over `level_obj_type` / `obj_pos_X/Y/Y_EXT` plus the per-instance `level_N_well_radius` / `level_N_well_strength` arrays.
+
+**Per-instance config:** `radius` (unsigned 0..127, 0 = inactive) and `strength` (signed Q0.7-ish). Pull magnitude is the high byte of `strength * (radius − r)` where `r = |dx| + |dy|`; per-axis component is `sign(dx) * pull` and `sign(dy) * pull`. No divides; one signed 8×8 multiply per active well per gravity tick.
+
+**Editor:** `$0D` in the placement menu. The well draws as a centre dot plus a Manhattan-radius diamond (blue for pull, red for repulsor). Drag the right vertex to resize; `[`/`]` nudge strength ±1 (shift = ±10).
+
+**Open follow-ups:**
+- **Sprite:** the engine currently early-exits to `next_object` for type `$0D` to avoid plotting a non-existent sprite. A real sprite would let the well show up in-game (subtle field shimmer, swirl, etc.) and remove the early-exit.
+- **Centre-case symmetry:** at exact `dx == dy == 0` the per-axis sign multiplication yields `+pull` on both axes (BPL treats 0 as positive). Minor visual artefact only; gravity drags the ship out anyway.
+- **Per-axis half-scaling:** v1 applies the full pull to each axis. At a 45° corner this is √2 stronger than on-axis — flip to per-axis `pull/2` if it feels too aggressive in play.
+
+### Gravity field objects (other variants)
+
+Objects that modify gravity within a local radius. The gravity-well variant is implemented; these are still ideas:
+- **Gravity flipper:** inverts the Y component of gravity while the ship is inside the radius.
+- **Gravity null:** zeroes gravity inside the radius (fly like in open space). Could share the well's data layout — reserve `strength == 0` to mean "null mode" or use a separate flag bit. Implementation needs the loop to run *before* `add_gravity_to_force_vector` so it can suppress the gravity add, instead of the current "add on top".
 - **Paired generators/repulsors acting on ship *and* pod:** the pod has its own physics state (`pod_xpos`, `pod_ypos`, velocity) — extending the field check to the pod as well means the tethered system can be yanked around by the environment, not just the ship. Since the tether is a rigid rod, asymmetric forces on ship vs pod create interesting angular dynamics.
 - **Fields that act on bullets:** apply the same force to active particles of type `PARTICLE_type_player_bullet` and/or hostile bullet. Bending a player bullet around a corner to hit a turret tucked in an alcove opens up real puzzle geometry. Costs more per frame (force applied to every bullet inside every field) but the bullet count is bounded by the 32-slot particle pool.
 
