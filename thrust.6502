@@ -37,6 +37,7 @@ _THRUST_PARTICLES    = (_SWRAM_BUILD AND TRUE)    ; Generate thrust particles
 _FAST_SPRITES        = (_SWRAM_BUILD AND FALSE)   ; Pre-baked two-stream ship sprites
 _NO_WRAP_UNDERGROUND = (_SWRAM_BUILD AND TRUE)    ; Skip X wrap when below surface
 _TIMED_LASER         = (_SWRAM_BUILD AND TRUE)    ; Timed laser turret enemy ($09)
+_GRAVITY_WELL        = (_SWRAM_BUILD AND TRUE)    ; Gravity well object ($0D)
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -115,6 +116,9 @@ OBJECT_laser_turret_up_right        = $9        ; laser turret facing up-right (
 OBJECT_laser_turret_down_right      = $A        ; laser turret facing down-right (SWRAM only)
 OBJECT_laser_turret_up_left         = $B        ; laser turret facing up-left (SWRAM only)
 OBJECT_laser_turret_down_left       = $C        ; laser turret facing down-left (SWRAM only)
+ENDIF
+IF _GRAVITY_WELL
+OBJECT_gravity_well                 = $D        ; gravity well: radial pull on ship inside radius (SWRAM only)
 ENDIF
 
 OBJ_flag_drawn                      = $01       ; level_obj_flags bit 0: sprite was XOR-plotted (needs erase before redraw)
@@ -1403,11 +1407,17 @@ ENDIF
 IF _TIMED_LASER
         EQUB    $05,$05,$05,$05                  ; [9..C] laser_turret orientations
 ENDIF
+IF _GRAVITY_WELL
+        EQUB    $04                              ; [D] gravity_well (small AABB; non-collidable)
+ENDIF
 
 .obj_type_height
         EQUB    $08,$08,$08,$08,$0A,$08,$0A,$08,$08
 IF _TIMED_LASER
         EQUB    $08,$08,$08,$08                  ; [9..C] laser_turret orientations
+ENDIF
+IF _GRAVITY_WELL
+        EQUB    $04                              ; [D] gravity_well
 ENDIF
 
 .obj_type_explosion_particle
@@ -1416,12 +1426,18 @@ IF _TIMED_LASER
         EQUB    $00,$00,$00,$00                  ; pad [5..8] (not destructible)
         EQUB    $02,$02,$02,$02                  ; [9..C] laser_turret orientations
 ENDIF
+IF _GRAVITY_WELL
+        EQUB    $00                              ; [D] gravity_well (not destructible)
+ENDIF
 
 .obj_type_score_value                            ; only guns and fuel can be destroyed
         EQUB    $75,$75,$75,$75,$15
 IF _TIMED_LASER
         EQUB    $00,$00,$00,$00                  ; pad [5..8]
         EQUB    $A0,$A0,$A0,$A0                  ; [9..C] laser_turret orientations
+ENDIF
+IF _GRAVITY_WELL
+        EQUB    $00                              ; [D] gravity_well
 ENDIF
 
 \ ******************************************************************************
@@ -2139,6 +2155,9 @@ ENDIF
         EQUB    $44,$44,$44,$44,$45,$45,$44,$47,$47
 IF _TIMED_LASER
         EQUB    $44,$44,$44,$44                  ; [9..C] laser_turret orientations (5 chars wide like guns)
+ENDIF
+IF _GRAVITY_WELL
+        EQUB    $44                              ; [D] gravity_well (no sprite yet; cull width borrowed from guns)
 ENDIF
 
 \ ******************************************************************************
