@@ -11095,15 +11095,21 @@ WELL_DEBRIS_SPAWN_MASK    = $01          ; emit one particle every 8 ticks per w
         TYA
         TAX                                               ; X = particle slot
 
-        \\ Spawn position X = obj_x + offset_x (8-bit, X wraps mod 256).
+        \\ Spawn position. Pull (strength >= 0): perimeter = obj + offset, so
+        \\ debris flies inward to the centre. Push (strength < 0): spawn at the
+        \\ centre itself, so debris flies outward to the perimeter — matches the
+        \\ "matter being repelled" feel and stops repulsor particles from looking
+        \\ like they originate at the radius edge.
+        LDA     well_strength_save
+        BMI     well_emit_spawn_centre
+
+        \\ Pull: spawn position X = obj_x + offset_x (8-bit, X wraps mod 256).
         LDA     well_obj_x_save
         CLC
         ADC     well_emit_offset_x
         STA     particles_xpos_INT,X
-        LDA     #$00
-        STA     particles_xpos_FRAC,X
 
-        \\ Spawn position Y = (obj_y_hi:obj_y_lo) + sign_extended(offset_y).
+        \\ Pull: spawn position Y = (obj_y_hi:obj_y_lo) + sign_extended(offset_y).
         CLC
         LDA     well_obj_y_lo_save
         ADC     well_emit_offset_y
@@ -11117,7 +11123,19 @@ WELL_DEBRIS_SPAWN_MASK    = $01          ; emit one particle every 8 ticks per w
     .well_emit_y_signext_done
         ADC     well_obj_y_hi_save
         STA     particles_ypos_INT_HI,X
+        JMP     well_emit_spawn_done
+
+    .well_emit_spawn_centre
+        LDA     well_obj_x_save
+        STA     particles_xpos_INT,X
+        LDA     well_obj_y_lo_save
+        STA     particles_ypos_INT,X
+        LDA     well_obj_y_hi_save
+        STA     particles_ypos_INT_HI,X
+
+    .well_emit_spawn_done
         LDA     #$00
+        STA     particles_xpos_FRAC,X
         STA     particles_ypos_FRAC,X
 
         \\ Velocity: pull → -offset/16 (toward centre); push (strength < 0) →

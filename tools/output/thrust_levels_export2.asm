@@ -84,7 +84,7 @@
 .level_0_well_radius
         EQUB    $00,$00,$00,$00,$00,$28
 .level_0_well_strength
-        EQUB    $00,$00,$00,$00,$00,$7F
+        EQUB    $00,$00,$00,$00,$00,$A3
 
 .level_1_obj_pos_X
         EQUB    $81,$64,$8B,$73,$75,$9C,$99
@@ -217,7 +217,7 @@
 
 .level_0_reset_data
         EQUB    $01
-        EQUB    $91
+        EQUB    $AB
         EQUB    $56
         EQUB    $01
         EQUB    $24

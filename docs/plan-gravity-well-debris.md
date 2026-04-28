@@ -1,5 +1,11 @@
 # Plan: gravity-well debris visualisation
 
+**Status: done.** Implemented across `thrust.6502` (emit gate + `well_emit_debris_particle`) and editor (pixel-square diamond). Repulsors spawn at the centre and fly outward; pull spawns at the perimeter and falls inward.
+
+Polish items left for later:
+- **Randomise particle directions further.** Currently the 8 fixed diamond vertices give a visibly octagonal spawn ring. Adding a small random angular jitter (or going to 16/32 directions) would dissolve the ring into a noisier cloud.
+- **Better approximate the well centre vs ship rest position.** The ship settles slightly off the plotted well centre because the pull-equation comparison uses `midpoint_*` (ship+pod centre of mass when tethered). The visualised centre is the well's true `obj_pos`. Aligning the two without breaking tethered-pod physics needs more thought.
+
 The gravity well is invisible in-game because giving it a sprite makes it lethal on collision. Visualise its position and field by spawning short-lived, non-lethal debris particles that drift inward toward the well centre — a "matter falling into a black hole" feel that also implicitly shows the radius.
 
 ## Decisions confirmed
