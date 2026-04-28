@@ -4093,6 +4093,9 @@ ENDIF
         LDA     force_vectory_INT
         ADC     gravity_SIGN
         STA     force_vectory_INT
+IF _GRAVITY_WELL
+        JSR     apply_gravity_wells_to_force
+ENDIF
 
         LDA     pod_destroying_player_timer
         BPL     no_thrust
@@ -6966,8 +6969,28 @@ IF _TIMED_LASER
         STA     laser_load_dy_addr_HI                     ; **MODIFIES CODE**
 ENDIF
 IF _GRAVITY_WELL
+        LDA     level_obj_type_lookup_LO,X
+        STA     well_load_obj_type_addr_LO                ; **MODIFIES CODE** (mirror for apply_gravity_wells_to_force)
+        LDA     level_obj_type_lookup_HI,X
+        STA     well_load_obj_type_addr_HI                ; **MODIFIES CODE**
+
+        LDA     level_obj_pos_X_lookup_LO,X
+        STA     well_load_obj_pos_x_addr_LO               ; **MODIFIES CODE**
+        LDA     level_obj_pos_X_lookup_HI,X
+        STA     well_load_obj_pos_x_addr_HI               ; **MODIFIES CODE**
+
+        LDA     level_obj_pos_Y_lookup_LO,X
+        STA     well_load_obj_pos_y_addr_LO               ; **MODIFIES CODE**
+        LDA     level_obj_pos_Y_lookup_HI,X
+        STA     well_load_obj_pos_y_addr_HI               ; **MODIFIES CODE**
+
+        LDA     level_obj_pos_Y_EXT_lookup_LO,X
+        STA     well_load_obj_pos_y_ext_addr_LO           ; **MODIFIES CODE**
+        LDA     level_obj_pos_Y_EXT_lookup_HI,X
+        STA     well_load_obj_pos_y_ext_addr_HI           ; **MODIFIES CODE**
+
         LDA     level_well_radius_lookup_LO,X
-        STA     well_load_radius_addr_LO                  ; **MODIFIES CODE** (mirror for apply_gravity_wells_to_force)
+        STA     well_load_radius_addr_LO                  ; **MODIFIES CODE**
         LDA     level_well_radius_lookup_HI,X
         STA     well_load_radius_addr_HI                  ; **MODIFIES CODE**
 
@@ -10766,22 +10789,194 @@ IF _GRAVITY_WELL
         EQUB    HI(level_2_well_strength), HI(level_3_well_strength)
         EQUB    HI(level_4_well_strength), HI(level_5_well_strength)
 
+\ Scratch for apply_gravity_wells_to_force.
+.well_radius_save     EQUB $00          ; current well's radius (1..127)
+.well_dx_signed       EQUB $00          ; signed dx = obj_x - midpoint_x (8-bit, X wraps)
+.well_dy_signed       EQUB $00          ; signed dy_lo from 16-bit subtract; reused as pull_signed scratch
+.well_abs_dx          EQUB $00
+.well_abs_dy          EQUB $00
+.well_pull            EQUB $00          ; reused: r → delta_r → signed pull magnitude
+
 \ ******************************************************************************
-\ * Function: apply_gravity_wells_to_force (stub)
-\ * Description: SMC sites declared here so initialise_level_pointers has patch
-\ *   targets. Step 3 of plan-gravity-well.md fills in the walker + ramp math.
-\ *   Currently does nothing (RTS) and is not called from anywhere.
+\ * Function: apply_gravity_wells_to_force
+\ * Description: Per-frame walk over the level's object list. For every
+\ *   OBJECT_gravity_well within Manhattan radius of the ship midpoint, adds a
+\ *   linear-ramp pull toward the well centre to (force_vectorx, force_vectory).
+\ *   Called from ship_input_thrust_calculate_force after the constant-gravity
+\ *   add, on the same tick gating as gravity itself.
+\ * Params: none (uses midpoint_*pos_INT/INT_HI for ship reference)
+\ * Returns: none. Clobbers A, X, Y, multiply_* zp ($88..$8B + multiply_sign_ext).
 \ ******************************************************************************
 .apply_gravity_wells_to_force
 \\ {
+        LDX     #$00
+    .well_loop
+        STX     current_object
+    .well_load_obj_type
+        LDA     level_0_obj_type,X                        ; **SELF-MODIFIED CODE** (mirror of level_obj_type_addr)
+        well_load_obj_type_addr_LO = well_load_obj_type+1
+        well_load_obj_type_addr_HI = well_load_obj_type+2
+        CMP     #$FF
+        BNE     well_check_type
+        JMP     well_loop_done
+    .well_check_type
+        CMP     #OBJECT_gravity_well
+        BEQ     well_is_well
+        JMP     well_loop_next
+    .well_is_well
+
+        \\ Radius == 0 means well is disabled (default for non-well slots too).
     .well_load_radius
         LDA     level_0_well_radius,X                     ; **SELF-MODIFIED CODE**
         well_load_radius_addr_LO = well_load_radius+1
         well_load_radius_addr_HI = well_load_radius+2
+        BNE     well_radius_nonzero
+        JMP     well_loop_next
+    .well_radius_nonzero
+        STA     well_radius_save
+
+        \\ Compute dy = obj_pos_Y - midpoint_ypos_INT as 16-bit signed; reject
+        \\ if outside -128..+127 (i.e. high byte != 0 sign-consistent with low).
+        SEC
+    .well_load_obj_pos_y
+        LDA     level_0_obj_pos_Y,X                       ; **SELF-MODIFIED CODE**
+        well_load_obj_pos_y_addr_LO = well_load_obj_pos_y+1
+        well_load_obj_pos_y_addr_HI = well_load_obj_pos_y+2
+        SBC     midpoint_ypos_INT
+        STA     well_dy_signed                            ; tentative dy_lo
+    .well_load_obj_pos_y_ext
+        LDA     level_0_obj_pos_Y_EXT,X                   ; **SELF-MODIFIED CODE**
+        well_load_obj_pos_y_ext_addr_LO = well_load_obj_pos_y_ext+1
+        well_load_obj_pos_y_ext_addr_HI = well_load_obj_pos_y_ext+2
+        SBC     midpoint_ypos_INT_HI
+        BEQ     well_dy_hi_zero
+        CMP     #$FF
+        BEQ     well_dy_hi_neg
+        JMP     well_loop_next                            ; |dy| >= 256 → out of range
+    .well_dy_hi_neg
+        \\ dy_hi == $FF: dy_lo must be >= $80 for the value to be in -128..-1
+        LDA     well_dy_signed
+        BMI     well_dy_in_range
+        JMP     well_loop_next                            ; dy_lo < $80 → actual dy < -128
+    .well_dy_hi_zero
+        \\ dy_hi == 0: dy_lo must be < $80 for the value to be in 0..127
+        LDA     well_dy_signed
+        BPL     well_dy_in_range
+        JMP     well_loop_next                            ; dy_lo >= $80 → actual dy > 127
+    .well_dy_in_range
+
+        \\ Compute dx = obj_pos_X - midpoint_xpos_INT (8-bit signed; X wraps).
+        SEC
+    .well_load_obj_pos_x
+        LDA     level_0_obj_pos_X,X                       ; **SELF-MODIFIED CODE**
+        well_load_obj_pos_x_addr_LO = well_load_obj_pos_x+1
+        well_load_obj_pos_x_addr_HI = well_load_obj_pos_x+2
+        SBC     midpoint_xpos_INT
+        STA     well_dx_signed
+
+        \\ |dx|, |dy| (preserve signed values in well_d{x,y}_signed for direction).
+        BPL     well_dx_was_pos
+        EOR     #$FF
+        CLC
+        ADC     #$01
+    .well_dx_was_pos
+        STA     well_abs_dx
+
+        LDA     well_dy_signed
+        BPL     well_dy_was_pos
+        EOR     #$FF
+        CLC
+        ADC     #$01
+    .well_dy_was_pos
+        STA     well_abs_dy
+
+        \\ r = |dx| + |dy|; if r >= radius, no force.
+        CLC
+        LDA     well_abs_dx
+        ADC     well_abs_dy
+        BCC     well_sum_ok
+        JMP     well_loop_next                            ; |dx|+|dy| overflowed 8-bit → out of range
+    .well_sum_ok
+        CMP     well_radius_save
+        BCC     well_in_radius
+        JMP     well_loop_next                            ; r >= radius → outside / on boundary
+    .well_in_radius
+        \\ delta_r = radius - r (unsigned, 1..127).
+        STA     well_pull                                 ; reuse: stash r briefly
+        LDA     well_radius_save
+        SEC
+        SBC     well_pull
+        STA     well_pull                                 ; well_pull = delta_r
+
+        \\ Signed pull magnitude = high byte of (strength * delta_r).
     .well_load_strength
         LDA     level_0_well_strength,X                   ; **SELF-MODIFIED CODE**
         well_load_strength_addr_LO = well_load_strength+1
         well_load_strength_addr_HI = well_load_strength+2
+        STA     multiply_operand_a
+        LDA     well_pull
+        JSR     multiply_signed_8x8                       ; result_hi:result_lo = strength * delta_r
+        LDA     multiply_result_hi
+        BNE     well_pull_nonzero
+        JMP     well_loop_next                            ; pull rounded to zero in high byte → no contribution
+    .well_pull_nonzero
+        STA     well_pull
+
+        \\ Y axis: pull_y = sign(dy) * pull. Add to (force_vectory_INT, force_vectory_FRAC).
+        LDA     well_dy_signed
+        BPL     well_apply_y_pos
+        LDA     well_pull
+        EOR     #$FF
+        CLC
+        ADC     #$01
+        JMP     well_apply_y_add
+    .well_apply_y_pos
+        LDA     well_pull
+    .well_apply_y_add
+        STA     well_dy_signed                            ; reuse: stash signed pull_y
+        CLC
+        ADC     force_vectory_FRAC
+        STA     force_vectory_FRAC
+        LDA     well_dy_signed
+        BPL     well_y_sign_pos
+        LDA     #$FF
+        JMP     well_y_sign_done
+    .well_y_sign_pos
+        LDA     #$00
+    .well_y_sign_done
+        ADC     force_vectory_INT
+        STA     force_vectory_INT
+
+        \\ X axis: pull_x = sign(dx) * pull. Add to (force_vectorx_INT, force_vectorx_FRAC).
+        LDA     well_dx_signed
+        BPL     well_apply_x_pos
+        LDA     well_pull
+        EOR     #$FF
+        CLC
+        ADC     #$01
+        JMP     well_apply_x_add
+    .well_apply_x_pos
+        LDA     well_pull
+    .well_apply_x_add
+        STA     well_dx_signed                            ; reuse: stash signed pull_x
+        CLC
+        ADC     force_vectorx_FRAC
+        STA     force_vectorx_FRAC
+        LDA     well_dx_signed
+        BPL     well_x_sign_pos
+        LDA     #$FF
+        JMP     well_x_sign_done
+    .well_x_sign_pos
+        LDA     #$00
+    .well_x_sign_done
+        ADC     force_vectorx_INT
+        STA     force_vectorx_INT
+
+    .well_loop_next
+        LDX     current_object
+        INX
+        JMP     well_loop
+    .well_loop_done
         RTS
 \\ }
 ENDIF
