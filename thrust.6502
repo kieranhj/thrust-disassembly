@@ -1613,6 +1613,15 @@ ENDIF
         level_gun_aim_addr_LO   = load_gun_aim+1
         level_gun_aim_addr_HI   = load_gun_aim+2
 {
+IF _GRAVITY_WELL
+        \\ Gravity wells have no sprite and no per-object behaviour; skip the
+        \\ entire update body. They are handled in apply_gravity_wells_to_force.
+        LDY     object_type
+        CPY     #OBJECT_gravity_well
+        BNE     not_gravity_well
+        JMP     next_object
+    .not_gravity_well
+ENDIF
         PHA
         AND     #$1C
         STA     gun_base_angle
@@ -10754,22 +10763,9 @@ IF _TIMED_LASER
 ENDIF
 
 IF _GRAVITY_WELL
-\ Per-level gravity well data. Sized to match each level's object count
-\ so an [X] index into level_obj_type lands at the same slot here. Stubs
-\ for now: all zeros means radius=0 → no wells active. Step 5 moves these
-\ into the editor's level export with designer-authored values.
-.level_0_well_radius    SKIP 5
-.level_0_well_strength  SKIP 5
-.level_1_well_radius    SKIP 7
-.level_1_well_strength  SKIP 7
-.level_2_well_radius    SKIP 13
-.level_2_well_strength  SKIP 13
-.level_3_well_radius    SKIP 12
-.level_3_well_strength  SKIP 12
-.level_4_well_radius    SKIP 19
-.level_4_well_strength  SKIP 19
-.level_5_well_radius    SKIP 17
-.level_5_well_strength  SKIP 17
+\ Per-level gravity well data (level_N_well_radius / level_N_well_strength)
+\ is provided by the editor's level export — see tools/level_editor.py
+\ export_beebasm. Lookup tables here reference those labels.
 
 .level_well_radius_lookup_LO
         EQUB    LO(level_0_well_radius), LO(level_1_well_radius)

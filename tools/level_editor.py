@@ -141,6 +141,19 @@ LASER_ENDPOINT_HANDLE_RADIUS = 8   # screen-px radius of draggable endpoint dot
 LASER_ENDPOINT_HIT_PADDING   = 6   # extra screen-px tolerance around the dot for click hit-test
 COL_LASER_BEAM       = (255, 110, 50)
 
+# Gravity well object ($0D, SWRAM-only). Per-instance (radius, strength)
+# stored as world-coord-unit Manhattan radius and signed Q0.7-ish strength.
+# See docs/plan-gravity-well.md.
+OBJECT_GRAVITY_WELL  = 0x0D
+GRAVITY_WELL_DEFAULT_RADIUS   = 40   # world-coord units; 0 = inactive
+GRAVITY_WELL_DEFAULT_STRENGTH = 60   # signed (-127..127)
+GRAVITY_WELL_CENTRE_RADIUS    = 6    # screen-px radius of centre dot (also click area)
+GRAVITY_WELL_CENTRE_HIT_PADDING = 4
+GRAVITY_WELL_HANDLE_RADIUS    = 6    # screen-px radius of radius drag handle dot
+GRAVITY_WELL_HANDLE_HIT_PADDING = 6
+COL_GRAVITY_WELL     = (140, 160, 255)
+COL_GRAVITY_WELL_RING = (140, 160, 255, 110)  # diamond outline (translucent)
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -294,6 +307,8 @@ def import_beebasm(path):
         gun_aim = labels.get(f"level_{n}_gun_aim", [])
         laser_dx = labels.get(f"level_{n}_laser_dx_pixels", [])
         laser_dy = labels.get(f"level_{n}_laser_dy_rows", [])
+        well_radius   = labels.get(f"level_{n}_well_radius", [])
+        well_strength = labels.get(f"level_{n}_well_strength", [])
 
         # Remove $FF terminator from type list
         types = [t for t in obj_type if t != 0xFF]
@@ -313,6 +328,11 @@ def import_beebasm(path):
             # Convert from unsigned byte to signed int (-128..127).
             dx_s = dx_byte - 256 if dx_byte >= 128 else dx_byte
             dy_s = dy_byte - 256 if dy_byte >= 128 else dy_byte
+            # Gravity well: radius is unsigned, strength signed. Older exports
+            # without these arrays default to 0 (inactive).
+            wr = well_radius[i] if i < len(well_radius) else 0
+            ws = well_strength[i] if i < len(well_strength) else 0
+            ws_s = ws - 256 if ws >= 128 else ws
             objects.append({
                 "x": obj_x[i] if i < len(obj_x) else 0,
                 "y": y_world,
@@ -320,6 +340,8 @@ def import_beebasm(path):
                 "gun_aim": gp,
                 "laser_dx": dx_s,
                 "laser_dy": dy_s,
+                "well_radius": wr,
+                "well_strength": ws_s,
             })
 
         # Colours (may not be present in older exports)
@@ -564,6 +586,13 @@ def export_beebasm(levels):
             lines.append(f"        EQUB    {format_bytes([o.get('laser_dx', 0) & 0xFF for o in obj])}")
             lines.append(f".level_{n}_laser_dy_rows")
             lines.append(f"        EQUB    {format_bytes([o.get('laser_dy', 0) & 0xFF for o in obj])}")
+            # Per-gravity-well radius (unsigned) and strength (signed). Non-well
+            # slots emit 0 — apply_gravity_wells_to_force only reads these for
+            # OBJECT_gravity_well types and a 0 radius means inactive anyway.
+            lines.append(f".level_{n}_well_radius")
+            lines.append(f"        EQUB    {format_bytes([o.get('well_radius', 0) & 0xFF for o in obj])}")
+            lines.append(f".level_{n}_well_strength")
+            lines.append(f"        EQUB    {format_bytes([o.get('well_strength', 0) & 0xFF for o in obj])}")
             lines.append("")
 
     # Gravity table
@@ -697,7 +726,8 @@ class LevelData:
             objects.append({"x": od["X"][i], "y": y_world,
                             "type": t, "gun_aim": gp,
                             "laser_dx": LASER_BEAM_DX_PIXELS.get(t, 0),
-                            "laser_dy": LASER_BEAM_DY_ROWS.get(t, 0)})
+                            "laser_dy": LASER_BEAM_DY_ROWS.get(t, 0),
+                            "well_radius": 0, "well_strength": 0})
         return cls(level_num, list(left), list(right), objects, terrain_rle)
 
     @property
@@ -992,6 +1022,8 @@ class Editor:
         self.dragging_object = None    # None or (grab_dx, grab_dy) world-coord offset
         self.dragging_laser_endpoint = False  # True while dragging the selected laser's beam tip
         self.hovered_laser_endpoint = False   # True when mouse is over the endpoint handle
+        self.dragging_well_radius = False     # True while dragging the selected gravity well's radius handle
+        self.hovered_well_radius = False      # True when mouse is over the radius drag handle
         self.hovered_wall = None      # ("left"|"right", row)
         self.hovered_object = None    # index
         self.wall_tool = "draw"       # "draw" (freehand) or "line"
@@ -1172,7 +1204,11 @@ class Editor:
 
         elif event.key in (pygame.K_LEFTBRACKET, pygame.K_RIGHTBRACKET,
                            pygame.K_COMMA, pygame.K_PERIOD):
-            self._adjust_selected_gun_aim(event.key)
+            if (self.selected_object is not None
+                    and self.level.objects[self.selected_object]["type"] == OBJECT_GRAVITY_WELL):
+                self._adjust_selected_well_strength(event.key, shift)
+            else:
+                self._adjust_selected_gun_aim(event.key)
 
         elif event.key == pygame.K_BACKSLASH:
             self._reset_selected_laser_endpoint()
@@ -1259,6 +1295,27 @@ class Editor:
         if new_aim != aim:
             self.undo.save(self.level)
             obj["gun_aim"] = new_aim
+            self.level.dirty = True
+
+    def _adjust_selected_well_strength(self, key, shift):
+        """[ / ]  nudge well_strength by -1 / +1 (or -10 / +10 with shift)."""
+        if self.selected_object is None:
+            return
+        obj = self.level.objects[self.selected_object]
+        if obj["type"] != OBJECT_GRAVITY_WELL:
+            return
+        step = 10 if shift else 1
+        cur = obj.get("well_strength", 0)
+        if key == pygame.K_LEFTBRACKET:
+            new = cur - step
+        elif key == pygame.K_RIGHTBRACKET:
+            new = cur + step
+        else:
+            return
+        new = max(-127, min(127, new))
+        if new != cur:
+            self.undo.save(self.level)
+            obj["well_strength"] = new
             self.level.dirty = True
 
     def _reset_selected_laser_endpoint(self):
@@ -1381,6 +1438,23 @@ class Editor:
                     self.dragging_laser_endpoint = True
                     self._set_laser_endpoint_from_screen(mx, my)
                     return
+                if self._hit_test_well_radius(mx, my):
+                    self.undo.save(self.level)
+                    self.dragging_well_radius = True
+                    self._set_well_radius_from_screen(mx)
+                    return
+                # Wells have no sprite, so _hit_test_object skips them; check
+                # well centres separately first.
+                well_hit = self._hit_test_well(mx, my)
+                if well_hit is not None:
+                    self.selected_object = well_hit
+                    obj = self.level.objects[well_hit]
+                    wx, wy = self.camera.screen_to_world(mx, my)
+                    grab_dx = wx - obj["x"]
+                    grab_dy = wy - obj["y"]
+                    self.dragging_object = (grab_dx, grab_dy)
+                    self.undo.save(self.level)
+                    return
                 hit = self._hit_test_object(mx, my)
                 if hit is not None:
                     self.selected_object = hit
@@ -1416,6 +1490,9 @@ class Editor:
             if self.dragging_laser_endpoint:
                 self.level.dirty = True
                 self.dragging_laser_endpoint = False
+            if self.dragging_well_radius:
+                self.level.dirty = True
+                self.dragging_well_radius = False
             if self.dragging_checkpoint:
                 self.level.dirty = True
                 self.dragging_checkpoint = None
@@ -1492,6 +1569,10 @@ class Editor:
             self._set_laser_endpoint_from_screen(mx, my)
             return
 
+        if self.dragging_well_radius and self.selected_object is not None:
+            self._set_well_radius_from_screen(mx)
+            return
+
         if self.dragging_object and self.selected_object is not None:
             grab_dx, grab_dy = self.dragging_object
             wx, wy = self.camera.screen_to_world(mx, my)
@@ -1508,9 +1589,13 @@ class Editor:
                 self.hovered_wall = self._hit_test_wall(mx, my)
             elif self.mode == "object":
                 self.hovered_object = self._hit_test_object(mx, my)
+                if self.hovered_object is None:
+                    self.hovered_object = self._hit_test_well(mx, my)
                 self.hovered_laser_endpoint = self._hit_test_laser_endpoint(mx, my)
+                self.hovered_well_radius = self._hit_test_well_radius(mx, my)
         else:
             self.hovered_laser_endpoint = False
+            self.hovered_well_radius = False
 
     def _hit_test_wall(self, mx, my):
         """Test if screen position is near a wall edge. Returns (side, row) or None."""
@@ -1736,6 +1821,59 @@ class Editor:
         obj["laser_dy"] = max(-128, min(127, dy))
         self.level.dirty = True
 
+    def _well_screen_geometry(self, obj):
+        """Return (cx, cy, rx_screen, ry_screen) for a gravity well in screen
+        pixels: centre and per-axis screen-pixel projection of the radius.
+        rx_screen ≠ ry_screen because the editor's camera maps 1 world X unit
+        and 1 world Y unit to different pixel sizes (ASPECT)."""
+        cx_w, cy_w = obj["x"], obj["y"]
+        cx, cy = self.camera.world_to_screen(cx_w, cy_w)
+        r = obj.get("well_radius", 0)
+        rx_end, _ = self.camera.world_to_screen(cx_w + r, cy_w)
+        _, ry_end = self.camera.world_to_screen(cx_w, cy_w + r)
+        return cx, cy, rx_end - cx, ry_end - cy
+
+    def _hit_test_well(self, mx, my):
+        """Return object index if (mx, my) is over a gravity well's centre dot."""
+        for i, obj in enumerate(self.level.objects):
+            if obj["type"] != OBJECT_GRAVITY_WELL:
+                continue
+            cx, cy, _, _ = self._well_screen_geometry(obj)
+            r = GRAVITY_WELL_CENTRE_RADIUS + GRAVITY_WELL_CENTRE_HIT_PADDING
+            if (mx - cx) ** 2 + (my - cy) ** 2 <= r * r:
+                return i
+        return None
+
+    def _hit_test_well_radius(self, mx, my):
+        """If the selected object is a gravity well and (mx, my) is over the
+        radius drag handle (right vertex of the diamond), return True."""
+        if self.selected_object is None:
+            return False
+        obj = self.level.objects[self.selected_object]
+        if obj["type"] != OBJECT_GRAVITY_WELL:
+            return False
+        if obj.get("well_radius", 0) <= 0:
+            return False
+        cx, cy, rx_screen, _ = self._well_screen_geometry(obj)
+        hx, hy = cx + rx_screen, cy
+        r = GRAVITY_WELL_HANDLE_RADIUS + GRAVITY_WELL_HANDLE_HIT_PADDING
+        return (mx - hx) ** 2 + (my - hy) ** 2 <= r * r
+
+    def _set_well_radius_from_screen(self, mx):
+        """Inverse of _well_screen_geometry's X axis: convert mouse X into
+        world-coord radius for the selected well, clamped 0..127."""
+        obj = self.level.objects[self.selected_object]
+        cx_w = obj["x"]
+        cx, _ = self.camera.world_to_screen(cx_w, 0)
+        # 1 world-X unit in screen pixels (right of cx). Use a unit step.
+        unit_x, _ = self.camera.world_to_screen(cx_w + 1, 0)
+        scale = unit_x - cx
+        if scale <= 0:
+            return
+        r = round((mx - cx) / scale)
+        obj["well_radius"] = max(0, min(127, r))
+        self.level.dirty = True
+
     def _handle_toolbar_click(self, mx, my):
         """Handle clicks in the toolbar area."""
         # Level tabs: 6 tabs of 60px each starting at x=10
@@ -1838,10 +1976,13 @@ class Editor:
             obj_type = types[idx]
             self.undo.save(self.level)
             wx, wy = self.obj_menu_world
+            is_well = obj_type == OBJECT_GRAVITY_WELL
             self.level.objects.append({"x": wx, "y": wy, "type": obj_type,
                                         "gun_aim": 0x00,
                                         "laser_dx": LASER_BEAM_DX_PIXELS.get(obj_type, 0),
-                                        "laser_dy": LASER_BEAM_DY_ROWS.get(obj_type, 0)})
+                                        "laser_dy": LASER_BEAM_DY_ROWS.get(obj_type, 0),
+                                        "well_radius": GRAVITY_WELL_DEFAULT_RADIUS if is_well else 0,
+                                        "well_strength": GRAVITY_WELL_DEFAULT_STRENGTH if is_well else 0})
             self.level.dirty = True
             self.selected_object = len(self.level.objects) - 1
         self.show_obj_menu = False
@@ -2188,6 +2329,9 @@ class Editor:
         screen.set_clip(clip_rect)
 
         for i, obj in enumerate(lv.objects):
+            if obj["type"] == OBJECT_GRAVITY_WELL:
+                self._render_gravity_well(obj, i)
+                continue
             sprite = self.sprite_cache.get(obj["type"], lv)
             if sprite is None:
                 continue
@@ -2309,6 +2453,50 @@ class Editor:
             ring_col = (255, 255, 255) if highlight else (180, 180, 180)
             pygame.draw.circle(self.screen, ring_col, (cx, cy),
                                LASER_ENDPOINT_HANDLE_RADIUS + 1, 1)
+
+    def _render_gravity_well(self, obj, i):
+        """Draw a gravity well placeholder: centre dot + diamond outline at
+        the Manhattan-radius boundary, plus a draggable handle on the
+        right vertex when selected. Strength sign tints the diamond
+        (blue = pull, red-ish = push) so designers can see direction."""
+        cx, cy, rx_screen, ry_screen = self._well_screen_geometry(obj)
+        cxi, cyi = int(cx), int(cy)
+
+        # Diamond outline at radius. Hue depends on strength sign.
+        s = obj.get("well_strength", 0)
+        if s < 0:
+            ring_col = (255, 140, 140, 110)   # repulsor — reddish
+        else:
+            ring_col = COL_GRAVITY_WELL_RING
+        if obj.get("well_radius", 0) > 0 and rx_screen > 0 and ry_screen > 0:
+            pts = [(cxi + rx_screen, cyi),
+                   (cxi, cyi + ry_screen),
+                   (cxi - rx_screen, cyi),
+                   (cxi, cyi - ry_screen)]
+            ring_surf = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
+            pygame.draw.polygon(ring_surf, ring_col, pts, 1)
+            self.screen.blit(ring_surf, (0, 0))
+
+        # Centre dot.
+        pygame.draw.circle(self.screen, COL_GRAVITY_WELL,
+                           (cxi, cyi), GRAVITY_WELL_CENTRE_RADIUS)
+        # Selection / hover ring on the centre dot.
+        if i == self.selected_object:
+            pygame.draw.circle(self.screen, COL_SELECT, (cxi, cyi),
+                               GRAVITY_WELL_CENTRE_RADIUS + 2, 2)
+        elif i == self.hovered_object and self.mode == "object":
+            pygame.draw.circle(self.screen, (200, 200, 200), (cxi, cyi),
+                               GRAVITY_WELL_CENTRE_RADIUS + 1, 1)
+
+        # Radius drag handle (only when selected and radius > 0).
+        if i == self.selected_object and obj.get("well_radius", 0) > 0:
+            hx, hy = cxi + rx_screen, cyi
+            highlight = (self.dragging_well_radius or self.hovered_well_radius)
+            pygame.draw.circle(self.screen, COL_GRAVITY_WELL,
+                               (hx, hy), GRAVITY_WELL_HANDLE_RADIUS)
+            ring_col_handle = (255, 255, 255) if highlight else (180, 180, 180)
+            pygame.draw.circle(self.screen, ring_col_handle, (hx, hy),
+                               GRAVITY_WELL_HANDLE_RADIUS + 1, 1)
 
     def _laser_beam_screen_coords(self, obj, sx, sy, draw_w, draw_h):
         """Return (barrel_sx, barrel_sy, end_sx, end_sy) screen positions for
@@ -2681,6 +2869,11 @@ class Editor:
                 parts.append(
                     f"dx={dx:+d} dy={dy:+d} duty={duty_frames}f phase={phase_frames}f  "
                     f"(drag tip; \\ resets; [/] phase  ,/. duty)")
+            elif obj["type"] == OBJECT_GRAVITY_WELL:
+                r = obj.get("well_radius", 0)
+                s = obj.get("well_strength", 0)
+                parts.append(
+                    f"r={r} s={s:+d}  (drag handle to resize; [/] strength ±1, shift = ±10)")
             elif obj["type"] in OBJECT_FIRING_TYPES:
                 aim = obj.get("gun_aim", 0x00)
                 base = aim & 0x1C
