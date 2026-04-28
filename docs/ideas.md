@@ -42,6 +42,7 @@ Open work items, one line each. Full details in the sections below; completed wo
 - [Upgrade system](#ship-upgrades) — nine candidate upgrades feeding the Metroidvania reward loop
 
 ### Levels & worldbuilding
+- [Y-banded level parameters](#y-banded-level-parameters) — gravity / palette / wrap behaviour change as the player crosses configured Y thresholds
 - [More than 6 levels / level packs](#more-than-6-levels--level-packs) — bake more or stream from disc per gravity cycle
 - [Metroidvania structure](#metroidvania-structure) — one large interconnected map with gated upgrades
 - [Escape the flooding mine](#escape-the-flooding-mine) — race upward against a rising water line
@@ -308,6 +309,34 @@ Upgrades could be persistent across a run (Metroidvania) or per-level purchases 
 - **Object count:** terminated by $FF sentinel in the type array. No explicit limit, but all objects are checked every frame for visibility/collision, so very large counts would impact performance.
 
 Levels can be made significantly deeper without engine changes. Wider levels would require extending the X coordinate to 16 bits, which is currently infeasible — see [engine constraints](#expanding-x-axis-to-16-bits).
+
+### Y-banded level parameters
+
+Allow a level to define a sorted list of Y thresholds, each carrying a small bag of overrides applied while the ship's Y is below it (or between adjacent thresholds). Reuses the same authoring metaphor as the existing checkpoint Y lines in the editor — drop a horizontal marker, attach a parameter bundle to it.
+
+**What a band can override:**
+- **Gravity.** The strongest visual: the deeper you descend, the heavier the pull. Could be a per-band `gravity_FRAC` value applied directly to the existing per-frame gravity add, or an offset/scale relative to the level's base gravity. Negative values are *reverse gravity* — a band partway down flips polarity for a "hollow earth" mid-section, and the existing `gravity_SIGN` plumbing already handles the inversion at the physics level.
+- **Palette.** Logical colours 0–3 swap as the ship crosses the threshold, so the cave shifts from rust-red shallows to deep blues / blacks at depth. Cheap: just write the four palette registers when entering the band.
+- **Landscape colour byte / object colour byte.** Per-band override of `LANDSCAPE_COLOUR_BYTE` and the new `OBJECT_COLOUR_BYTE`, so terrain and turret/laser colour shift coherently with the palette.
+- **Background tint / star density.** If/when a starfield exists, density and colour can be band-driven so transitions read as "leaving daylight, entering deeper layers".
+- **X wrap behaviour.** Already partially exists as `_NO_WRAP_UNDERGROUND` (one Y threshold). Generalising X-wrap into the band system unifies the mechanism and gives multiple no-wrap zones per level instead of just one.
+- **Ambient hazards** — heat flag (see [Hot areas](#hot-areas)), water flag (see [Water as a general element](#water-as-a-general-element)). A "lava layer" band sets the heat flag without needing per-tile data.
+
+**Engine sketch:**
+- Per-level bands are a small struct-of-arrays: `band_y_INT_HI`, `band_y_INT`, plus one byte per overridable parameter, terminated by a sentinel like `$FF` in the high byte.
+- A single `update_active_band` runs once per frame: compares ship Y against the next-threshold Y, advances the active band index when crossed (in either direction), and writes the new parameters into the existing single-instance variables (`gravity_FRAC`, palette regs, colour bytes, `no_wrap_y_INT`, etc.). One forward and one backward boundary check — cheap.
+- Most of the per-frame physics is unchanged because the band system *only* mutates the same variables those routines already read. No new hot-path branches inside physics integration.
+- Transitions are step-shaped (snap to new value at the threshold). Smooth blending across an intermediate region is doable but costs more — leave it as a follow-up.
+
+**Editor UX:**
+- Bands appear in the editor as labelled horizontal lines at their Y thresholds, like the existing checkpoint Y dashes but in a different colour. The active band is the one whose threshold is just above the ship's spawn point (or whichever depth the editor is previewing).
+- Drag a band line vertically to move its Y. Right-click to add or delete.
+- A side panel (or status bar fields, in the same style as laser `(dx, dy)` / well strength) shows the parameter bundle: gravity value, palette colours as swatches, flags as toggles. Edit live; preview by scrolling the camera through the level so the editor renders each depth with that band's palette/landscape colour.
+
+**Layered with existing systems:**
+- Reverse gravity is already a level-wide modifier (`reverse_gravity_flag`, inverts every 6 levels). Bands subsume the level-wide case: a single band that covers the whole level reproduces the current behaviour.
+- The 6-level gravity cycle stays meaningful at the *level pack* layer (see [Level packs](#more-than-6-levels--level-packs)); inside a single deep level, bands give continuous variation that the global cycle can't.
+- Plays well with [Metroidvania structure](#metroidvania-structure): one large vertical world with distinct visual themes per depth zone, gated by upgrades that let you survive the deeper bands' hazards.
 
 ### More than 6 levels / level packs
 
