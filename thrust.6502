@@ -144,6 +144,7 @@ ANGLE_DOWN                          = $10       ; ship angle pointing straight d
 PIXEL_COLUMN_MASK                   = $03       ; pixel column mask (4 pixels per MODE 5 byte)
 SCREEN_ADDR_HI_OFFSET               = $38       ; high byte offset for screen address calculation
 LANDSCAPE_COLOUR_BYTE               = $F0       ; pixel byte for terrain lines (colour 2)
+OBJECT_COLOUR_BYTE                  = $FF       ; pixel byte for object colour (logical 3)
 
 PLAYER_CENTRE_X_OFFSET              = $04       ; X offset to centre of player sprite
 PLAYER_CENTRE_Y_OFFSET              = $05       ; Y offset to centre of player sprite
@@ -10732,7 +10733,12 @@ IF _TIMED_LASER
         STA     draw_line_end_y
 
     .laser_do_draw
-        LDA     hostile_bullet_pixel_byte
+        \\ Beam draws in the level's object colour (logical 3) so it visually
+        \\ reads as part of the turret/level palette rather than as a stream
+        \\ of enemy bullets. The hostile-bullet collision path still picks the
+        \\ beam up via existing ship-vs-pixel detection — colour is independent
+        \\ of which collision branches fire.
+        LDA     #OBJECT_COLOUR_BYTE
         STA     plot_line_pixels_byte
         JSR     draw_line
         CLC                                                           ; signal: beam was drawn
