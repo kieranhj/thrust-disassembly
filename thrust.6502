@@ -1417,7 +1417,7 @@ IF _GRAVITY_WELL
         EQUB    $04                              ; [D] gravity_well (small AABB; non-collidable)
 ENDIF
 IF _BOBBING_MINES
-        EQUB    $04                              ; [E] bobbing_mine
+        EQUB    $03                              ; [E] bobbing_mine (12 px wide)
 ENDIF
 
 .obj_type_height
@@ -1429,7 +1429,7 @@ IF _GRAVITY_WELL
         EQUB    $04                              ; [D] gravity_well
 ENDIF
 IF _BOBBING_MINES
-        EQUB    $08                              ; [E] bobbing_mine
+        EQUB    $0C                              ; [E] bobbing_mine (12 rows tall)
 ENDIF
 
 .obj_type_explosion_particle

@@ -428,6 +428,13 @@ class Editor:
         self._draw_status()
         pygame.display.flip()
 
+    def _sidebar_row_h(self):
+        """Per-row height in the object sidebar. Shrinks to fit all entries
+        in the available height; bounded between 34 and 52 so labels stay
+        legible. Add 2 px gap when laying out / hit-testing rows."""
+        avail_h = WINDOW_H - 50
+        return max(34, min(52, avail_h // len(OBJECT_NAMES) - 2))
+
     def _draw_sidebar(self):
         pygame.draw.rect(self.screen, COL_SIDEBAR,
                          (0, 0, SIDEBAR_W, WINDOW_H))
@@ -436,9 +443,9 @@ class Editor:
 
         palette = self.palette_rgb()
         y = 40
+        row_h = self._sidebar_row_h()
         for name in OBJECT_NAMES:
             spr = self.sprites[name]
-            row_h = 52
             row_rect = pygame.Rect(4, y, SIDEBAR_W - 8, row_h)
             if name == self.selected:
                 pygame.draw.rect(self.screen, COL_SEL, row_rect, border_radius=3)
@@ -718,7 +725,7 @@ class Editor:
                 # Sidebar click — switch sprite.
                 if mx < SIDEBAR_W and my >= 40:
                     rel_y = my - 40
-                    idx = rel_y // 54
+                    idx = rel_y // (self._sidebar_row_h() + 2)
                     if 0 <= idx < len(OBJECT_NAMES):
                         self.selected = OBJECT_NAMES[idx]
                         self._recompute_canvas()

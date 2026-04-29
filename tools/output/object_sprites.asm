@@ -172,25 +172,19 @@
         EQUB    $60,$60,$60,$10,$90,$80,$10,$E0
         EQUB    $60
 
-\ ******************************************************************************
-\ * MANUAL ADDITIONS BELOW (not produced by sprite_editor.py).                  *
-\ * If sprite_editor.py is re-run, these table entries and sprite blocks for    *
-\ * gravity_well / bobbing_mine will be lost. Update OBJECT_NAMES in            *
-\ * tools/sprite_codec.py (and provide source PNGs) before regenerating.        *
-\ ******************************************************************************
-
-\ Placeholder for OBJECT_gravity_well ($0D). The well never actually plots —
-\ update_and_draw_all_objects early-exits before reaching the sprite path —
-\ but the table needs an entry at this index so subsequent entries align.
 .obj_sprite_data_A_gravity_well
-        EQUB    $80,$FF
+        EQUB    $80,$80,$80,$80,$FF
 .obj_sprite_data_B_gravity_well
-        EQUB    $00
+        EQUB    $66,$FF,$FF,$66
 
-\ Placeholder for OBJECT_bobbing_mine ($0E). Aliased to the fuel sprite for
-\ now; replace via the sprite editor with a proper mine sprite.
-obj_sprite_data_A_bobbing_mine = obj_sprite_data_A_fuel
-obj_sprite_data_B_bobbing_mine = obj_sprite_data_B_fuel
+.obj_sprite_data_A_bobbing_mine
+        EQUB    $88,$88,$80,$10,$80,$10,$80,$10
+        EQUB    $80,$10,$80,$10,$80,$10,$80,$10
+        EQUB    $80,$10,$88,$88,$FF
+.obj_sprite_data_B_bobbing_mine
+        EQUB    $66,$99,$11,$88,$22,$44,$44,$22
+        EQUB    $88,$11,$88,$11,$44,$22,$22,$44
+        EQUB    $11,$88,$99,$66,$88,$FF,$66,$66
 
 .obj_sprite_data_A_table_LO
         EQUB    LO(obj_sprite_data_A_gun_up_right)

@@ -26,7 +26,7 @@ from typing import Dict, List, Tuple
 # Constants
 # ---------------------------------------------------------------------------
 
-# In order matching obj_sprite_data_A_table_LO at thrust.6502:8392.
+# In order matching obj_sprite_data_A_table_LO. Index = OBJECT_* type byte.
 OBJECT_NAMES = [
     "gun_up_right",
     "gun_down_right",
@@ -41,9 +41,11 @@ OBJECT_NAMES = [
     "laser_turret_down_right",
     "laser_turret_up_left",
     "laser_turret_down_left",
+    "gravity_well",                     # $0D: invisible field, sprite never plots (early-exit in update)
+    "bobbing_mine",                     # $0E: sine-wave hazard
 ]
 
-# Char-column widths from obj_type_width at thrust.6502:1327.
+# Char-column widths from obj_type_width.
 OBJECT_WIDTH_CHARS = {
     "gun_up_right":            5,
     "gun_down_right":          5,
@@ -58,6 +60,8 @@ OBJECT_WIDTH_CHARS = {
     "laser_turret_down_right": 5,
     "laser_turret_up_left":    5,
     "laser_turret_down_left":  5,
+    "gravity_well":            1,
+    "bobbing_mine":            3,
 }
 
 # BBC Micro Mode 1 physical palette (8 physical colours, index 0-7).

@@ -1607,22 +1607,13 @@ class Editor:
                     self.dragging_well_radius = True
                     self._set_well_radius_from_screen(mx)
                     return
-                # Wells and mines have no sprite, so _hit_test_object skips
-                # them; check their bespoke hit areas separately first.
+                # Wells have no sprite, so _hit_test_object skips them; check
+                # well centres separately first. Mines now render via the
+                # standard sprite path so _hit_test_object handles them.
                 well_hit = self._hit_test_well(mx, my)
                 if well_hit is not None:
                     self.selected_object = well_hit
                     obj = self.level.objects[well_hit]
-                    wx, wy = self.camera.screen_to_world(mx, my)
-                    grab_dx = wx - obj["x"]
-                    grab_dy = wy - obj["y"]
-                    self.dragging_object = (grab_dx, grab_dy)
-                    self.undo.save(self.level)
-                    return
-                mine_hit = self._hit_test_mine(mx, my)
-                if mine_hit is not None:
-                    self.selected_object = mine_hit
-                    obj = self.level.objects[mine_hit]
                     wx, wy = self.camera.screen_to_world(mx, my)
                     grab_dx = wx - obj["x"]
                     grab_dy = wy - obj["y"]
@@ -1779,8 +1770,6 @@ class Editor:
                 self.hovered_object = self._hit_test_object(mx, my)
                 if self.hovered_object is None:
                     self.hovered_object = self._hit_test_well(mx, my)
-                if self.hovered_object is None:
-                    self.hovered_object = self._hit_test_mine(mx, my)
                 self.hovered_laser_endpoint = self._hit_test_laser_endpoint(mx, my)
                 self.hovered_well_radius = self._hit_test_well_radius(mx, my)
             elif self.mode == "band":
@@ -2082,17 +2071,6 @@ class Editor:
                 continue
             cx, cy, _, _ = self._well_screen_geometry(obj)
             r = GRAVITY_WELL_CENTRE_RADIUS + GRAVITY_WELL_CENTRE_HIT_PADDING
-            if (mx - cx) ** 2 + (my - cy) ** 2 <= r * r:
-                return i
-        return None
-
-    def _hit_test_mine(self, mx, my):
-        """Return object index if (mx, my) is over a bobbing mine's body."""
-        for i, obj in enumerate(self.level.objects):
-            if obj["type"] != OBJECT_BOBBING_MINE:
-                continue
-            cx, cy = self.camera.world_to_screen(obj["x"], obj["y"])
-            r = 12  # spike-ball draw radius + click slack
             if (mx - cx) ** 2 + (my - cy) ** 2 <= r * r:
                 return i
         return None
@@ -2601,9 +2579,6 @@ class Editor:
             if obj["type"] == OBJECT_GRAVITY_WELL:
                 self._render_gravity_well(obj, i)
                 continue
-            if obj["type"] == OBJECT_BOBBING_MINE:
-                self._render_bobbing_mine(obj, i)
-                continue
             sprite = self.sprite_cache.get(obj["type"], lv)
             if sprite is None:
                 continue
@@ -2637,6 +2612,8 @@ class Editor:
                     self._render_laser_beam(obj, sx, sy, draw_w, draw_h)
                 elif obj["type"] in OBJECT_FIRING_TYPES:
                     self._render_gun_aim(obj, sx, sy, draw_w, draw_h)
+                elif obj["type"] == OBJECT_BOBBING_MINE:
+                    self._render_bobbing_mine_amp_bar(obj, sx, sy, draw_w, draw_h)
 
         screen.set_clip(None)
 
@@ -2763,41 +2740,26 @@ class Editor:
             pygame.draw.circle(self.screen, ring_col_handle, (hx, hy),
                                GRAVITY_WELL_HANDLE_RADIUS + 1, 1)
 
-    def _render_bobbing_mine(self, obj, i):
-        """Draw a bobbing mine: small star at the base Y, with a vertical
-        bar showing the amplitude extent when selected."""
-        cam = self.camera
-        sx, sy = cam.world_to_screen(obj["x"], obj["y"])
-        cxi, cyi = int(sx), int(sy)
-
+    def _render_bobbing_mine_amp_bar(self, obj, sx, sy, draw_w, draw_h):
+        """Overlay a vertical bar showing the mine's bob-amplitude extent at
+        the sprite centre. The mine sprite itself is drawn by the standard
+        path; this is just the editor-only bob-range indicator."""
         amp = obj.get("mine_amp", 0)
-        amp_screen_y = abs(amp) * cam.zoom
-        if amp_screen_y > 1:
-            bar_surf = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
-            pygame.draw.line(bar_surf, COL_BOBBING_MINE_RANGE,
-                             (cxi, cyi - int(amp_screen_y)),
-                             (cxi, cyi + int(amp_screen_y)), 2)
-            pygame.draw.line(bar_surf, COL_BOBBING_MINE_RANGE,
-                             (cxi - 4, cyi - int(amp_screen_y)),
-                             (cxi + 4, cyi - int(amp_screen_y)), 1)
-            pygame.draw.line(bar_surf, COL_BOBBING_MINE_RANGE,
-                             (cxi - 4, cyi + int(amp_screen_y)),
-                             (cxi + 4, cyi + int(amp_screen_y)), 1)
-            self.screen.blit(bar_surf, (0, 0))
-
-        pygame.draw.circle(self.screen, COL_BOBBING_MINE, (cxi, cyi), 5)
-        for ang in (0, 45, 90, 135):
-            import math
-            rad = math.radians(ang)
-            dx = int(8 * math.cos(rad))
-            dy = int(8 * math.sin(rad))
-            pygame.draw.line(self.screen, COL_BOBBING_MINE,
-                             (cxi - dx, cyi - dy), (cxi + dx, cyi + dy), 1)
-
-        if i == self.selected_object:
-            pygame.draw.circle(self.screen, COL_SELECT, (cxi, cyi), 10, 2)
-        elif i == self.hovered_object and self.mode == "object":
-            pygame.draw.circle(self.screen, (200, 200, 200), (cxi, cyi), 9, 1)
+        amp_screen_y = abs(amp) * self.camera.zoom
+        if amp_screen_y < 1:
+            return
+        cxi = int(sx + draw_w / 2)
+        cyi = int(sy + draw_h / 2)
+        bar_surf = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
+        top_y = cyi - int(amp_screen_y)
+        bot_y = cyi + int(amp_screen_y)
+        pygame.draw.line(bar_surf, COL_BOBBING_MINE_RANGE,
+                         (cxi, top_y), (cxi, bot_y), 2)
+        pygame.draw.line(bar_surf, COL_BOBBING_MINE_RANGE,
+                         (cxi - 4, top_y), (cxi + 4, top_y), 1)
+        pygame.draw.line(bar_surf, COL_BOBBING_MINE_RANGE,
+                         (cxi - 4, bot_y), (cxi + 4, bot_y), 1)
+        self.screen.blit(bar_surf, (0, 0))
 
     def _laser_beam_screen_coords(self, obj, sx, sy, draw_w, draw_h):
         """Return (barrel_sx, barrel_sy, end_sx, end_sy) screen positions for
