@@ -401,9 +401,20 @@ def import_beebasm(path):
         else:
             no_wrap_y = None
 
+        # Y-banded gravity overrides (may not be present in older exports).
+        # Three parallel arrays terminated by $FF in y_HI.
+        bands = []
+        b_hi = labels.get(f"level_{n}_band_y_HI", [])
+        b_lo = labels.get(f"level_{n}_band_y_LO", [])
+        b_g  = labels.get(f"level_{n}_band_gravity", [])
+        for i in range(min(len(b_hi), len(b_lo), len(b_g))):
+            if b_hi[i] == 0xFF:
+                break
+            bands.append({"y": (b_hi[i] << 8) | b_lo[i], "gravity": b_g[i]})
+
         lv = LevelData(n, list(left_wall), list(right_wall), objects,
                         terrain_rle, land_col, obj_col, checkpoints, grav,
-                        no_wrap_y)
+                        no_wrap_y, bands)
         levels.append(lv)
 
     return levels
@@ -634,6 +645,27 @@ def export_beebasm(levels):
     lines.append(f"        EQUB    {format_bytes([lv.gravity for lv in levels])}")
     lines.append("")
 
+    # Y-banded gravity overrides per level
+    lines.append("\\ ******************************************************************************")
+    lines.append("\\ * Y-banded parameter overrides per level")
+    lines.append("\\ * Three parallel arrays: band_y_HI, band_y_LO, band_gravity (gravity_FRAC).")
+    lines.append("\\ * Bands sorted ascending by Y. Sentinel: $FF in band_y_HI terminates list.")
+    lines.append("\\ ******************************************************************************")
+    lines.append("")
+    for lv in levels:
+        n = lv.level_num
+        bands = sorted(lv.bands, key=lambda b: b["y"])
+        y_hi = [(b["y"] >> 8) & 0xFF for b in bands] + [0xFF]
+        y_lo = [b["y"] & 0xFF for b in bands] + [0x00]
+        grav = [b["gravity"] & 0xFF for b in bands] + [0x00]
+        lines.append(f".level_{n}_band_y_HI")
+        lines.append(f"        EQUB    {format_bytes(y_hi)}")
+        lines.append(f".level_{n}_band_y_LO")
+        lines.append(f"        EQUB    {format_bytes(y_lo)}")
+        lines.append(f".level_{n}_band_gravity")
+        lines.append(f"        EQUB    {format_bytes(grav)}")
+        lines.append("")
+
     # No-wrap Y threshold table
     lines.append("\\ ******************************************************************************")
     lines.append("\\ * No-wrap Y threshold per level")
@@ -720,7 +752,7 @@ class LevelData:
 
     def __init__(self, level_num, left_wall, right_wall, objects,
                  terrain_rle=None, landscape_colour=None, object_colour=None,
-                 checkpoints=None, gravity=None, no_wrap_y=None):
+                 checkpoints=None, gravity=None, no_wrap_y=None, bands=None):
         self.level_num = level_num
         self.left_wall = left_wall   # list[int] X per Y row
         self.right_wall = right_wall
@@ -735,6 +767,9 @@ class LevelData:
         self.gravity = gravity if gravity is not None \
             else LEVEL_GRAVITY_FRAC[level_num]       # Q0.8 fractional gravity
         self.no_wrap_y = no_wrap_y if no_wrap_y is not None else 0xFFFF  # Y threshold for disabling X wrap
+        # Y-banded gravity overrides. Each band: {"y": int (0..0xFFFE), "gravity": int (0..0xFF)}.
+        # Sorted ascending by y; band is active when player_y >= band["y"].
+        self.bands = bands if bands is not None else []
         self.dirty = False
         self.terrain_dirty = False    # True when walls have been edited
 
@@ -1071,6 +1106,9 @@ class Editor:
         self.hovered_bottom = False     # hovering over the bottom limit handle
         self.dragging_no_wrap = False   # dragging the no-wrap Y threshold line
         self.hovered_no_wrap = False    # hovering over the no-wrap Y threshold line
+        self.selected_band = None       # index into level.bands
+        self.dragging_band = None       # (band_index, grab_dy) while dragging
+        self.hovered_band = None        # band index under cursor
 
         # Panning state
         self.panning = False
@@ -1191,6 +1229,15 @@ class Editor:
             self.line_start = None
             self.selected_checkpoint = None
 
+        elif event.key == pygame.K_b:
+            self.mode = "band"
+            self.dragging_wall = None
+            self.dragging_bottom = False
+            self.dragging_no_wrap = False
+            self.line_start = None
+            self.selected_object = None
+            self.selected_checkpoint = None
+
         elif event.key == pygame.K_g:
             self.show_grid = not self.show_grid
 
@@ -1238,10 +1285,17 @@ class Editor:
                     self.level.checkpoints.pop(self.selected_checkpoint)
                     self.level.dirty = True
                     self.selected_checkpoint = None
+            elif self.selected_band is not None and self.mode == "band":
+                self.undo.save(self.level)
+                self.level.bands.pop(self.selected_band)
+                self.level.dirty = True
+                self.selected_band = None
 
         elif event.key in (pygame.K_LEFTBRACKET, pygame.K_RIGHTBRACKET,
                            pygame.K_COMMA, pygame.K_PERIOD):
-            if (self.selected_object is not None
+            if self.mode == "band" and self.selected_band is not None:
+                self._adjust_selected_band_gravity(event.key, shift)
+            elif (self.selected_object is not None
                     and self.level.objects[self.selected_object]["type"] == OBJECT_GRAVITY_WELL):
                 self._adjust_selected_well_strength(event.key, shift)
             else:
@@ -1417,6 +1471,8 @@ class Editor:
                 self.obj_menu_world = (int(wx), int(wy))
             elif self.mode == "checkpoint":
                 self._handle_checkpoint_right_click(mx, my)
+            elif self.mode == "band":
+                self._handle_band_right_click(mx, my)
             return
 
         # Left click
@@ -1463,6 +1519,19 @@ class Editor:
                     self.undo.save(self.level)
                 else:
                     self.selected_checkpoint = None
+                    self.panning = True
+                    self.pan_start = (mx, my)
+
+            elif self.mode == "band":
+                hit = self._hit_test_band(mx, my)
+                if hit is not None:
+                    self.selected_band = hit
+                    band = self.level.bands[hit]
+                    grab_dy = wy - band["y"]
+                    self.dragging_band = (hit, grab_dy)
+                    self.undo.save(self.level)
+                else:
+                    self.selected_band = None
                     self.panning = True
                     self.pan_start = (mx, my)
 
@@ -1533,6 +1602,14 @@ class Editor:
             if self.dragging_checkpoint:
                 self.level.dirty = True
                 self.dragging_checkpoint = None
+            if self.dragging_band:
+                # Re-sort and remap selected_band index after drag.
+                idx, _ = self.dragging_band
+                target = self.level.bands[idx]
+                self.level.bands.sort(key=lambda b: b["y"])
+                self.selected_band = self.level.bands.index(target)
+                self.level.dirty = True
+                self.dragging_band = None
 
     def _handle_mouse_move(self, event):
         mx, my = event.pos
@@ -1590,6 +1667,12 @@ class Editor:
                 self.drag_start_y = row
             return
 
+        if self.dragging_band:
+            _, wy = self.camera.screen_to_world(mx, my)
+            idx, grab_dy = self.dragging_band
+            self.level.bands[idx]["y"] = max(0, min(0xFFFE, int(wy - grab_dy)))
+            return
+
         if self.dragging_checkpoint:
             wx, wy = self.camera.screen_to_world(mx, my)
             part, idx, grab_dx, grab_dy = self.dragging_checkpoint
@@ -1630,6 +1713,8 @@ class Editor:
                     self.hovered_object = self._hit_test_well(mx, my)
                 self.hovered_laser_endpoint = self._hit_test_laser_endpoint(mx, my)
                 self.hovered_well_radius = self._hit_test_well_radius(mx, my)
+            elif self.mode == "band":
+                self.hovered_band = self._hit_test_band(mx, my)
         else:
             self.hovered_laser_endpoint = False
             self.hovered_well_radius = False
@@ -1667,6 +1752,48 @@ class Editor:
         if mx >= wx0 and mx <= wx256 and abs(my - bottom_sy) < BOTTOM_HIT_TOLERANCE:
             return True
         return False
+
+    def _hit_test_band(self, mx, my):
+        """Test if screen position is near a band Y line. Returns band index or None.
+        Bands span the full editor width (like checkpoint threshold lines)."""
+        for i, band in enumerate(self.level.bands):
+            _, line_sy = self.camera.world_to_screen(0, band["y"])
+            if abs(my - line_sy) < BOTTOM_HIT_TOLERANCE:
+                return i
+        return None
+
+    def _handle_band_right_click(self, mx, my):
+        """Right-click in band mode: add a band at cursor Y, or delete one if hit."""
+        hit = self._hit_test_band(mx, my)
+        if hit is not None:
+            self.undo.save(self.level)
+            self.level.bands.pop(hit)
+            self.level.dirty = True
+            self.selected_band = None
+            return
+        _, wy = self.camera.screen_to_world(mx, my)
+        new_y = max(0, min(0xFFFE, int(wy)))
+        self.undo.save(self.level)
+        # Default new band gravity = level base, so it has no effect until edited.
+        self.level.bands.append({"y": new_y, "gravity": self.level.gravity})
+        self.level.bands.sort(key=lambda b: b["y"])
+        self.level.dirty = True
+        self.selected_band = next(
+            (i for i, b in enumerate(self.level.bands) if b["y"] == new_y), None)
+
+    def _adjust_selected_band_gravity(self, key, shift):
+        """[/]/,/. tweak the selected band's gravity_FRAC; shift = ±$10."""
+        band = self.level.bands[self.selected_band]
+        delta = 0
+        if key in (pygame.K_LEFTBRACKET, pygame.K_COMMA):
+            delta = -1
+        elif key in (pygame.K_RIGHTBRACKET, pygame.K_PERIOD):
+            delta = +1
+        if shift:
+            delta *= 16
+        self.undo.save(self.level)
+        band["gravity"] = (band["gravity"] + delta) & 0xFF
+        self.level.dirty = True
 
     def _hit_test_no_wrap(self, mx, my):
         """Test if screen position is near the no-wrap Y threshold line."""
@@ -1938,6 +2065,7 @@ class Editor:
             self.mode = "wall"
             self.selected_object = None
             self.selected_checkpoint = None
+            self.selected_band = None
         elif mode_x + 65 <= mx < mode_x + 130:
             self.mode = "object"
             self.dragging_wall = None
@@ -1945,6 +2073,7 @@ class Editor:
             self.dragging_no_wrap = False
             self.line_start = None
             self.selected_checkpoint = None
+            self.selected_band = None
         elif mode_x + 135 <= mx < mode_x + 195:
             self.mode = "checkpoint"
             self.dragging_wall = None
@@ -1952,9 +2081,18 @@ class Editor:
             self.dragging_no_wrap = False
             self.line_start = None
             self.selected_object = None
+            self.selected_band = None
+        elif mode_x + 205 <= mx < mode_x + 265:
+            self.mode = "band"
+            self.dragging_wall = None
+            self.dragging_bottom = False
+            self.dragging_no_wrap = False
+            self.line_start = None
+            self.selected_object = None
+            self.selected_checkpoint = None
 
         # Wall tool buttons (Draw / Line)
-        tool_x = 590
+        tool_x = 660
         if self.mode == "wall":
             if tool_x <= mx < tool_x + 50:
                 self.wall_tool = "draw"
@@ -1964,7 +2102,7 @@ class Editor:
                 self.line_start = None
 
         # Colour swatches - hit test on swatch rectangles
-        col_x = 710
+        col_x = 780
         lv = self.level
         for attr in ("landscape_colour", "object_colour"):
             label = "Land" if attr == "landscape_colour" else "Obj"
@@ -1984,7 +2122,7 @@ class Editor:
 
         # Gravity +/- buttons
         grav_x = col_x
-        grav_label_w = self.font.size("Grav")[0]
+        grav_label_w = self.font.size("Gravity")[0]
         val_x = grav_x + grav_label_w + 4
         if val_x <= mx < val_x + 18:  # minus button
             lv.gravity = max(0, lv.gravity - 1)
@@ -2191,6 +2329,7 @@ class Editor:
             self._render_grid()
         self._render_objects()
         self._render_checkpoints()
+        self._render_bands()
         self._render_wall_highlights()
         self._render_toolbar()
         self._render_status()
@@ -2610,6 +2749,9 @@ class Editor:
                 for dx in range(0, sw, dash_len * 2):
                     pygame.draw.line(screen, line_col,
                                      (dx, int(sy_thresh)), (min(dx + dash_len, sw), int(sy_thresh)))
+                label = f"CP{i} Y={cp['spawn_y']}"
+                txt = self.font_small.render(label, True, line_col)
+                screen.blit(txt, (4, int(sy_thresh) - 14))
 
             # Draw ship sprite at top-left
             highlight = (self.mode == "checkpoint" and
@@ -2627,12 +2769,6 @@ class Editor:
                 pygame.draw.rect(screen, (255, 255, 100),
                                  (int(sx_tl) - 1, int(sy_tl) - 1,
                                   draw_w + 2, draw_h + 2), 1)
-
-            # Label — only in checkpoint mode
-            if self.mode == "checkpoint":
-                label = f"CP{i}"
-                txt = self.font_small.render(label, True, (100, 200, 255))
-                screen.blit(txt, (4, int(sy_tl) - 14))
 
             # Game viewport rectangle (72 wide x 111 tall, offset 73 rows from window_y)
             if self.mode == "checkpoint":
@@ -2659,6 +2795,32 @@ class Editor:
                                      (int(vp_x1), edge_y), (int(vp_x1), ey))
 
         screen.set_clip(None)
+
+    def _render_bands(self):
+        """Draw Y-band threshold lines (cyan dashed) with gravity label.
+        Only visible in band mode, similar to other mode-specific overlays."""
+        if self.mode != "band":
+            return
+        lv = self.level
+        if not lv.bands:
+            return
+        cam = self.camera
+        screen = self.screen
+        sw = screen.get_width()
+        for i, band in enumerate(lv.bands):
+            _, sy = cam.world_to_screen(0, band["y"])
+            y = int(sy)
+            if not (VIEWPORT_Y <= y <= VIEWPORT_Y + cam.viewport_h):
+                continue
+            active = (i == self.selected_band or i == self.hovered_band)
+            col = (140, 240, 255) if active else (70, 170, 200)
+            dash = 8
+            for dx in range(0, sw, dash * 2):
+                pygame.draw.line(screen, col, (dx, y),
+                                 (min(dx + dash, sw), y), 2)
+            label = f"Band Y={band['y']}  g=${band['gravity']:02X}"
+            txt = self.font_small.render(label, True, col)
+            screen.blit(txt, (4, y - 14))
 
     def _render_wall_highlights(self):
         """Draw highlights on hovered/dragged wall edges and bottom handle."""
@@ -2783,7 +2945,7 @@ class Editor:
 
         # Mode buttons
         mode_x = 380
-        for mode_name, offset in [("Wall", 0), ("Object", 65), ("Chkpt", 135)]:
+        for mode_name, offset in [("Wall", 0), ("Object", 65), ("Chkpt", 135), ("Band", 205)]:
             col = COL_TOOLBAR_ACTIVE if self.mode == mode_name.lower() \
                 or (mode_name == "Chkpt" and self.mode == "checkpoint") else COL_TOOLBAR
             rect = pygame.Rect(mode_x + offset, 5, 60, 30)
@@ -2794,7 +2956,7 @@ class Editor:
 
         # Wall tool buttons (Draw / Line) - only shown in wall mode
         if self.mode == "wall":
-            tool_x = 590
+            tool_x = 660
             for tool_name, offset in [("Draw", 0), ("Line", 55)]:
                 col = COL_TOOLBAR_ACTIVE if self.wall_tool == tool_name.lower() else COL_TOOLBAR
                 rect = pygame.Rect(tool_x + offset, 5, 50, 30)
@@ -2804,7 +2966,7 @@ class Editor:
                 screen.blit(txt, (tool_x + offset + 6, 12))
 
         # Colour swatches
-        col_x = 710
+        col_x = 780
         lv = self.level
         for label, phys_col in [("Land", lv.landscape_colour),
                                 ("Obj", lv.object_colour)]:
@@ -2935,6 +3097,16 @@ class Editor:
 
         if self.mode == "checkpoint":
             parts.append(f"{len(lv.checkpoints)} checkpoint(s)")
+
+        if self.mode == "band":
+            if self.selected_band is not None and self.selected_band < len(lv.bands):
+                b = lv.bands[self.selected_band]
+                parts.append(
+                    f"Band Y={b['y']}  gravity=${b['gravity']:02X}  "
+                    f"([/] ±1, ,/. ±$10, shift = ±$10×16, Del to remove)")
+            else:
+                parts.append(
+                    f"{len(lv.bands)} band(s)  (click to select; right-click empty to add)")
 
         status = "  |  ".join(parts)
         txt = self.font_small.render(status, True, COL_STATUS_TEXT)

@@ -165,6 +165,54 @@
         EQUB    $05,$07,$09,$0B,$0C,$0D
 
 \ ******************************************************************************
+\ * Y-banded parameter overrides per level
+\ * Three parallel arrays: band_y_HI, band_y_LO, band_gravity (gravity_FRAC).
+\ * Bands sorted ascending by Y. Sentinel: $FF in band_y_HI terminates list.
+\ ******************************************************************************
+
+.level_0_band_y_HI
+        EQUB    $FF
+.level_0_band_y_LO
+        EQUB    $00
+.level_0_band_gravity
+        EQUB    $00
+
+.level_1_band_y_HI
+        EQUB    $01,$02,$FF
+.level_1_band_y_LO
+        EQUB    $D0,$06,$00
+.level_1_band_gravity
+        EQUB    $0E,$F8,$00
+
+.level_2_band_y_HI
+        EQUB    $FF
+.level_2_band_y_LO
+        EQUB    $00
+.level_2_band_gravity
+        EQUB    $00
+
+.level_3_band_y_HI
+        EQUB    $FF
+.level_3_band_y_LO
+        EQUB    $00
+.level_3_band_gravity
+        EQUB    $00
+
+.level_4_band_y_HI
+        EQUB    $FF
+.level_4_band_y_LO
+        EQUB    $00
+.level_4_band_gravity
+        EQUB    $00
+
+.level_5_band_y_HI
+        EQUB    $FF
+.level_5_band_y_LO
+        EQUB    $00
+.level_5_band_gravity
+        EQUB    $00
+
+\ ******************************************************************************
 \ * No-wrap Y threshold per level
 \ * X wrap disabled when player Y >= this value ($FFFF = always wrap)
 \ ******************************************************************************

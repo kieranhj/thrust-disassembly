@@ -38,6 +38,7 @@ _FAST_SPRITES        = (_SWRAM_BUILD AND FALSE)   ; Pre-baked two-stream ship sp
 _NO_WRAP_UNDERGROUND = (_SWRAM_BUILD AND TRUE)    ; Skip X wrap when below surface
 _TIMED_LASER         = (_SWRAM_BUILD AND TRUE)    ; Timed laser turret enemy ($09)
 _GRAVITY_WELL        = (_SWRAM_BUILD AND TRUE)    ; Gravity well object ($0D)
+_Y_BANDS             = (_SWRAM_BUILD AND TRUE)    ; Y-banded per-level parameter overrides (gravity)
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -6886,6 +6887,9 @@ ENDIF
         LDX     level_number
         LDA     level_gravity_FRAC_table,X
         STA     gravity_FRAC
+IF _Y_BANDS
+        STA     level_base_gravity_FRAC               ; remember unmodified base for per-frame band overrides
+ENDIF
 IF _NO_WRAP_UNDERGROUND
         LDA     level_no_wrap_y_table_LO,X
         STA     no_wrap_y_INT
@@ -7010,6 +7014,22 @@ IF _GRAVITY_WELL
         STA     well_load_strength_addr_LO                ; **MODIFIES CODE** (slot 2 = well strength)
         LDA     level_obj_data_2_lookup_HI,X
         STA     well_load_strength_addr_HI                ; **MODIFIES CODE**
+ENDIF
+IF _Y_BANDS
+        LDA     level_band_y_HI_lookup_LO,X
+        STA     band_load_y_hi_addr_LO                    ; **MODIFIES CODE**
+        LDA     level_band_y_HI_lookup_HI,X
+        STA     band_load_y_hi_addr_HI                    ; **MODIFIES CODE**
+
+        LDA     level_band_y_LO_lookup_LO,X
+        STA     band_load_y_lo_addr_LO                    ; **MODIFIES CODE**
+        LDA     level_band_y_LO_lookup_HI,X
+        STA     band_load_y_lo_addr_HI                    ; **MODIFIES CODE**
+
+        LDA     level_band_gravity_lookup_LO,X
+        STA     band_load_gravity_addr_LO                 ; **MODIFIES CODE**
+        LDA     level_band_gravity_lookup_HI,X
+        STA     band_load_gravity_addr_HI                 ; **MODIFIES CODE**
 ENDIF
 
         TXA
@@ -9033,6 +9053,9 @@ SET_BG_COL PAL_green
         JSR     plot_debug_frame_time
         ENDIF
         JSR     update_sound_timer
+IF _Y_BANDS
+        JSR     update_active_band
+ENDIF
         JSR     ship_input_thrust_calculate_force
 SET_BG_COL PAL_black
         
@@ -10359,6 +10382,43 @@ IF _TIMED_LASER
         EQUB    LO(level_4_obj_data_2), HI(level_4_obj_data_2)
         EQUB    LO(level_5_obj_data_2), HI(level_5_obj_data_2)
 
+IF _Y_BANDS
+\\ Per-level Y-band parameter overrides. Three parallel arrays per level
+\\ (band Y high byte, band Y low byte, gravity_FRAC override). Bands sorted
+\\ ascending by Y. Sentinel: $FF in band_y_HI terminates the list. A level
+\\ with no bands is just a single $FF byte in band_y_HI; the y_LO and
+\\ gravity arrays still need a placeholder byte at that index.
+.level_band_y_HI_lookup_LO
+        EQUB    LO(level_0_band_y_HI)
+.level_band_y_HI_lookup_HI
+        EQUB    HI(level_0_band_y_HI)
+        EQUB    LO(level_1_band_y_HI), HI(level_1_band_y_HI)
+        EQUB    LO(level_2_band_y_HI), HI(level_2_band_y_HI)
+        EQUB    LO(level_3_band_y_HI), HI(level_3_band_y_HI)
+        EQUB    LO(level_4_band_y_HI), HI(level_4_band_y_HI)
+        EQUB    LO(level_5_band_y_HI), HI(level_5_band_y_HI)
+
+.level_band_y_LO_lookup_LO
+        EQUB    LO(level_0_band_y_LO)
+.level_band_y_LO_lookup_HI
+        EQUB    HI(level_0_band_y_LO)
+        EQUB    LO(level_1_band_y_LO), HI(level_1_band_y_LO)
+        EQUB    LO(level_2_band_y_LO), HI(level_2_band_y_LO)
+        EQUB    LO(level_3_band_y_LO), HI(level_3_band_y_LO)
+        EQUB    LO(level_4_band_y_LO), HI(level_4_band_y_LO)
+        EQUB    LO(level_5_band_y_LO), HI(level_5_band_y_LO)
+
+.level_band_gravity_lookup_LO
+        EQUB    LO(level_0_band_gravity)
+.level_band_gravity_lookup_HI
+        EQUB    HI(level_0_band_gravity)
+        EQUB    LO(level_1_band_gravity), HI(level_1_band_gravity)
+        EQUB    LO(level_2_band_gravity), HI(level_2_band_gravity)
+        EQUB    LO(level_3_band_gravity), HI(level_3_band_gravity)
+        EQUB    LO(level_4_band_gravity), HI(level_4_band_gravity)
+        EQUB    LO(level_5_band_gravity), HI(level_5_band_gravity)
+ENDIF
+
 \ Per-object cached screen coords for the laser beam: when
 \ OBJ_flag_laser_beam_drawn is set in level_obj_flags[X], these hold the
 \ obj_screen_x/obj_screen_y from the frame the beam was XOR-drawn so
@@ -11197,6 +11257,80 @@ WELL_DEBRIS_SPAWN_MASK    = $01          ; emit one particle every 8 ticks per w
         LDX     current_object
         RTS
 \\ }
+ENDIF
+
+IF _Y_BANDS
+\ ******************************************************************************
+\ * Y-banded per-level parameter overrides
+\ *
+\ * Each frame, scans the active level's band list and overwrites gravity_FRAC
+\ * with the override value of the deepest band whose Y threshold is at or
+\ * above the player. Bands sorted ascending; sentinel $FF in band_y_HI ends
+\ * the list. Reverse-gravity flag is honoured by EOR'ing the result, mirroring
+\ * the level-init logic in initialise_level_pointers.
+\ ******************************************************************************
+
+.level_base_gravity_FRAC EQUB $00       ; raw level gravity (pre reverse-flag), set in initialise_level_pointers
+
+.update_active_band
+        \\ Start each frame from the level's base gravity, applying
+        \\ reverse_gravity_flag (the every-6-levels inversion). gravity is a
+        \\ 16-bit signed value (gravity_SIGN:gravity_FRAC); we write both
+        \\ bytes here so the per-frame band scan can later override them
+        \\ with a sign-extended band byte.
+        LDY     #$00
+        LDA     reverse_gravity_flag
+        BEQ     update_band_base_pos
+        LDA     level_base_gravity_FRAC
+        EOR     #$FF
+        STA     gravity_FRAC
+        DEY                                             ; Y = $FF
+        JMP     update_band_base_done
+.update_band_base_pos
+        LDA     level_base_gravity_FRAC
+        STA     gravity_FRAC
+.update_band_base_done
+        STY     gravity_SIGN
+
+        LDX     #$00
+.update_band_scan_loop
+.band_load_y_hi
+        LDA     level_0_band_y_HI,X                    ; **SELF-MODIFIED CODE**
+        band_load_y_hi_addr_LO = band_load_y_hi+1
+        band_load_y_hi_addr_HI = band_load_y_hi+2
+        CMP     #$FF
+        BEQ     update_band_done
+        CMP     player_ypos_INT_HI
+        BCC     update_band_active                      ; band_HI < player_HI -> band active
+        BNE     update_band_done                        ; band_HI > player_HI -> not yet, list sorted
+.band_load_y_lo
+        LDA     level_0_band_y_LO,X                    ; **SELF-MODIFIED CODE**
+        band_load_y_lo_addr_LO = band_load_y_lo+1
+        band_load_y_lo_addr_HI = band_load_y_lo+2
+        CMP     player_ypos_INT
+        BEQ     update_band_active                      ; equal counts as active
+        BCS     update_band_done                        ; band_LO > player_LO -> not yet
+.update_band_active
+        \\ Band byte is a signed Q-format gravity value: bit 7 sign-extends
+        \\ into gravity_SIGN so $80..$FF give upward (negative) gravity.
+        \\ Band override is absolute -- reverse_gravity_flag has already been
+        \\ applied to the base above, but bands themselves bypass it so
+        \\ "this band is hollow-earth reverse" reads literally.
+.band_load_gravity
+        LDA     level_0_band_gravity,X                 ; **SELF-MODIFIED CODE**
+        band_load_gravity_addr_LO = band_load_gravity+1
+        band_load_gravity_addr_HI = band_load_gravity+2
+        STA     gravity_FRAC
+        LDY     #$00
+        ASL     A                                       ; bit 7 of band byte -> C
+        BCC     update_band_sign_pos
+        DEY                                             ; Y = $FF when bit 7 set
+.update_band_sign_pos
+        STY     gravity_SIGN
+        INX
+        BNE     update_band_scan_loop
+.update_band_done
+        RTS
 ENDIF
 
 IF PARTICLE_table_max<>$1F
