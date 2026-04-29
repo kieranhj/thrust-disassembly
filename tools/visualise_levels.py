@@ -86,6 +86,7 @@ OBJECT_TYPE_NAMES = {
     0x0C: "Laser turret (DL)",
     0x0D: "Gravity well",
     0x0E: "Bobbing mine",
+    0x0F: "Bobbing mine (H)",
 }
 
 OBJECT_TYPE_MARKERS = {
@@ -103,7 +104,8 @@ OBJECT_TYPE_MARKERS = {
     0x0B: ("X", "darkred"),   # laser turret up-left
     0x0C: ("x", "darkred"),   # laser turret down-left
     0x0D: ("o", "skyblue"),   # gravity well
-    0x0E: ("*", "yellow"),    # bobbing mine
+    0x0E: ("*", "yellow"),    # bobbing mine (vertical)
+    0x0F: ("*", "orange"),    # bobbing mine (horizontal)
 }
 
 # ---------------------------------------------------------------------------

@@ -156,10 +156,14 @@ GRAVITY_WELL_HANDLE_HIT_PADDING = 6
 COL_GRAVITY_WELL     = (140, 160, 255)
 COL_GRAVITY_WELL_RING = (140, 160, 255, 110)  # diamond outline (translucent)
 
-# Bobbing mine object ($0E, SWRAM-only). Y position bobs along a sine curve
-# with per-instance phase (slot 0) and signed amplitude (slot 1). Slot 2 is
-# the runtime previous-offset; always 0 in level data.
-OBJECT_BOBBING_MINE  = 0x0E
+# Bobbing mine objects ($0E vertical, $0F horizontal — both SWRAM-only).
+# Position bobs along a sine curve with per-instance phase (slot 0) and
+# signed amplitude (slot 1). Slot 2 is the runtime previous-offset; always
+# 0 in level data.
+OBJECT_BOBBING_MINE             = 0x0E
+OBJECT_BOBBING_MINE_HORIZONTAL  = 0x0F
+BOBBING_MINE_TYPES = frozenset({OBJECT_BOBBING_MINE,
+                                OBJECT_BOBBING_MINE_HORIZONTAL})
 BOBBING_MINE_DEFAULT_PHASE = 0
 BOBBING_MINE_DEFAULT_AMP   = 32   # signed pixels
 COL_BOBBING_MINE     = (255, 220, 80)
@@ -357,7 +361,7 @@ def import_beebasm(path):
                     dx_byte, dy_byte = default_dx & 0xFF, default_dy & 0xFF
                     wr, ws = slot_1, slot_2
                     mine_phase, mine_amp = 0, 0
-                elif t == OBJECT_BOBBING_MINE:
+                elif t in BOBBING_MINE_TYPES:
                     dx_byte, dy_byte = default_dx & 0xFF, default_dy & 0xFF
                     wr, ws = 0, 0
                     mine_phase, mine_amp = gp, slot_1
@@ -644,7 +648,7 @@ def export_beebasm(levels):
             data_2 = []
             for o in obj:
                 t = o['type']
-                if t == OBJECT_BOBBING_MINE:
+                if t in BOBBING_MINE_TYPES:
                     data_0.append(o.get('mine_phase', 0) & 0xFF)
                     data_1.append(o.get('mine_amp', 0) & 0xFF)
                     data_2.append(0)
@@ -1328,7 +1332,7 @@ class Editor:
                     and self.level.objects[self.selected_object]["type"] == OBJECT_GRAVITY_WELL):
                 self._adjust_selected_well_strength(event.key, shift)
             elif (self.selected_object is not None
-                    and self.level.objects[self.selected_object]["type"] == OBJECT_BOBBING_MINE):
+                    and self.level.objects[self.selected_object]["type"] in BOBBING_MINE_TYPES):
                 self._adjust_selected_mine_param(event.key, shift)
             else:
                 self._adjust_selected_gun_aim(event.key)
@@ -1447,7 +1451,7 @@ class Editor:
         if self.selected_object is None:
             return
         obj = self.level.objects[self.selected_object]
-        if obj["type"] != OBJECT_BOBBING_MINE:
+        if obj["type"] not in BOBBING_MINE_TYPES:
             return
         if key in (pygame.K_LEFTBRACKET, pygame.K_RIGHTBRACKET):
             step = 10 if shift else 1
@@ -2220,7 +2224,7 @@ class Editor:
             self.undo.save(self.level)
             wx, wy = self.obj_menu_world
             is_well = obj_type == OBJECT_GRAVITY_WELL
-            is_mine = obj_type == OBJECT_BOBBING_MINE
+            is_mine = obj_type in BOBBING_MINE_TYPES
             self.level.objects.append({"x": wx, "y": wy, "type": obj_type,
                                         "gun_aim": 0x00,
                                         "laser_dx": LASER_BEAM_DX_PIXELS.get(obj_type, 0),
@@ -2612,7 +2616,7 @@ class Editor:
                     self._render_laser_beam(obj, sx, sy, draw_w, draw_h)
                 elif obj["type"] in OBJECT_FIRING_TYPES:
                     self._render_gun_aim(obj, sx, sy, draw_w, draw_h)
-                elif obj["type"] == OBJECT_BOBBING_MINE:
+                elif obj["type"] in BOBBING_MINE_TYPES:
                     self._render_bobbing_mine_amp_bar(obj, sx, sy, draw_w, draw_h)
 
         screen.set_clip(None)
@@ -2741,24 +2745,43 @@ class Editor:
                                GRAVITY_WELL_HANDLE_RADIUS + 1, 1)
 
     def _render_bobbing_mine_amp_bar(self, obj, sx, sy, draw_w, draw_h):
-        """Overlay a vertical bar showing the mine's bob-amplitude extent at
-        the sprite centre. The mine sprite itself is drawn by the standard
+        """Overlay a bar showing the mine's bob-amplitude extent at the
+        sprite centre. Vertical mines get a vertical bar; horizontal mines
+        get a horizontal one. The sprite itself is drawn by the standard
         path; this is just the editor-only bob-range indicator."""
         amp = obj.get("mine_amp", 0)
-        amp_screen_y = abs(amp) * self.camera.zoom
-        if amp_screen_y < 1:
+        if amp == 0:
             return
+        cam = self.camera
         cxi = int(sx + draw_w / 2)
         cyi = int(sy + draw_h / 2)
         bar_surf = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
-        top_y = cyi - int(amp_screen_y)
-        bot_y = cyi + int(amp_screen_y)
-        pygame.draw.line(bar_surf, COL_BOBBING_MINE_RANGE,
-                         (cxi, top_y), (cxi, bot_y), 2)
-        pygame.draw.line(bar_surf, COL_BOBBING_MINE_RANGE,
-                         (cxi - 4, top_y), (cxi + 4, top_y), 1)
-        pygame.draw.line(bar_surf, COL_BOBBING_MINE_RANGE,
-                         (cxi - 4, bot_y), (cxi + 4, bot_y), 1)
+        if obj["type"] == OBJECT_BOBBING_MINE_HORIZONTAL:
+            # World X displays at 2x scale (ASPECT) compared to world Y; use
+            # the camera's x_scale so the bar matches the sprite's width.
+            extent = abs(amp) * cam.x_scale
+            if extent < 1:
+                return
+            left_x = cxi - int(extent)
+            right_x = cxi + int(extent)
+            pygame.draw.line(bar_surf, COL_BOBBING_MINE_RANGE,
+                             (left_x, cyi), (right_x, cyi), 2)
+            pygame.draw.line(bar_surf, COL_BOBBING_MINE_RANGE,
+                             (left_x, cyi - 4), (left_x, cyi + 4), 1)
+            pygame.draw.line(bar_surf, COL_BOBBING_MINE_RANGE,
+                             (right_x, cyi - 4), (right_x, cyi + 4), 1)
+        else:
+            extent = abs(amp) * cam.zoom
+            if extent < 1:
+                return
+            top_y = cyi - int(extent)
+            bot_y = cyi + int(extent)
+            pygame.draw.line(bar_surf, COL_BOBBING_MINE_RANGE,
+                             (cxi, top_y), (cxi, bot_y), 2)
+            pygame.draw.line(bar_surf, COL_BOBBING_MINE_RANGE,
+                             (cxi - 4, top_y), (cxi + 4, top_y), 1)
+            pygame.draw.line(bar_surf, COL_BOBBING_MINE_RANGE,
+                             (cxi - 4, bot_y), (cxi + 4, bot_y), 1)
         self.screen.blit(bar_surf, (0, 0))
 
     def _laser_beam_screen_coords(self, obj, sx, sy, draw_w, draw_h):
@@ -3170,11 +3193,12 @@ class Editor:
                 s = obj.get("well_strength", 0)
                 parts.append(
                     f"r={r} s={s:+d}  (drag handle to resize; [/] strength ±1, shift = ±10)")
-            elif obj["type"] == OBJECT_BOBBING_MINE:
+            elif obj["type"] in BOBBING_MINE_TYPES:
                 phase = obj.get("mine_phase", 0)
                 amp = obj.get("mine_amp", 0)
+                axis = "H" if obj["type"] == OBJECT_BOBBING_MINE_HORIZONTAL else "V"
                 parts.append(
-                    f"phase=${phase:02X} amp={amp:+d}  ([/] amp ±1 (shift ±10)  ,/. phase ±1 (shift ±8))")
+                    f"axis={axis} phase=${phase:02X} amp={amp:+d}  ([/] amp ±1 (shift ±10)  ,/. phase ±1 (shift ±8))")
             elif obj["type"] in OBJECT_FIRING_TYPES:
                 aim = obj.get("gun_aim", 0x00)
                 base = aim & 0x1C

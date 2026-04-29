@@ -14,7 +14,6 @@ Open work items, one line each. Full details in the sections below; completed wo
 - [Landing bubbles](#landing-bubbles) — soft capture points that hold the ship and recharge it
 - [Fans / turbines](#fans--turbines) — directional force emitters over rectangular regions
 - [Rotating gun emplacements](#rotating-gun-emplacements) — per-frame angle sweep, fires when aim crosses player
-- [Bobbing mines](#bobbing-mines) — passive sine-wave hazards with destroy-on-contact
 - [Hot areas](#hot-areas) — heat accumulation degrades flight; offset by a heatsink upgrade
 - [Water as a general element](#water-as-a-general-element) — submerged regions with modified physics
 
@@ -115,12 +114,6 @@ Directional force emitters — an alternative to the radial gravity nodes. Each 
 Like the existing gun types $00-$03 but with a continuously rotating aim angle instead of fixed cardinal directions. Fires when the aim passes near the player, or on a fixed timer regardless of aim. Already have the 17 rotation frames from the ship sprite system — could reuse the same angle indexing.
 
 **Implementation notes:** per-frame `gun_base_angle` increment; existing particle spawn code handles the rest.
-
-### Bobbing mines
-
-Passive hazards that float in place, bobbing gently up and down on a sine wave. Destroy on contact with ship or bullet, exploding with a blast radius.
-
-**Implementation notes:** Y position is `base_y + sin(frame_counter + phase) * amplitude`. Phase offset per mine so a group doesn't bob in lockstep. Collision is a simple circle test; on contact, spawn an explosion particle burst and apply radial impulse to the ship if close enough.
 
 ### Hot areas
 
@@ -468,6 +461,7 @@ Implemented features and finished investigations, newest first. Each entry links
 
 ### Features
 
+- **Bobbing mines** (`_BOBBING_MINES`, SWRAM build, types `$0E` vertical and `$0F` horizontal). Passive sine-wave hazards: each mine carries `phase` (slot 0) and signed `amplitude` (slot 1) and bobs along its axis with one cycle per 256 frames (~4s). 256-entry signed Q.7 sin table indexed by `(phase + level_tick_counter) & $FF`. `update_bobbing_mine[_horizontal]` runs once per frame per mine in `update_and_draw_all_objects`, applying `(new_offset − slot_2)` as a delta to `level_obj_pos_Y` (16-bit) or `level_obj_pos_X` (8-bit, wraps). Using `level_tick_counter` (rather than `vsync_count`) means the mine doesn't drift through phase during the player teleport-in animation between level start and the first tick. Bullet contact destroys mines via the existing `check_generic_destructible` → `destroy_object` path. Ship contact uses an AABB test in `check_planet_explode_trigger` (sized to the sum of mine + ship widths, X in chars / Y in pixels) that jumps to `destroy_object` and forces `plot_ship_collision_detected = $FF` so the player and mine pop together. Real 12×12 spike-ball sprite via `sprite_codec.py` / `sprite_editor.py`; gravity-well placeholder (1×4) added too so the sprite tables stay aligned. Editor: new types in the object menu, mine renders via the standard sprite-cache path, amplitude indicator drawn as a vertical or horizontal bar; `[`/`]` adjust amp ±1 (shift = ±10), `,`/`.` adjust phase ±1 (shift = ±8). **Note:** ship-contact AABB thresholds (`|dx| < 5` chars, `|dy| < 11` px) are tuned by feel against the current mine sprite and ship sprite — revisit if either sprite changes size or if play feels too forgiving / unforgiving.
 - **Y-banded level parameters — gravity** (`_Y_BANDS`, SWRAM build). Per-level sorted list of Y thresholds, each carrying a `gravity_FRAC` byte. `update_active_band` runs once per frame: scans the level's `band_y_HI` / `band_y_LO` arrays (terminated by `$FF` in the high byte), reseeds `gravity_FRAC` / `gravity_SIGN` from the level base, then overrides with the deepest crossed band's value. Band gravity bytes are sign-extended (bit 7 → `gravity_SIGN`) so `$80..$FF` give upward gravity for "hollow earth" mid-sections. Level-base gravity is also sign-extended at level init and on each frame's reseed, so negative base gravity is supported. Respawn passes the spawn-point Y through `update_active_band` before the orientation test, so dying inside a reverse-gravity band respawns the ship with the correct orientation. Editor: new "Band" mode (`B`), draggable horizontal lines spanning full editor width, gravity ±1/±$10 with `[`/`]`/`,`/`.`, signed-decimal display on band labels and toolbar gravity widget; band Y-lines render only in band mode. Other band overrides (palette, colour bytes, X-wrap generalisation, ambient hazard flags, smooth blending) deferred. Non-SWRAM CRC remains anchored at `6389c446`.
 - **Generic per-object extra-data slots** — `level_N_obj_data_0/1/2`, with each object type interpreting the slots itself (slot 0 = gun_aim; slots 1/2 = laser dx/dy or well radius/strength). Laser and well code share the slot 1/2 lookups via separate SMC sites; the two well-specific lookup tables were dropped. SWRAM build shrank by 256 bytes; non-SWRAM CRC remains anchored at `6389c446`. Adding a new object type with config bytes is now a code change only — no new export array, no new SMC patch, no new lookup table.
 - **Lasers draw in object colour** — beam now uses `OBJECT_COLOUR_BYTE` (`$FF`, logical colour 3) instead of `hostile_bullet_pixel_byte` so it reads as part of the level palette. Ship-vs-pixel collision still works (any non-zero pixel under the ship triggers it).

@@ -186,6 +186,15 @@
         EQUB    $88,$11,$88,$11,$44,$22,$22,$44
         EQUB    $11,$88,$99,$66,$88,$FF,$66,$66
 
+.obj_sprite_data_A_bobbing_mine_horizontal
+        EQUB    $88,$88,$80,$10,$80,$10,$80,$10
+        EQUB    $80,$10,$80,$10,$80,$10,$80,$10
+        EQUB    $80,$10,$88,$88,$FF
+.obj_sprite_data_B_bobbing_mine_horizontal
+        EQUB    $66,$99,$11,$88,$22,$44,$44,$22
+        EQUB    $88,$11,$88,$11,$44,$22,$22,$44
+        EQUB    $11,$88,$99,$66,$88,$FF,$66,$66
+
 .obj_sprite_data_A_table_LO
         EQUB    LO(obj_sprite_data_A_gun_up_right)
         EQUB    LO(obj_sprite_data_A_gun_down_right)
@@ -202,6 +211,7 @@
         EQUB    LO(obj_sprite_data_A_laser_turret_down_left)
         EQUB    LO(obj_sprite_data_A_gravity_well)
         EQUB    LO(obj_sprite_data_A_bobbing_mine)
+        EQUB    LO(obj_sprite_data_A_bobbing_mine_horizontal)
 
 .obj_sprite_data_A_table_HI
         EQUB    HI(obj_sprite_data_A_gun_up_right)
@@ -219,6 +229,7 @@
         EQUB    HI(obj_sprite_data_A_laser_turret_down_left)
         EQUB    HI(obj_sprite_data_A_gravity_well)
         EQUB    HI(obj_sprite_data_A_bobbing_mine)
+        EQUB    HI(obj_sprite_data_A_bobbing_mine_horizontal)
 
 .obj_sprite_data_B_table_LO
         EQUB    LO(obj_sprite_data_B_gun_up_right)
@@ -236,6 +247,7 @@
         EQUB    LO(obj_sprite_data_B_laser_turret_down_left)
         EQUB    LO(obj_sprite_data_B_gravity_well)
         EQUB    LO(obj_sprite_data_B_bobbing_mine)
+        EQUB    LO(obj_sprite_data_B_bobbing_mine_horizontal)
 
 .obj_sprite_data_B_table_HI
         EQUB    HI(obj_sprite_data_B_gun_up_right)
@@ -253,3 +265,4 @@
         EQUB    HI(obj_sprite_data_B_laser_turret_down_left)
         EQUB    HI(obj_sprite_data_B_gravity_well)
         EQUB    HI(obj_sprite_data_B_bobbing_mine)
+        EQUB    HI(obj_sprite_data_B_bobbing_mine_horizontal)

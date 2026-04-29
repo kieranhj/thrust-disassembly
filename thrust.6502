@@ -123,7 +123,8 @@ IF _GRAVITY_WELL
 OBJECT_gravity_well                 = $D        ; gravity well: radial pull on ship inside radius (SWRAM only)
 ENDIF
 IF _BOBBING_MINES
-OBJECT_bobbing_mine                 = $E        ; bobbing mine: floating sine-wave hazard, destroyed by bullets (SWRAM only)
+OBJECT_bobbing_mine                 = $E        ; bobbing mine: vertical sine-wave hazard, destroyed by bullets (SWRAM only)
+OBJECT_bobbing_mine_horizontal      = $F        ; bobbing mine: horizontal sine-wave hazard (SWRAM only)
 ENDIF
 
 OBJ_flag_drawn                      = $01       ; level_obj_flags bit 0: sprite was XOR-plotted (needs erase before redraw)
@@ -1418,6 +1419,7 @@ IF _GRAVITY_WELL
 ENDIF
 IF _BOBBING_MINES
         EQUB    $03                              ; [E] bobbing_mine (12 px wide)
+        EQUB    $03                              ; [F] bobbing_mine_horizontal
 ENDIF
 
 .obj_type_height
@@ -1430,6 +1432,7 @@ IF _GRAVITY_WELL
 ENDIF
 IF _BOBBING_MINES
         EQUB    $0C                              ; [E] bobbing_mine (12 rows tall)
+        EQUB    $0C                              ; [F] bobbing_mine_horizontal
 ENDIF
 
 .obj_type_explosion_particle
@@ -1443,6 +1446,7 @@ IF _GRAVITY_WELL
 ENDIF
 IF _BOBBING_MINES
         EQUB    $02                              ; [E] bobbing_mine (destructible by bullets)
+        EQUB    $02                              ; [F] bobbing_mine_horizontal
 ENDIF
 
 .obj_type_score_value                            ; only guns and fuel can be destroyed
@@ -1456,6 +1460,7 @@ IF _GRAVITY_WELL
 ENDIF
 IF _BOBBING_MINES
         EQUB    $50                              ; [E] bobbing_mine
+        EQUB    $50                              ; [F] bobbing_mine_horizontal
 ENDIF
 
 \ ******************************************************************************
@@ -1643,15 +1648,21 @@ IF _GRAVITY_WELL
     .not_gravity_well
 ENDIF
 IF _BOBBING_MINES
-        \\ Mines: animate Y by writing the new displayed position into
-        \\ level_obj_pos_Y / _EXT before object_visibility_test loads it.
-        \\ obj_data slot 2 carries the previous frame's signed offset so
-        \\ each frame can apply (new_offset - prev_offset) as a delta.
+        \\ Mines: animate Y (or X for the horizontal variant) by writing the
+        \\ new displayed position into level_obj_pos_* before
+        \\ object_visibility_test loads it. obj_data slot 2 carries the
+        \\ previous frame's signed offset so each frame can apply
+        \\ (new_offset - prev_offset) as a delta.
         LDY     object_type
         CPY     #OBJECT_bobbing_mine
         BNE     not_bobbing_mine
         JSR     update_bobbing_mine
+        JMP     mine_update_done
     .not_bobbing_mine
+        CPY     #OBJECT_bobbing_mine_horizontal
+        BNE     mine_update_done
+        JSR     update_bobbing_mine_horizontal
+    .mine_update_done
 ENDIF
         PHA
         AND     #$1C
@@ -1778,7 +1789,10 @@ IF _BOBBING_MINES
 \ the test (the trigger's BNE/BEQ paths skip everything below).
         LDA     object_type
         CMP     #OBJECT_bobbing_mine
+        BEQ     do_mine_ship_contact_test
+        CMP     #OBJECT_bobbing_mine_horizontal
         BNE     not_mine_ship_contact
+    .do_mine_ship_contact_test
 
         SEC                                          ; 16-bit dy = mine_y - player_y
         LDA     current_obj_ypos_INT
@@ -1788,9 +1802,9 @@ IF _BOBBING_MINES
         SBC     player_ypos_INT_HI
         BMI     mine_dy_neg
         BNE     not_mine_ship_contact                ; dy_hi > 0: too far below
-        CPY     #$09                                 ; |dy| < 9
-        BCS     not_mine_ship_contact
-        JMP     mine_test_dx
+        CPY     #$0B                                 ; |dy| < 11 px
+        BCS     not_mine_ship_contact                ; (mine 12 px tall + ship ~10 px,
+        JMP     mine_test_dx                         ;  half-sum = 11 ≈ overlap range)
     .mine_dy_neg
         CMP     #$FF
         BNE     not_mine_ship_contact                ; dy_hi < -1: too far above
@@ -1798,20 +1812,20 @@ IF _BOBBING_MINES
         EOR     #$FF
         CLC
         ADC     #$01                                 ; A = |dy_lo|
-        CMP     #$09
+        CMP     #$0B
         BCS     not_mine_ship_contact
 
     .mine_test_dx
         SEC                                          ; 8-bit dx = mine_x - player_x
-        LDA     current_obj_xpos_INT
+        LDA     current_obj_xpos_INT                 ; (X is in CHARS, 4 BBC px each)
         SBC     player_xpos_INT
         BPL     mine_dx_pos
         EOR     #$FF
         CLC
         ADC     #$01                                 ; A = |dx|
     .mine_dx_pos
-        CMP     #$08                                 ; |dx| < 8
-        BCS     not_mine_ship_contact
+        CMP     #$05                                 ; |dx| < 5 chars (mine 3 chars
+        BCS     not_mine_ship_contact                ;  + ship 2 chars = overlap range)
 
         \\ Geometric overlap → kill the ship and explode the mine.
         LDA     #$FF
@@ -1956,6 +1970,8 @@ ENDIF
 IF _BOBBING_MINES
         CMP     #OBJECT_bobbing_mine                ; $0E
         BEQ     destroy_object                      ; mine is destructible by bullets
+        CMP     #OBJECT_bobbing_mine_horizontal     ; $0F
+        BEQ     destroy_object
 ENDIF
         CMP     #OBJECT_pod_stand
         BCS     try_next_bullet                     ; pod_stand and above are inert
@@ -2255,6 +2271,7 @@ IF _GRAVITY_WELL
 ENDIF
 IF _BOBBING_MINES
         EQUB    $44                              ; [E] bobbing_mine
+        EQUB    $44                              ; [F] bobbing_mine_horizontal
 ENDIF
 
 \ ******************************************************************************
@@ -7183,6 +7200,35 @@ IF _BOBBING_MINES
         STA     bm_pos_y_ext_store_addr_LO                ; **MODIFIES CODE**
         LDA     level_obj_pos_Y_EXT_lookup_HI,X
         STA     bm_pos_y_ext_store_addr_HI                ; **MODIFIES CODE**
+
+        \\ Horizontal mine: same slot mapping, X-axis position writes.
+        LDA     level_obj_data_0_lookup_LO,X
+        STA     bm_h_phase_addr_LO                        ; **MODIFIES CODE**
+        LDA     level_obj_data_0_lookup_HI,X
+        STA     bm_h_phase_addr_HI                        ; **MODIFIES CODE**
+
+        LDA     level_obj_data_1_lookup_LO,X
+        STA     bm_h_amp_addr_LO                          ; **MODIFIES CODE**
+        LDA     level_obj_data_1_lookup_HI,X
+        STA     bm_h_amp_addr_HI                          ; **MODIFIES CODE**
+
+        LDA     level_obj_data_2_lookup_LO,X
+        STA     bm_h_prev_addr_LO                         ; **MODIFIES CODE**
+        LDA     level_obj_data_2_lookup_HI,X
+        STA     bm_h_prev_addr_HI                         ; **MODIFIES CODE**
+        LDA     level_obj_data_2_lookup_LO,X
+        STA     bm_h_prev_store_addr_LO                   ; **MODIFIES CODE**
+        LDA     level_obj_data_2_lookup_HI,X
+        STA     bm_h_prev_store_addr_HI                   ; **MODIFIES CODE**
+
+        LDA     level_obj_pos_X_lookup_LO,X
+        STA     bm_h_pos_x_load_addr_LO                   ; **MODIFIES CODE**
+        LDA     level_obj_pos_X_lookup_HI,X
+        STA     bm_h_pos_x_load_addr_HI                   ; **MODIFIES CODE**
+        LDA     level_obj_pos_X_lookup_LO,X
+        STA     bm_h_pos_x_store_addr_LO                  ; **MODIFIES CODE**
+        LDA     level_obj_pos_X_lookup_HI,X
+        STA     bm_h_pos_x_store_addr_HI                  ; **MODIFIES CODE**
 ENDIF
 
         TXA
@@ -11623,6 +11669,70 @@ IF _BOBBING_MINES
         STA     level_0_obj_data_2,X                    ; **SELF-MODIFIED CODE**
         bm_prev_store_addr_LO = bm_prev_store+1
         bm_prev_store_addr_HI = bm_prev_store+2
+
+        RTS
+\\ }
+
+\ ******************************************************************************
+\ * Function: update_bobbing_mine_horizontal
+\ * Description: Same as update_bobbing_mine but the bob axis is X. World X
+\ *   is 8-bit (single byte, wraps), so the position update is one 8-bit
+\ *   add/wrap. Slot conventions are identical to the vertical variant.
+\ ******************************************************************************
+.update_bobbing_mine_horizontal
+\\ {
+        STX     bobbing_mine_save_x
+
+        \\ amp byte (slot 1) -> multiply_operand_a (signed)
+.bm_h_load_amp
+        LDA     level_0_obj_data_1,X                    ; **SELF-MODIFIED CODE** (slot 1 = amp)
+        bm_h_amp_addr_LO = bm_h_load_amp+1
+        bm_h_amp_addr_HI = bm_h_load_amp+2
+        STA     multiply_operand_a
+
+        \\ angle = (phase + level_tick_counter) AND $FF
+.bm_h_load_phase
+        LDA     level_0_obj_data_0,X                    ; **SELF-MODIFIED CODE** (slot 0 = phase)
+        bm_h_phase_addr_LO = bm_h_load_phase+1
+        bm_h_phase_addr_HI = bm_h_load_phase+2
+        CLC
+        ADC     level_tick_counter
+        TAY
+        LDA     bobbing_mine_sin_table,Y
+        JSR     multiply_signed_8x8
+
+        ASL     multiply_result_lo
+        ROL     multiply_result_hi
+        LDA     multiply_result_hi
+        STA     bobbing_mine_new_offset
+
+        LDX     bobbing_mine_save_x
+
+        \\ delta = new_offset - prev_offset (slot 2)
+        SEC
+.bm_h_load_prev
+        SBC     level_0_obj_data_2,X                    ; **SELF-MODIFIED CODE** (slot 2 = prev offset)
+        bm_h_prev_addr_LO = bm_h_load_prev+1
+        bm_h_prev_addr_HI = bm_h_load_prev+2
+
+        \\ Apply 8-bit signed delta to level_obj_pos_X (X axis is one byte
+        \\ in this engine; wraps naturally on overflow).
+        CLC
+.bm_h_pos_x_load
+        ADC     level_0_obj_pos_X,X                     ; **SELF-MODIFIED CODE**
+        bm_h_pos_x_load_addr_LO = bm_h_pos_x_load+1
+        bm_h_pos_x_load_addr_HI = bm_h_pos_x_load+2
+.bm_h_pos_x_store
+        STA     level_0_obj_pos_X,X                     ; **SELF-MODIFIED CODE**
+        bm_h_pos_x_store_addr_LO = bm_h_pos_x_store+1
+        bm_h_pos_x_store_addr_HI = bm_h_pos_x_store+2
+
+        \\ slot 2 := new_offset
+        LDA     bobbing_mine_new_offset
+.bm_h_prev_store
+        STA     level_0_obj_data_2,X                    ; **SELF-MODIFIED CODE**
+        bm_h_prev_store_addr_LO = bm_h_prev_store+1
+        bm_h_prev_store_addr_HI = bm_h_prev_store+2
 
         RTS
 \\ }

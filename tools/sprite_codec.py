@@ -42,7 +42,8 @@ OBJECT_NAMES = [
     "laser_turret_up_left",
     "laser_turret_down_left",
     "gravity_well",                     # $0D: invisible field, sprite never plots (early-exit in update)
-    "bobbing_mine",                     # $0E: sine-wave hazard
+    "bobbing_mine",                     # $0E: vertical sine-wave hazard
+    "bobbing_mine_horizontal",          # $0F: horizontal sine-wave hazard
 ]
 
 # Char-column widths from obj_type_width.
@@ -62,6 +63,7 @@ OBJECT_WIDTH_CHARS = {
     "laser_turret_down_left":  5,
     "gravity_well":            1,
     "bobbing_mine":            3,
+    "bobbing_mine_horizontal": 3,
 }
 
 # BBC Micro Mode 1 physical palette (8 physical colours, index 0-7).
