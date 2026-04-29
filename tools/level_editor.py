@@ -2125,13 +2125,13 @@ class Editor:
         grav_label_w = self.font.size("Gravity")[0]
         val_x = grav_x + grav_label_w + 4
         if val_x <= mx < val_x + 18:  # minus button
-            lv.gravity = max(0, lv.gravity - 1)
+            lv.gravity = (lv.gravity - 1) & 0xFF
             lv.dirty = True
             return
         val_txt_w = self.font.size(f"${lv.gravity:02X}")[0]
         plus_x = val_x + 22 + val_txt_w + 4
         if plus_x <= mx < plus_x + 18:  # plus button
-            lv.gravity = min(0xFF, lv.gravity + 1)
+            lv.gravity = (lv.gravity + 1) & 0xFF
             lv.dirty = True
             return
 
@@ -2818,7 +2818,9 @@ class Editor:
             for dx in range(0, sw, dash * 2):
                 pygame.draw.line(screen, col, (dx, y),
                                  (min(dx + dash, sw), y), 2)
-            label = f"Band Y={band['y']}  g=${band['gravity']:02X}"
+            g = band["gravity"]
+            g_signed = g - 256 if g >= 128 else g
+            label = f"Band Y={band['y']}  g=${g:02X} ({g_signed:+d})"
             txt = self.font_small.render(label, True, col)
             screen.blit(txt, (4, y - 14))
 
@@ -2993,8 +2995,9 @@ class Editor:
         pygame.draw.rect(screen, (80, 80, 80), rect, 1, border_radius=3)
         txt = self.font.render("-", True, COL_TOOLBAR_TEXT)
         screen.blit(txt, (val_x + 5, 10))
-        # value
-        val_txt = self.font.render(f"${lv.gravity:02X}", True, COL_TOOLBAR_TEXT)
+        # value (signed: bit 7 sign-extends into gravity_SIGN at level init)
+        signed = lv.gravity - 256 if lv.gravity >= 128 else lv.gravity
+        val_txt = self.font.render(f"${lv.gravity:02X} ({signed:+d})", True, COL_TOOLBAR_TEXT)
         screen.blit(val_txt, (val_x + 22, 12))
         # + button
         plus_x = val_x + 22 + val_txt.get_width() + 4
@@ -3101,8 +3104,10 @@ class Editor:
         if self.mode == "band":
             if self.selected_band is not None and self.selected_band < len(lv.bands):
                 b = lv.bands[self.selected_band]
+                g = b["gravity"]
+                g_signed = g - 256 if g >= 128 else g
                 parts.append(
-                    f"Band Y={b['y']}  gravity=${b['gravity']:02X}  "
+                    f"Band Y={b['y']}  gravity=${g:02X} ({g_signed:+d})  "
                     f"([/] ±1, ,/. ±$10, shift = ±$10×16, Del to remove)")
             else:
                 parts.append(

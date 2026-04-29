@@ -6823,6 +6823,19 @@ ENDIF
         LDA     #$0E
         STA     top_nibble_index
 
+IF _Y_BANDS
+        \\ The player may have died inside a reverse-gravity band, leaving
+        \\ gravity_SIGN at $FF -- but the respawn position might also sit
+        \\ inside a (possibly different) band. Recompute gravity from the
+        \\ spawn Y by preloading player_ypos from the just-loaded
+        \\ midpoint_ypos and re-running the band scan, so the orientation
+        \\ tests below see the correct local sign for the spawn point.
+        LDA     midpoint_ypos_INT
+        STA     player_ypos_INT
+        LDA     midpoint_ypos_INT_HI
+        STA     player_ypos_INT_HI
+        JSR     update_active_band
+ENDIF
         LDA     level_reset_with_pod_flag
         BEQ     dont_set_angle_to_pod
 
@@ -6915,6 +6928,15 @@ ENDIF
         STA     terrain_right_wall_increment_HI
 
         LDY     #$00
+IF _SWRAM_BUILD
+        \\ Sign-extend gravity_FRAC bit 7 into Y so per-level gravity values
+        \\ in $80..$FF are interpreted as small negative (upward) gravity.
+        \\ Mirrors the per-band sign-extension in update_active_band.
+        LDA     gravity_FRAC
+        BPL     gravity_sign_done
+        DEY                                             ; Y = $FF for negative FRAC
+    .gravity_sign_done
+ENDIF
         LDA     reverse_gravity_flag
         BEQ     normal_gravity
 
@@ -6922,8 +6944,17 @@ ENDIF
         EOR     #$FF
         STA     gravity_FRAC
 
+IF _SWRAM_BUILD
+        \\ Flip Y too so the sign byte tracks the EOR'd FRAC (e.g. $07/$00 ->
+        \\ $F8/$FF, and $F8/$FF -> $07/$00). Equivalent to EORing the whole
+        \\ 16-bit value with $FFFF.
+        TYA
+        EOR     #$FF
+        TAY
+ELSE
         LDY     #$FF
-        
+ENDIF
+
     .normal_gravity
         STY     gravity_SIGN
         LDA     #LANDSCAPE_COLOUR_BYTE
@@ -11273,23 +11304,24 @@ IF _Y_BANDS
 .level_base_gravity_FRAC EQUB $00       ; raw level gravity (pre reverse-flag), set in initialise_level_pointers
 
 .update_active_band
-        \\ Start each frame from the level's base gravity, applying
-        \\ reverse_gravity_flag (the every-6-levels inversion). gravity is a
-        \\ 16-bit signed value (gravity_SIGN:gravity_FRAC); we write both
-        \\ bytes here so the per-frame band scan can later override them
-        \\ with a sign-extended band byte.
+        \\ Start each frame from the level's base gravity. gravity is a
+        \\ 16-bit signed value (gravity_SIGN:gravity_FRAC); base byte's bit 7
+        \\ sign-extends into gravity_SIGN so $80..$FF read as upward gravity.
+        \\ Then apply reverse_gravity_flag (the every-6-levels inversion) by
+        \\ EORing the whole 16-bit value with $FFFF.
         LDY     #$00
-        LDA     reverse_gravity_flag
-        BEQ     update_band_base_pos
         LDA     level_base_gravity_FRAC
-        EOR     #$FF
-        STA     gravity_FRAC
-        DEY                                             ; Y = $FF
-        JMP     update_band_base_done
-.update_band_base_pos
-        LDA     level_base_gravity_FRAC
-        STA     gravity_FRAC
+        BPL     update_band_base_sign_done
+        DEY                                             ; Y = $FF for negative base
+.update_band_base_sign_done
+        LDX     reverse_gravity_flag
+        BEQ     update_band_base_done
+        EOR     #$FF                                    ; flip FRAC
+        TYA
+        EOR     #$FF                                    ; flip SIGN
+        TAY
 .update_band_base_done
+        STA     gravity_FRAC
         STY     gravity_SIGN
 
         LDX     #$00
