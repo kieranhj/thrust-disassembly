@@ -23,9 +23,7 @@ Open work items, one line each. Full details in the sections below; completed wo
 - [Centre-case symmetry fix](#gravity-well-follow-ups) — handle `dx == dy == 0` cleanly
 - [Per-axis half-scaling](#gravity-well-follow-ups) — drop pull/2 at 45° so corner pull isn't √2 stronger
 - [Apply pull to thrust particles](#gravity-well-follow-ups) — ship's exhaust bends through the field as a cue
-
-### Gravity field variants
-- [Gravity flipper / null / paired / bullet-affecting fields](#gravity-field-objects-other-variants) — siblings of the implemented well
+- [Apply pull to bullets](#gravity-well-follow-ups) — bend bullets around corners for puzzle geometry
 
 ### Timed lasers — open follow-ups
 - [Beam telegraph](#timed-lasers-follow-ups) — visual warning before the on-phase
@@ -42,11 +40,7 @@ Open work items, one line each. Full details in the sections below; completed wo
 - [Upgrade system](#ship-upgrades) — nine candidate upgrades feeding the Metroidvania reward loop
 
 ### Levels & worldbuilding
-- [Y-banded level parameters](#y-banded-level-parameters) — gravity / palette / wrap behaviour change as the player crosses configured Y thresholds
 - [More than 6 levels / level packs](#more-than-6-levels--level-packs) — bake more or stream from disc per gravity cycle
-- [Metroidvania structure](#metroidvania-structure) — one large interconnected map with gated upgrades
-- [Escape the flooding mine](#escape-the-flooding-mine) — race upward against a rising water line
-- [Puzzle-oriented levels](#puzzle-oriented-levels) — compose mechanics into self-contained logic puzzles
 - [Multiple / split landscape paths](#multiple--split-paths) — replace the two-wall corridor model
 - [Standalone landscape segments](#standalone-landscape-segments) — floating islands / isolated obstacles
 
@@ -54,6 +48,9 @@ Open work items, one line each. Full details in the sections below; completed wo
 - [Land safely / collect-and-deliver / briefings / popups](#new-mission-types) — table of new mission requirements
 - [Rescue NPCs](#rescue-npcs) — Choplifter-style pickups paying into the upgrade economy
 - [Keys and doors](#keys-and-doors) — full key/door system extending the existing $07/$08 switches
+- [Metroidvania structure](#metroidvania-structure) — one large interconnected map with gated upgrades
+- [Escape the flooding mine](#escape-the-flooding-mine) — race upward against a rising water line
+- [Puzzle-oriented levels](#puzzle-oriented-levels) — compose mechanics into self-contained logic puzzles
 
 ### Stretch goals
 - [Enemy Thrust ship](#enemy-thrust-ship) — AI-piloted ship sharing the player's physics model
@@ -151,17 +148,15 @@ The well object (type `$0D`) is implemented — see [Completed](#completed). Ope
 - **Centre-case symmetry:** at exact `dx == dy == 0` the per-axis sign multiplication yields `+pull` on both axes (BPL treats 0 as positive). Minor visual artefact only; gravity drags the ship out anyway.
 - **Per-axis half-scaling:** v1 applies the full pull to each axis. At a 45° corner this is √2 stronger than on-axis — flip to per-axis `pull/2` if it feels too aggressive in play.
 - **Apply pull to thrust particles too.** Currently the well pulls the ship and emits its own debris ring; routing the same per-frame force into active `PARTICLE_type_debris` particles spawned by the ship's exhaust would let the player *see* the field bend their trail as a visual cue, without needing a sprite. Slot naturally next to the existing well walker.
+- **Apply pull to bullets.** Apply the same per-frame force to active particles of type `PARTICLE_type_player_bullet` and/or hostile bullet while inside the radius. Bending a player bullet around a corner to hit a turret tucked in an alcove opens up real puzzle geometry. Slots naturally into `particles_update_and_draw` (line 5799) — per-particle force application already exists for gravity. Costs more per frame (force applied to every bullet inside every well) but the bullet count is bounded by the 32-slot particle pool.
 
-### Gravity field objects (other variants)
+### Gravity field objects (other variants) — obsolete
 
-Siblings of the implemented well, sharing the same data layout:
+Superseded by [Y-banded level parameters](#completed): the band system already provides per-region gravity overrides (including reverse / zero gravity) keyed off Y depth, which covers the practical use cases that the field-flipper / null variants were sketched for. Kept here for historical context; not planned.
 
-- **Gravity flipper:** inverts the Y component of gravity while the ship is inside the radius.
-- **Gravity null:** zeroes gravity inside the radius (fly like in open space). Could share the well's data layout — reserve `strength == 0` to mean "null mode" or use a separate flag bit. Implementation needs the loop to run *before* `add_gravity_to_force_vector` so it can suppress the gravity add, instead of the current "add on top".
-- **Paired generators/repulsors acting on ship *and* pod:** the pod has its own physics state (`pod_xpos`, `pod_ypos`, velocity) — extending the field check to the pod as well means the tethered system can be yanked around by the environment, not just the ship. Since the tether is a rigid rod, asymmetric forces on ship vs pod create interesting angular dynamics.
-- **Fields that act on bullets:** apply the same force to active particles of type `PARTICLE_type_player_bullet` and/or hostile bullet. Bending a player bullet around a corner to hit a turret tucked in an alcove opens up real puzzle geometry. Costs more per frame (force applied to every bullet inside every field) but the bullet count is bounded by the 32-slot particle pool.
-
-**Implementation notes:** the existing gravity constant is applied per frame in the physics update. A check against object position/radius could substitute a modified gravity value before integration. Multiple overlapping fields would need a priority rule. Bullet-affecting fields slot naturally into `particles_update_and_draw` (line 5799) — per-particle force application already exists for gravity.
+- ~~Gravity flipper: inverts the Y component of gravity while the ship is inside the radius.~~
+- ~~Gravity null: zeroes gravity inside the radius.~~
+- ~~Paired generators/repulsors acting on ship *and* pod.~~
 
 ---
 
@@ -310,34 +305,6 @@ Upgrades could be persistent across a run (Metroidvania) or per-level purchases 
 
 Levels can be made significantly deeper without engine changes. Wider levels would require extending the X coordinate to 16 bits, which is currently infeasible — see [engine constraints](#expanding-x-axis-to-16-bits).
 
-### Y-banded level parameters
-
-Allow a level to define a sorted list of Y thresholds, each carrying a small bag of overrides applied while the ship's Y is below it (or between adjacent thresholds). Reuses the same authoring metaphor as the existing checkpoint Y lines in the editor — drop a horizontal marker, attach a parameter bundle to it.
-
-**What a band can override:**
-- **Gravity.** The strongest visual: the deeper you descend, the heavier the pull. Could be a per-band `gravity_FRAC` value applied directly to the existing per-frame gravity add, or an offset/scale relative to the level's base gravity. Negative values are *reverse gravity* — a band partway down flips polarity for a "hollow earth" mid-section, and the existing `gravity_SIGN` plumbing already handles the inversion at the physics level.
-- **Palette.** Logical colours 0–3 swap as the ship crosses the threshold, so the cave shifts from rust-red shallows to deep blues / blacks at depth. Cheap: just write the four palette registers when entering the band.
-- **Landscape colour byte / object colour byte.** Per-band override of `LANDSCAPE_COLOUR_BYTE` and the new `OBJECT_COLOUR_BYTE`, so terrain and turret/laser colour shift coherently with the palette.
-- **Background tint / star density.** If/when a starfield exists, density and colour can be band-driven so transitions read as "leaving daylight, entering deeper layers".
-- **X wrap behaviour.** Already partially exists as `_NO_WRAP_UNDERGROUND` (one Y threshold). Generalising X-wrap into the band system unifies the mechanism and gives multiple no-wrap zones per level instead of just one.
-- **Ambient hazards** — heat flag (see [Hot areas](#hot-areas)), water flag (see [Water as a general element](#water-as-a-general-element)). A "lava layer" band sets the heat flag without needing per-tile data.
-
-**Engine sketch:**
-- Per-level bands are a small struct-of-arrays: `band_y_INT_HI`, `band_y_INT`, plus one byte per overridable parameter, terminated by a sentinel like `$FF` in the high byte.
-- A single `update_active_band` runs once per frame: compares ship Y against the next-threshold Y, advances the active band index when crossed (in either direction), and writes the new parameters into the existing single-instance variables (`gravity_FRAC`, palette regs, colour bytes, `no_wrap_y_INT`, etc.). One forward and one backward boundary check — cheap.
-- Most of the per-frame physics is unchanged because the band system *only* mutates the same variables those routines already read. No new hot-path branches inside physics integration.
-- Transitions are step-shaped (snap to new value at the threshold). Smooth blending across an intermediate region is doable but costs more — leave it as a follow-up.
-
-**Editor UX:**
-- Bands appear in the editor as labelled horizontal lines at their Y thresholds, like the existing checkpoint Y dashes but in a different colour. The active band is the one whose threshold is just above the ship's spawn point (or whichever depth the editor is previewing).
-- Drag a band line vertically to move its Y. Right-click to add or delete.
-- A side panel (or status bar fields, in the same style as laser `(dx, dy)` / well strength) shows the parameter bundle: gravity value, palette colours as swatches, flags as toggles. Edit live; preview by scrolling the camera through the level so the editor renders each depth with that band's palette/landscape colour.
-
-**Layered with existing systems:**
-- Reverse gravity is already a level-wide modifier (`reverse_gravity_flag`, inverts every 6 levels). Bands subsume the level-wide case: a single band that covers the whole level reproduces the current behaviour.
-- The 6-level gravity cycle stays meaningful at the *level pack* layer (see [Level packs](#more-than-6-levels--level-packs)); inside a single deep level, bands give continuous variation that the global cycle can't.
-- Plays well with [Metroidvania structure](#metroidvania-structure): one large vertical world with distinct visual themes per depth zone, gated by upgrades that let you survive the deeper bands' hazards.
-
 ### More than 6 levels / level packs
 
 The game ships with 6 levels baked into `level_data.6502` (`terrain_left_wall_count_0` through `terrain_right_wall_inc_5`), loaded by `initialise_level_pointers` (line 6274). The "reverse gravity every 6 levels" mechanic at `thrust.6502:6841` implies the original design treats 6 as a loop length, not a hard cap on unique content.
@@ -351,47 +318,6 @@ The game ships with 6 levels baked into `level_data.6502` (`terrain_left_wall_co
 - Disc access between levels is noticeable but acceptable (Thrust already loads from disc at boot)
 - Opens the door to user-authored level packs via the level editor's export — just drop a new pack file onto the disc image
 - Save-game support (current level number + pack identifier) becomes more important since players won't grind through all content in one sitting
-
-### Metroidvania structure
-
-One large interconnected map rather than discrete levels. The player starts with basic thrust and weapons, gradually acquiring upgrades that open up previously inaccessible areas:
-
-- **Ship upgrades:** stronger thrust (navigate tighter shafts against gravity), improved shield (survive new hazard types), tractor beam range extension, new weapon types
-- **Gate mechanics:** areas blocked by terrain or hazards that require specific upgrades — e.g., a narrow vertical shaft too deep to escape without upgraded thrust, a corridor lined with turrets that require a shield upgrade to survive
-- **Bosses:** large gun emplacements or enemy ships guarding key upgrades. Could be multi-phase — destroy shield generators around a core, then hit the core
-- **Secrets:** hidden passages behind destructible walls, reward rooms with extra fuel or bonus upgrades. False walls that look solid but can be flown through
-- **Save points / fuel stations:** the generator (type $06) could double as a checkpoint. Respawn at the last generator visited rather than restarting the whole map
-- **Map progression:** start at a surface base, descend into increasingly hostile cave systems. Each major section has a distinct visual theme (palette swap per region) and introduces new enemy types
-
-The existing level data format could support this — one very deep level with many objects. The main challenge is memory: a large interconnected map needs more RLE terrain data and more objects than the current per-level arrays allow. Could use banked memory or stream terrain data from disc.
-
-### Escape the flooding mine
-
-Start at the bottom of a deep vertical mine and race upward. A rising water level chases the player — touch the water and it's game over.
-
-**Water rendering:** two approaches:
-
-1. **Timer-based palette switch (Exile style):** set up a raster interrupt that fires at the water line's screen position. Below the interrupt, swap the palette so all colours shift to blue/dark variants. Cheap in CPU — just a palette write in the IRQ handler. The water line advances by moving the timer trigger point up by a few scanlines each frame. Limitation: only works for a horizontal water line, no waves or splashing.
-2. **Software rendering:** EOR-draw a horizontal band of colour across the screen below the water line. Since the water rises slowly (a few rows per frame), only the newly-flooded rows need drawing each frame — similar to how the terrain delta rendering works. More flexible (could add wave effects at the surface) but costs more CPU.
-
-**Gameplay mechanics:**
-- Water rises at a steady rate, creating constant upward pressure
-- Horizontal doors (already supported as types $07/$08) act as barriers that temporarily hold back the water, buying the player time — but they eventually burst or leak
-- Fuel management becomes critical: thrust hard to stay ahead but risk running dry
-- Optional side chambers with fuel pickups, accessible only by briefly diving below the main path and racing back up
-- The mine gets narrower and more complex as the player ascends, requiring precise navigation under time pressure
-
-### Puzzle-oriented levels
-
-Levels designed as self-contained logic puzzles rather than pure dexterity challenges. The new environmental objects (gravity fields, fans, bullet-deflecting fields, power nodes, landing bubbles) are the building blocks. Example puzzle structures:
-
-- **Key-and-lock:** shoot a power node to open a passage, but the node is behind a corner — only reachable by routing a bullet through a gravity-bending field
-- **Gravity maze:** a chamber where the player must chain gravity flippers to navigate, since raw thrust can't reach the exit
-- **Bullet billiards:** destroy a target by setting up a bullet that bounces or bends through multiple gravity fields
-- **Escort with a twist:** carry the pod through a region where gravity fields pull ship and pod in opposite directions — the player has to time their path so the tether doesn't snap
-- **Time-lock:** a timed laser turret guards the exit; the only safe window requires first disabling a fan that would otherwise blow the ship into the beam
-
-Each level becomes a small "what order do I do this in" problem rather than "how fast can I fly through." Fits well with the Metroidvania structure — optional puzzle rooms gate extra upgrades.
 
 ### Multiple / split paths
 
@@ -442,6 +368,47 @@ Door switches (types $07 and $08) already exist in the object system. The curren
 - Visual feedback (door animation, key collection effect)
 
 See also [Configurable switches and triggers](#configurable-switches-and-triggers), which subsumes much of this.
+
+### Metroidvania structure
+
+One large interconnected map rather than discrete levels. The player starts with basic thrust and weapons, gradually acquiring upgrades that open up previously inaccessible areas:
+
+- **Ship upgrades:** stronger thrust (navigate tighter shafts against gravity), improved shield (survive new hazard types), tractor beam range extension, new weapon types
+- **Gate mechanics:** areas blocked by terrain or hazards that require specific upgrades — e.g., a narrow vertical shaft too deep to escape without upgraded thrust, a corridor lined with turrets that require a shield upgrade to survive
+- **Bosses:** large gun emplacements or enemy ships guarding key upgrades. Could be multi-phase — destroy shield generators around a core, then hit the core
+- **Secrets:** hidden passages behind destructible walls, reward rooms with extra fuel or bonus upgrades. False walls that look solid but can be flown through
+- **Save points / fuel stations:** the generator (type $06) could double as a checkpoint. Respawn at the last generator visited rather than restarting the whole map
+- **Map progression:** start at a surface base, descend into increasingly hostile cave systems. Each major section has a distinct visual theme (palette swap per region) and introduces new enemy types
+
+The existing level data format could support this — one very deep level with many objects. The main challenge is memory: a large interconnected map needs more RLE terrain data and more objects than the current per-level arrays allow. Could use banked memory or stream terrain data from disc.
+
+### Escape the flooding mine
+
+Start at the bottom of a deep vertical mine and race upward. A rising water level chases the player — touch the water and it's game over.
+
+**Water rendering:** two approaches:
+
+1. **Timer-based palette switch (Exile style):** set up a raster interrupt that fires at the water line's screen position. Below the interrupt, swap the palette so all colours shift to blue/dark variants. Cheap in CPU — just a palette write in the IRQ handler. The water line advances by moving the timer trigger point up by a few scanlines each frame. Limitation: only works for a horizontal water line, no waves or splashing.
+2. **Software rendering:** EOR-draw a horizontal band of colour across the screen below the water line. Since the water rises slowly (a few rows per frame), only the newly-flooded rows need drawing each frame — similar to how the terrain delta rendering works. More flexible (could add wave effects at the surface) but costs more CPU.
+
+**Gameplay mechanics:**
+- Water rises at a steady rate, creating constant upward pressure
+- Horizontal doors (already supported as types $07/$08) act as barriers that temporarily hold back the water, buying the player time — but they eventually burst or leak
+- Fuel management becomes critical: thrust hard to stay ahead but risk running dry
+- Optional side chambers with fuel pickups, accessible only by briefly diving below the main path and racing back up
+- The mine gets narrower and more complex as the player ascends, requiring precise navigation under time pressure
+
+### Puzzle-oriented levels
+
+Levels designed as self-contained logic puzzles rather than pure dexterity challenges. The new environmental objects (gravity fields, fans, bullet-deflecting fields, power nodes, landing bubbles) are the building blocks. Example puzzle structures:
+
+- **Key-and-lock:** shoot a power node to open a passage, but the node is behind a corner — only reachable by routing a bullet through a gravity-bending field
+- **Gravity maze:** a chamber where the player must chain gravity flippers to navigate, since raw thrust can't reach the exit
+- **Bullet billiards:** destroy a target by setting up a bullet that bounces or bends through multiple gravity fields
+- **Escort with a twist:** carry the pod through a region where gravity fields pull ship and pod in opposite directions — the player has to time their path so the tether doesn't snap
+- **Time-lock:** a timed laser turret guards the exit; the only safe window requires first disabling a fan that would otherwise blow the ship into the beam
+
+Each level becomes a small "what order do I do this in" problem rather than "how fast can I fly through." Fits well with the Metroidvania structure — optional puzzle rooms gate extra upgrades.
 
 ---
 
@@ -501,6 +468,7 @@ Implemented features and finished investigations, newest first. Each entry links
 
 ### Features
 
+- **Y-banded level parameters — gravity** (`_Y_BANDS`, SWRAM build). Per-level sorted list of Y thresholds, each carrying a `gravity_FRAC` byte. `update_active_band` runs once per frame: scans the level's `band_y_HI` / `band_y_LO` arrays (terminated by `$FF` in the high byte), reseeds `gravity_FRAC` / `gravity_SIGN` from the level base, then overrides with the deepest crossed band's value. Band gravity bytes are sign-extended (bit 7 → `gravity_SIGN`) so `$80..$FF` give upward gravity for "hollow earth" mid-sections. Level-base gravity is also sign-extended at level init and on each frame's reseed, so negative base gravity is supported. Respawn passes the spawn-point Y through `update_active_band` before the orientation test, so dying inside a reverse-gravity band respawns the ship with the correct orientation. Editor: new "Band" mode (`B`), draggable horizontal lines spanning full editor width, gravity ±1/±$10 with `[`/`]`/`,`/`.`, signed-decimal display on band labels and toolbar gravity widget; band Y-lines render only in band mode. Other band overrides (palette, colour bytes, X-wrap generalisation, ambient hazard flags, smooth blending) deferred. Non-SWRAM CRC remains anchored at `6389c446`.
 - **Generic per-object extra-data slots** — `level_N_obj_data_0/1/2`, with each object type interpreting the slots itself (slot 0 = gun_aim; slots 1/2 = laser dx/dy or well radius/strength). Laser and well code share the slot 1/2 lookups via separate SMC sites; the two well-specific lookup tables were dropped. SWRAM build shrank by 256 bytes; non-SWRAM CRC remains anchored at `6389c446`. Adding a new object type with config bytes is now a code change only — no new export array, no new SMC patch, no new lookup table.
 - **Lasers draw in object colour** — beam now uses `OBJECT_COLOUR_BYTE` (`$FF`, logical colour 3) instead of `hostile_bullet_pixel_byte` so it reads as part of the level palette. Ship-vs-pixel collision still works (any non-zero pixel under the ship triggers it).
 - **Gravity well** (`_GRAVITY_WELL`, SWRAM build, type `$0D`). While the ship's midpoint is inside the well's Manhattan radius, a linear-ramp pull toward the centre is added to `force_vector{x,y}` once per gravity tick. Hooked from `apply_gravity_wells_to_force` after the constant-gravity add. Per-instance `radius` (unsigned 0..127, 0 = inactive) and `strength` (signed). Pull magnitude is the high byte of `strength * (radius − r)` where `r = |dx| + |dy|`. Editor places `$0D` with a centre dot plus Manhattan-radius diamond (blue pull, red repulsor). Debris ring spawned around each well per gravity tick visualises the field. Open follow-ups in [main body](#gravity-well-follow-ups).
