@@ -31,11 +31,13 @@ import math
 import os
 import sys
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import Tk, filedialog, messagebox
 from pathlib import Path
 
 import numpy as np
 import pygame
+
+root = Tk()
 
 # Import shared data and decoders from the visualisation tool
 sys.path.insert(0, str(Path(__file__).parent))

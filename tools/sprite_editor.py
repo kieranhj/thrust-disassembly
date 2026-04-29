@@ -35,9 +35,11 @@ import os
 import sys
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import Tk, filedialog, messagebox
 
 import pygame
+
+root = Tk()
 
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
