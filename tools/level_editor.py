@@ -169,6 +169,13 @@ BOBBING_MINE_DEFAULT_AMP   = 32   # signed pixels
 COL_BOBBING_MINE     = (255, 220, 80)
 COL_BOBBING_MINE_RANGE = (255, 220, 80, 110)  # amplitude indicator (translucent)
 
+# Teleporter pads ($10, SWRAM-only). One-way warp to a level checkpoint.
+# Slot 0 = destination checkpoint index (0-based). Slots 1/2 reserved.
+OBJECT_TELEPORTER       = 0x10
+TELEPORTER_DEFAULT_DEST = 0
+COL_TELEPORTER          = (120, 220, 255)
+COL_TELEPORTER_WIRE     = (120, 220, 255, 180)  # selected->dest line
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -365,6 +372,12 @@ def import_beebasm(path):
                     dx_byte, dy_byte = default_dx & 0xFF, default_dy & 0xFF
                     wr, ws = 0, 0
                     mine_phase, mine_amp = gp, slot_1
+                elif t == OBJECT_TELEPORTER:
+                    # Slot 0 (loaded into gp above) holds destination
+                    # checkpoint index; slots 1/2 reserved.
+                    dx_byte, dy_byte = default_dx & 0xFF, default_dy & 0xFF
+                    wr, ws = 0, 0
+                    mine_phase, mine_amp = 0, 0
                 else:
                     dx_byte, dy_byte = default_dx & 0xFF, default_dy & 0xFF
                     wr, ws = 0, 0
@@ -391,6 +404,7 @@ def import_beebasm(path):
                 "well_strength": ws_s,
                 "mine_phase": mine_phase & 0xFF,
                 "mine_amp": mine_amp_s,
+                "teleport_dest": (gp & 0xFF) if t == OBJECT_TELEPORTER else 0,
             })
 
         # Colours (may not be present in older exports)
@@ -652,6 +666,10 @@ def export_beebasm(levels):
                     data_0.append(o.get('mine_phase', 0) & 0xFF)
                     data_1.append(o.get('mine_amp', 0) & 0xFF)
                     data_2.append(0)
+                elif t == OBJECT_TELEPORTER:
+                    data_0.append(o.get('teleport_dest', 0) & 0xFF)
+                    data_1.append(0)
+                    data_2.append(0)
                 else:
                     data_0.append(o.get('gun_aim', 0x00) & 0xFF)
                     data_1.append(
@@ -825,7 +843,8 @@ class LevelData:
                             "laser_dx": LASER_BEAM_DX_PIXELS.get(t, 0),
                             "laser_dy": LASER_BEAM_DY_ROWS.get(t, 0),
                             "well_radius": 0, "well_strength": 0,
-                            "mine_phase": 0, "mine_amp": 0})
+                            "mine_phase": 0, "mine_amp": 0,
+                            "teleport_dest": 0})
         return cls(level_num, list(left), list(right), objects, terrain_rle)
 
     @property
@@ -1334,6 +1353,9 @@ class Editor:
             elif (self.selected_object is not None
                     and self.level.objects[self.selected_object]["type"] in BOBBING_MINE_TYPES):
                 self._adjust_selected_mine_param(event.key, shift)
+            elif (self.selected_object is not None
+                    and self.level.objects[self.selected_object]["type"] == OBJECT_TELEPORTER):
+                self._adjust_selected_teleporter_dest(event.key)
             else:
                 self._adjust_selected_gun_aim(event.key)
 
@@ -1470,6 +1492,28 @@ class Editor:
                 self.undo.save(self.level)
                 obj["mine_phase"] = new
                 self.level.dirty = True
+
+    def _adjust_selected_teleporter_dest(self, key):
+        """[ / ] cycle the selected teleporter's destination checkpoint index."""
+        if self.selected_object is None:
+            return
+        obj = self.level.objects[self.selected_object]
+        if obj["type"] != OBJECT_TELEPORTER:
+            return
+        n = len(self.level.checkpoints)
+        if n <= 0:
+            return
+        cur = obj.get("teleport_dest", 0) % n
+        if key == pygame.K_LEFTBRACKET:
+            new = (cur - 1) % n
+        elif key == pygame.K_RIGHTBRACKET:
+            new = (cur + 1) % n
+        else:
+            return
+        if new != obj.get("teleport_dest", 0):
+            self.undo.save(self.level)
+            obj["teleport_dest"] = new
+            self.level.dirty = True
 
     def _reset_selected_laser_endpoint(self):
         """Restore the selected laser's dx/dy to its orientation default."""
@@ -1987,6 +2031,13 @@ class Editor:
         """Test if screen position hits an object sprite. Returns index or None."""
         lv = self.level
         for i, obj in enumerate(lv.objects):
+            if obj["type"] == OBJECT_TELEPORTER:
+                # Pad has no sprite (yet); hit-test a small circle at obj pos.
+                cx, cy = self.camera.world_to_screen(obj["x"], obj["y"])
+                r = 10
+                if (mx - cx) ** 2 + (my - cy) ** 2 <= r * r:
+                    return i
+                continue
             sprite = self.sprite_cache.get(obj["type"], lv)
             if sprite is None:
                 continue
@@ -2225,6 +2276,7 @@ class Editor:
             wx, wy = self.obj_menu_world
             is_well = obj_type == OBJECT_GRAVITY_WELL
             is_mine = obj_type in BOBBING_MINE_TYPES
+            is_teleporter = obj_type == OBJECT_TELEPORTER
             self.level.objects.append({"x": wx, "y": wy, "type": obj_type,
                                         "gun_aim": 0x00,
                                         "laser_dx": LASER_BEAM_DX_PIXELS.get(obj_type, 0),
@@ -2232,7 +2284,8 @@ class Editor:
                                         "well_radius": GRAVITY_WELL_DEFAULT_RADIUS if is_well else 0,
                                         "well_strength": GRAVITY_WELL_DEFAULT_STRENGTH if is_well else 0,
                                         "mine_phase": BOBBING_MINE_DEFAULT_PHASE if is_mine else 0,
-                                        "mine_amp": BOBBING_MINE_DEFAULT_AMP if is_mine else 0})
+                                        "mine_amp": BOBBING_MINE_DEFAULT_AMP if is_mine else 0,
+                                        "teleport_dest": TELEPORTER_DEFAULT_DEST if is_teleporter else 0})
             self.level.dirty = True
             self.selected_object = len(self.level.objects) - 1
         self.show_obj_menu = False
@@ -2583,6 +2636,9 @@ class Editor:
             if obj["type"] == OBJECT_GRAVITY_WELL:
                 self._render_gravity_well(obj, i)
                 continue
+            if obj["type"] == OBJECT_TELEPORTER:
+                self._render_teleporter(obj, i)
+                continue
             sprite = self.sprite_cache.get(obj["type"], lv)
             if sprite is None:
                 continue
@@ -2743,6 +2799,48 @@ class Editor:
             ring_col_handle = (255, 255, 255) if highlight else (180, 180, 180)
             pygame.draw.circle(self.screen, ring_col_handle, (hx, hy),
                                GRAVITY_WELL_HANDLE_RADIUS + 1, 1)
+
+    def _render_teleporter(self, obj, i):
+        """Draw a teleporter pad placeholder (ring + centre dot) and, when
+        selected, a thin wiring line to the destination checkpoint's spawn
+        position so the designer can see where the warp lands."""
+        cam = self.camera
+        screen = self.screen
+        cx, cy = cam.world_to_screen(obj["x"], obj["y"])
+        cxi, cyi = int(cx), int(cy)
+
+        # Placeholder marker (will overlay any future sprite — cheap and
+        # informative either way).
+        pygame.draw.circle(screen, COL_TELEPORTER, (cxi, cyi), 7, 2)
+        pygame.draw.circle(screen, COL_TELEPORTER, (cxi, cyi), 2)
+
+        if i == self.selected_object:
+            pygame.draw.circle(screen, COL_SELECT, (cxi, cyi), 9, 2)
+        elif i == self.hovered_object and self.mode == "object":
+            pygame.draw.circle(screen, (200, 200, 200), (cxi, cyi), 8, 1)
+
+        # Wiring line from selected pad to its destination checkpoint.
+        if i == self.selected_object:
+            cps = self.level.checkpoints
+            dest = obj.get("teleport_dest", 0)
+            if cps and 0 <= dest < len(cps):
+                cp = cps[dest]
+                tx, ty = cam.world_to_screen(cp["spawn_x"], cp["spawn_y"])
+                wire = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+                pygame.draw.line(wire, COL_TELEPORTER_WIRE,
+                                 (cxi, cyi), (int(tx), int(ty)), 2)
+                # Arrowhead at destination.
+                ang = math.atan2(ty - cy, tx - cx)
+                ah = 8
+                for da in (math.pi - 0.4, math.pi + 0.4):
+                    ax = tx + math.cos(ang + da) * ah
+                    ay = ty + math.sin(ang + da) * ah
+                    pygame.draw.line(wire, COL_TELEPORTER_WIRE,
+                                     (int(tx), int(ty)), (int(ax), int(ay)), 2)
+                screen.blit(wire, (0, 0))
+                # Highlight target spawn.
+                pygame.draw.circle(screen, COL_TELEPORTER,
+                                   (int(tx), int(ty)), 5, 1)
 
     def _render_bobbing_mine_amp_bar(self, obj, sx, sy, draw_w, draw_h):
         """Overlay a bar showing the mine's bob-amplitude extent at the
@@ -3199,6 +3297,16 @@ class Editor:
                 axis = "H" if obj["type"] == OBJECT_BOBBING_MINE_HORIZONTAL else "V"
                 parts.append(
                     f"axis={axis} phase=${phase:02X} amp={amp:+d}  ([/] amp ±1 (shift ±10)  ,/. phase ±1 (shift ±8))")
+            elif obj["type"] == OBJECT_TELEPORTER:
+                dest = obj.get("teleport_dest", 0)
+                ncp = len(lv.checkpoints)
+                if ncp > 0 and dest < ncp:
+                    cp = lv.checkpoints[dest]
+                    parts.append(
+                        f"dest=#{dest}/{ncp} -> ({cp['spawn_x']}, {cp['spawn_y']})  ([/] cycle dest)")
+                else:
+                    parts.append(
+                        f"dest=#{dest} (out of range; level has {ncp} checkpoint(s))")
             elif obj["type"] in OBJECT_FIRING_TYPES:
                 aim = obj.get("gun_aim", 0x00)
                 base = aim & 0x1C

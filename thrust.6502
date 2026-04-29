@@ -40,6 +40,7 @@ _TIMED_LASER         = (_SWRAM_BUILD AND TRUE)    ; Timed laser turret enemy ($0
 _GRAVITY_WELL        = (_SWRAM_BUILD AND TRUE)    ; Gravity well object ($0D)
 _Y_BANDS             = (_SWRAM_BUILD AND TRUE)    ; Y-banded per-level parameter overrides (gravity)
 _BOBBING_MINES       = (_SWRAM_BUILD AND TRUE)    ; Bobbing mine hazard object ($0E)
+_TELEPORTER          = (_SWRAM_BUILD AND TRUE)    ; One-way teleporter pad object ($10)
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -125,6 +126,9 @@ ENDIF
 IF _BOBBING_MINES
 OBJECT_bobbing_mine                 = $E        ; bobbing mine: vertical sine-wave hazard, destroyed by bullets (SWRAM only)
 OBJECT_bobbing_mine_horizontal      = $F        ; bobbing mine: horizontal sine-wave hazard (SWRAM only)
+ENDIF
+IF _TELEPORTER
+OBJECT_teleporter                   = $10       ; teleporter pad: warps player to a checkpoint (SWRAM only)
 ENDIF
 
 OBJ_flag_drawn                      = $01       ; level_obj_flags bit 0: sprite was XOR-plotted (needs erase before redraw)
@@ -1421,6 +1425,9 @@ IF _BOBBING_MINES
         EQUB    $03                              ; [E] bobbing_mine (12 px wide)
         EQUB    $03                              ; [F] bobbing_mine_horizontal
 ENDIF
+IF _TELEPORTER
+        EQUB    $03                              ; [10] teleporter (placeholder)
+ENDIF
 
 .obj_type_height
         EQUB    $08,$08,$08,$08,$0A,$08,$0A,$08,$08
@@ -1433,6 +1440,9 @@ ENDIF
 IF _BOBBING_MINES
         EQUB    $0C                              ; [E] bobbing_mine (12 rows tall)
         EQUB    $0C                              ; [F] bobbing_mine_horizontal
+ENDIF
+IF _TELEPORTER
+        EQUB    $08                              ; [10] teleporter (placeholder)
 ENDIF
 
 .obj_type_explosion_particle
@@ -1448,6 +1458,9 @@ IF _BOBBING_MINES
         EQUB    $02                              ; [E] bobbing_mine (destructible by bullets)
         EQUB    $02                              ; [F] bobbing_mine_horizontal
 ENDIF
+IF _TELEPORTER
+        EQUB    $00                              ; [10] teleporter (not destructible)
+ENDIF
 
 .obj_type_score_value                            ; only guns and fuel can be destroyed
         EQUB    $75,$75,$75,$75,$15
@@ -1462,6 +1475,9 @@ IF _BOBBING_MINES
         EQUB    $50                              ; [E] bobbing_mine
         EQUB    $50                              ; [F] bobbing_mine_horizontal
 ENDIF
+IF _TELEPORTER
+        EQUB    $00                              ; [10] teleporter
+ENDIF
 
 \ ******************************************************************************
 \ * Function: end_of_objects_function
@@ -1472,6 +1488,9 @@ ENDIF
 {
 IF _TIMED_LASER
         JSR     update_all_laser_beams              ; erase / re-draw timed laser beams
+ENDIF
+IF _TELEPORTER
+        JSR     teleporter_dispatch_pending         ; consume any latched warp request
 ENDIF
         LDA     score_accumulation
         BEQ     skip_add_score
@@ -1663,6 +1682,19 @@ IF _BOBBING_MINES
         BNE     mine_update_done
         JSR     update_bobbing_mine_horizontal
     .mine_update_done
+ENDIF
+IF _TELEPORTER
+        \\ Teleporter pads: no sprite plot (placeholder pixels would trigger
+        \\ ship-vs-pixel collisions). emit_debris populates well_obj_*_save with
+        \\ the pad's world position; the ship-contact AABB then reads from
+        \\ those slots. Latched pending warps fire at end of frame.
+        LDY     object_type
+        CPY     #OBJECT_teleporter
+        BNE     not_teleporter
+        JSR     teleporter_emit_debris
+        JSR     teleporter_check_ship_contact
+        JMP     next_object
+    .not_teleporter
 ENDIF
         PHA
         AND     #$1C
@@ -2272,6 +2304,9 @@ ENDIF
 IF _BOBBING_MINES
         EQUB    $44                              ; [E] bobbing_mine
         EQUB    $44                              ; [F] bobbing_mine_horizontal
+ENDIF
+IF _TELEPORTER
+        EQUB    $44                              ; [10] teleporter
 ENDIF
 
 \ ******************************************************************************
@@ -7230,6 +7265,33 @@ IF _BOBBING_MINES
         LDA     level_obj_pos_X_lookup_HI,X
         STA     bm_h_pos_x_store_addr_HI                  ; **MODIFIES CODE**
 ENDIF
+IF _TELEPORTER
+        LDA     level_obj_pos_X_lookup_LO,X
+        STA     tp_pos_x_addr_LO                          ; **MODIFIES CODE**
+        LDA     level_obj_pos_X_lookup_HI,X
+        STA     tp_pos_x_addr_HI                          ; **MODIFIES CODE**
+
+        LDA     level_obj_pos_Y_lookup_LO,X
+        STA     tp_pos_y_addr_LO                          ; **MODIFIES CODE**
+        LDA     level_obj_pos_Y_lookup_HI,X
+        STA     tp_pos_y_addr_HI                          ; **MODIFIES CODE**
+
+        LDA     level_obj_pos_Y_EXT_lookup_LO,X
+        STA     tp_pos_y_ext_addr_LO                      ; **MODIFIES CODE**
+        LDA     level_obj_pos_Y_EXT_lookup_HI,X
+        STA     tp_pos_y_ext_addr_HI                      ; **MODIFIES CODE**
+
+        LDA     level_obj_data_0_lookup_LO,X
+        STA     tp_dest_addr_LO                           ; **MODIFIES CODE** (slot 0 = dest checkpoint index)
+        LDA     level_obj_data_0_lookup_HI,X
+        STA     tp_dest_addr_HI                           ; **MODIFIES CODE**
+
+        \\ Clear any stale pending warp / overlap state from a previous life.
+        LDA     #$00
+        STA     teleporter_pending_index
+        STA     teleporter_just_warped
+        STA     teleporter_overlap_this_frame
+ENDIF
 
         TXA
         ROR     A                                        ; level_number /= 2
@@ -11456,6 +11518,317 @@ WELL_DEBRIS_SPAWN_MASK    = $01          ; emit one particle every 8 ticks per w
         LDX     current_object
         RTS
 \\ }
+ENDIF
+
+IF _TELEPORTER
+\ ******************************************************************************
+\ * Teleporter debris emitter
+\ *
+\ * Reuses well_emit_debris_particle in repulsor mode (negative strength) to
+\ * fountain debris outward from each teleporter pad once every few ticks. The
+\ * pad supplies the well centre (its world XY) and a fixed radius / negative
+\ * strength via the same well_*_save scratch slots the gravity-well code uses.
+\ *
+\ * Position is read via per-level SMC patches so the emit can run before
+\ * object_visibility_test has populated current_obj_*pos_*. Patched in
+\ * initialise_level_pointers alongside the bobbing-mine SMC sites.
+\ *
+\ * Requires _GRAVITY_WELL = TRUE (well_emit_debris_particle lives in that block).
+\ ******************************************************************************
+
+TELEPORTER_DEBRIS_RADIUS    = $08          ; world units; 8 char-widths feels active without flooding
+TELEPORTER_DEBRIS_STRENGTH  = $80          ; any negative -> repulsor mode (spawn at centre, fly outward)
+TELEPORTER_DEBRIS_SPAWN_MASK = $03         ; emit one particle every 4 ticks per pad
+
+\ Shift between the pad's stored top-left position and the AABB / debris
+\ centre. Tuned so the trigger sits over the visible ship (whose sprite
+\ origin is offset from player_xpos / player_ypos), and the debris
+\ fountain is anchored on the same point.
+TELEPORTER_CENTRE_X_OFFSET  = $02          ; chars
+TELEPORTER_CENTRE_Y_OFFSET  = $04          ; pixel rows
+
+\ Pending warp request: 0 = idle, 1+ = pending (destination = pending - 1).
+\ Set by the AABB trigger; consumed by teleporter_dispatch_pending at end of frame.
+.teleporter_pending_index   EQUB $00
+
+\ "Ship was inside a pad's AABB last frame." Suppresses repeated triggers while
+\ the player sits on a pad. Carried forward each frame from
+\ teleporter_overlap_this_frame; cleared automatically once the ship leaves.
+.teleporter_just_warped     EQUB $00
+
+\ Set by the AABB whenever the ship is inside a pad's box, regardless of guard.
+\ Drives the just_warped transition at end of frame, then resets to 0.
+.teleporter_overlap_this_frame  EQUB $00
+
+\ Scratch holding the destination checkpoint index while the warp routine runs.
+.teleporter_dest_save           EQUB $00
+
+.teleporter_emit_debris
+\\ {
+        \\ Always load the pad's world position into well_obj_*_save (also
+        \\ used by the ship-contact AABB), then gate the actual particle emit
+        \\ on the per-pad cadence. Per-pad jitter via EOR current_object so
+        \\ two pads don't spawn on the same frame.
+        LDX     current_object
+
+        \\ Pad world position is the TOP-LEFT of the sprite; ship's
+        \\ player_xpos / player_ypos point at the sprite's plot origin
+        \\ (~2 chars + 5 rows offset from the visible ship centre). Shift
+        \\ the saved pad position right + down so the AABB lines up with
+        \\ where the ship visually is, and the debris fountain centres on
+        \\ the same point (both read from these slots).
+
+.tp_load_pos_x
+        LDA     level_0_obj_pos_X,X                  ; **SELF-MODIFIED CODE**
+        tp_pos_x_addr_LO = tp_load_pos_x+1
+        tp_pos_x_addr_HI = tp_load_pos_x+2
+        CLC
+        ADC     #TELEPORTER_CENTRE_X_OFFSET
+        STA     well_obj_x_save
+
+.tp_load_pos_y
+        LDA     level_0_obj_pos_Y,X                  ; **SELF-MODIFIED CODE**
+        tp_pos_y_addr_LO = tp_load_pos_y+1
+        tp_pos_y_addr_HI = tp_load_pos_y+2
+        CLC
+        ADC     #TELEPORTER_CENTRE_Y_OFFSET
+        STA     well_obj_y_lo_save
+
+.tp_load_pos_y_ext
+        LDA     level_0_obj_pos_Y_EXT,X              ; **SELF-MODIFIED CODE**
+        tp_pos_y_ext_addr_LO = tp_load_pos_y_ext+1
+        tp_pos_y_ext_addr_HI = tp_load_pos_y_ext+2
+        ADC     #$00                                  ; carry-extend the +Y offset above
+        STA     well_obj_y_hi_save
+
+        LDA     level_tick_counter
+        EOR     current_object
+        AND     #TELEPORTER_DEBRIS_SPAWN_MASK
+        BEQ     do_emit
+        RTS
+.do_emit
+        LDA     #TELEPORTER_DEBRIS_RADIUS
+        STA     well_radius_save
+        LDA     #TELEPORTER_DEBRIS_STRENGTH
+        STA     well_strength_save
+
+        JMP     well_emit_debris_particle            ; tail-call (restores X = current_object)
+\\ }
+
+\ ******************************************************************************
+\ * Function: teleporter_check_ship_contact
+\ * Description: AABB ship-vs-pad test. Same shape as the bobbing-mine ship
+\ *              test (X in chars, Y in pixels). On overlap, latch
+\ *              teleporter_pending_index = (slot 0 + 1). Pads refuse to fire
+\ *              while the pod is tethered or being carried (v1 simplification).
+\ *              Skipped if a warp is already pending so the player sitting on
+\ *              the pad doesn't keep re-arming it each frame.
+\ * Params: X = current_object (preserved on RTS).
+\ ******************************************************************************
+.teleporter_check_ship_contact
+{
+        LDA     pod_tethered_flag
+        BNE     no_contact
+        LDA     pod_lifted_flag
+        BNE     no_contact
+
+        \\ 16-bit dy = pad_y - player_y. Pad position lives in well_obj_*_save
+        \\ (populated by teleporter_emit_debris just above this call site).
+        \\ Pad is 8 px tall; ship ~10 px. Threshold $08 keeps the trigger
+        \\ zone close to the pad's visual footprint instead of a wide AABB.
+        SEC
+        LDA     well_obj_y_lo_save
+        SBC     player_ypos_INT
+        TAY
+        LDA     well_obj_y_hi_save
+        SBC     player_ypos_INT_HI
+        BMI     tp_dy_neg
+        BNE     no_contact
+        CPY     #$08
+        BCS     no_contact
+        JMP     tp_test_dx
+    .tp_dy_neg
+        CMP     #$FF
+        BNE     no_contact
+        TYA
+        EOR     #$FF
+        CLC
+        ADC     #$01
+        CMP     #$08
+        BCS     no_contact
+
+    .tp_test_dx
+        SEC                                          ; 8-bit dx = pad_x - player_x (chars)
+        LDA     well_obj_x_save
+        SBC     player_xpos_INT
+        BPL     tp_dx_pos
+        EOR     #$FF
+        CLC
+        ADC     #$01
+    .tp_dx_pos
+        CMP     #$05                                 ; |dx| < 5 chars
+        BCS     no_contact
+
+        \\ Geometric overlap. Mark the frame; latch a pending warp only if the
+        \\ ship wasn't already on a pad last frame and one isn't already pending.
+        LDA     #$FF
+        STA     teleporter_overlap_this_frame
+        LDA     teleporter_just_warped
+        BNE     no_contact
+        LDA     teleporter_pending_index
+        BNE     no_contact
+
+        LDX     current_object
+        JSR     teleporter_load_dest_index
+        CLC
+        ADC     #$01
+        STA     teleporter_pending_index
+    .no_contact
+        LDX     current_object                       ; restore X for caller's loop
+        RTS
+}
+
+\ ******************************************************************************
+\ * Function: teleporter_load_dest_index
+\ * Description: Read the selected pad's slot-0 byte (destination checkpoint
+\ *              index) via SMC. X must = current_object on entry.
+\ * Returns: A = dest index.
+\ ******************************************************************************
+.teleporter_load_dest_index
+.tp_load_dest
+        LDA     level_0_obj_data_0,X                 ; **SELF-MODIFIED CODE**
+        tp_dest_addr_LO = tp_load_dest+1
+        tp_dest_addr_HI = tp_load_dest+2
+        RTS
+
+\ ******************************************************************************
+\ * Function: teleporter_dispatch_pending
+\ * Description: End-of-frame hook. If the AABB trigger flagged a pending warp,
+\ *              fire its visual / audio confirmation and clear the pending flag.
+\ *              v1 stub: plays a collect sound. The actual position write +
+\ *              teleport-out/in animations land in the next step.
+\ ******************************************************************************
+.teleporter_dispatch_pending
+{
+        LDA     teleporter_pending_index
+        BEQ     no_pending
+        SEC
+        SBC     #$01                                 ; back to 0-based dest index
+        JSR     teleporter_perform_warp
+        LDA     #$00
+        STA     teleporter_pending_index
+    .no_pending
+        \\ Carry "ship overlapped a pad this frame" forward to next frame's
+        \\ guard, so the ship sitting on the pad won't keep re-arming pending.
+        \\ When no overlap fires, just_warped clears automatically.
+        LDA     teleporter_overlap_this_frame
+        STA     teleporter_just_warped
+        LDA     #$00
+        STA     teleporter_overlap_this_frame
+        RTS
+}
+
+\ ******************************************************************************
+\ * Function: teleporter_perform_warp
+\ * Description: One-way warp to the level's checkpoint at index A. Plays the
+\ *              teleport-out animation at the source, writes the destination
+\ *              position into ship/window state, redraws the screen for the
+\ *              new window, then plays the teleport-in animation at the
+\ *              destination. Mirrors the position-write block in
+\ *              level_reset_loop and the screen-rebuild sequence used by
+\ *              level_start_demo_entry.
+\ * Params: A = destination checkpoint index (0..N-1).
+\ ******************************************************************************
+.teleporter_perform_warp
+{
+        \\ Reuse the existing level-retry flow: it already wipes ZP, rebuilds
+        \\ landscape, and plays the teleport-in animation correctly. We just
+        \\ need to nudge level_reset's checkpoint-matching loop so it picks
+        \\ our destination index.
+        \\
+        \\ Strategy: set midpoint_ypos to cp[K].y + 1. The matching loop
+        \\ iterates Y until cp[Y].y >= midpoint, which fires at Y = K+1
+        \\ (or falls off the end if K is the last cp). Either way, the L2B4B
+        \\ post-match block then DEYs back to K when level_reset_with_pod_flag
+        \\ is 0 — which we guarantee by clearing it explicitly. (This also
+        \\ stops level_reset from re-attaching a pod that wasn't carried in,
+        \\ which the AABB gate has already ensured.)
+        STA     teleporter_dest_save
+        \\ Clear pending state up front: JMP level_retry never returns, so
+        \\ anything after the JMP in our caller (dispatch_pending) won't run.
+        \\ Without clearing here, the AABB-latched pending flag would stay set
+        \\ across the warp and loop us right back into the warp next frame.
+        LDA     #$00
+        STA     teleporter_pending_index
+        LDA     #$FF
+        STA     teleporter_just_warped                 ; suppress immediate re-trigger if dest pad sits us in another box
+        LDA     #$00
+        STA     teleporter_overlap_this_frame
+
+        LDX     level_number
+        LDA     level_reset_data_sizes,X
+        STA     level_reset_size
+        BNE     tp_have_checkpoints
+        RTS                                            ; no checkpoints
+    .tp_have_checkpoints
+
+        \\ Clamp dest to range.
+        LDA     teleporter_dest_save
+        CMP     level_reset_size
+        BCC     tp_dest_in_range
+        LDA     #$00
+        STA     teleporter_dest_save
+    .tp_dest_in_range
+
+        \\ Read cp[K].y into midpoint_ypos, then add 1 to it.
+        LDX     level_number
+        LDA     level_reset_ptr_table_LO,X
+        STA     level_reset_ptr
+        LDA     level_reset_ptr_table_HI,X
+        STA     level_reset_ptr+1
+
+        LDY     teleporter_dest_save
+        LDA     (level_reset_ptr),Y                    ; cp[K].y_HI
+        STA     midpoint_ypos_INT_HI
+        TYA
+        CLC
+        ADC     level_reset_size
+        TAY
+        LDA     (level_reset_ptr),Y                    ; cp[K].y_LO
+        CLC
+        ADC     #$01                                   ; +1 nudges matching to land on Y=K
+        STA     midpoint_ypos_INT
+        BCC     tp_y_no_carry
+        INC     midpoint_ypos_INT_HI
+    .tp_y_no_carry
+
+        \\ Force the with-pod flag clear so the post-match block doesn't
+        \\ re-attach a pod (the AABB already gated this case out anyway), and
+        \\ so the matching loop's L2B4B path takes the DEY adjustment.
+        LDA     #$00
+        STA     level_reset_with_pod_flag
+
+        \\ Teleport-out animation at the source pad. player_teleport saves
+        \\ and restores the relevant flags itself, and XOR-erases the ship
+        \\ via draw_player_timed_to_vsync before playing the rings — the
+        \\ subsequent level_retry's clear_screen_and_init wipes whatever's
+        \\ left, so the disappear animation is purely cosmetic at this point.
+        \\ Same ping that plays on entering orbit, since the rising-pitch
+        \\ effect reads naturally as "going somewhere".
+        JSR     enter_orbit_sound
+        LDA     #$FF
+        STA     teleport_appear_or_disappear
+        JSR     player_teleport
+
+        \\ Reset stack pointer: we're nested several JSRs deep inside
+        \\ update_and_draw_all_objects → end_of_objects_function → dispatch.
+        \\ JMP level_retry restarts tick_loop and never returns up the chain,
+        \\ so without this the orphaned return addresses leak each warp.
+        LDX     #$FF
+        TXS
+
+        JMP     level_retry
+}
 ENDIF
 
 IF _Y_BANDS

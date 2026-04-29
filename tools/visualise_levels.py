@@ -87,6 +87,7 @@ OBJECT_TYPE_NAMES = {
     0x0D: "Gravity well",
     0x0E: "Bobbing mine",
     0x0F: "Bobbing mine (H)",
+    0x10: "Teleporter",
 }
 
 OBJECT_TYPE_MARKERS = {
@@ -106,6 +107,7 @@ OBJECT_TYPE_MARKERS = {
     0x0D: ("o", "skyblue"),   # gravity well
     0x0E: ("*", "yellow"),    # bobbing mine (vertical)
     0x0F: ("*", "orange"),    # bobbing mine (horizontal)
+    0x10: ("o", "cyan"),      # teleporter pad
 }
 
 # ---------------------------------------------------------------------------

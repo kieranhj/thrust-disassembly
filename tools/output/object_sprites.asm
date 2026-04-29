@@ -195,6 +195,13 @@
         EQUB    $88,$11,$88,$11,$44,$22,$22,$44
         EQUB    $11,$88,$99,$66,$88,$FF,$66,$66
 
+.obj_sprite_data_A_teleporter
+        EQUB    $80,$80,$08,$10,$80,$80,$10,$80
+        EQUB    $10,$80,$80,$08,$10,$FF
+.obj_sprite_data_B_teleporter
+        EQUB    $00,$77,$FF,$EE,$00,$88,$11,$88
+        EQUB    $11,$00,$77,$FF,$EE
+
 .obj_sprite_data_A_table_LO
         EQUB    LO(obj_sprite_data_A_gun_up_right)
         EQUB    LO(obj_sprite_data_A_gun_down_right)
@@ -212,6 +219,7 @@
         EQUB    LO(obj_sprite_data_A_gravity_well)
         EQUB    LO(obj_sprite_data_A_bobbing_mine)
         EQUB    LO(obj_sprite_data_A_bobbing_mine_horizontal)
+        EQUB    LO(obj_sprite_data_A_teleporter)
 
 .obj_sprite_data_A_table_HI
         EQUB    HI(obj_sprite_data_A_gun_up_right)
@@ -230,6 +238,7 @@
         EQUB    HI(obj_sprite_data_A_gravity_well)
         EQUB    HI(obj_sprite_data_A_bobbing_mine)
         EQUB    HI(obj_sprite_data_A_bobbing_mine_horizontal)
+        EQUB    HI(obj_sprite_data_A_teleporter)
 
 .obj_sprite_data_B_table_LO
         EQUB    LO(obj_sprite_data_B_gun_up_right)
@@ -248,6 +257,7 @@
         EQUB    LO(obj_sprite_data_B_gravity_well)
         EQUB    LO(obj_sprite_data_B_bobbing_mine)
         EQUB    LO(obj_sprite_data_B_bobbing_mine_horizontal)
+        EQUB    LO(obj_sprite_data_B_teleporter)
 
 .obj_sprite_data_B_table_HI
         EQUB    HI(obj_sprite_data_B_gun_up_right)
@@ -266,3 +276,4 @@
         EQUB    HI(obj_sprite_data_B_gravity_well)
         EQUB    HI(obj_sprite_data_B_bobbing_mine)
         EQUB    HI(obj_sprite_data_B_bobbing_mine_horizontal)
+        EQUB    HI(obj_sprite_data_B_teleporter)

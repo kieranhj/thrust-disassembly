@@ -16,6 +16,7 @@ Open work items, one line each. Full details in the sections below; completed wo
 - [Rotating gun emplacements](#rotating-gun-emplacements) — per-frame angle sweep, fires when aim crosses player
 - [Hot areas](#hot-areas) — heat accumulation degrades flight; offset by a heatsink upgrade
 - [Water as a general element](#water-as-a-general-element) — submerged regions with modified physics
+- [Teleporter pads](#teleporter-pads) — paired source/destination pads that warp the player elsewhere on the map
 
 ### Gravity wells — open follow-ups
 - [Well sprite](#gravity-well-follow-ups) — replace the type $0D early-exit with a real non-lethal sprite
@@ -130,6 +131,25 @@ Distinct from the flooding-mine scenario below: water as a static (or slowly-ani
 - **Bubbles released by thrust** when submerged, using the existing particle pool
 
 **Implementation notes:** rendering-wise, the timer-based palette switch described in the flooding-mine section works for a static water line too. Physics changes would branch on `ship_ypos > water_line_y` to swap in alternate gravity/damping constants.
+
+### Teleporter pads
+
+A placeable object that warps the player to a destination point elsewhere on the map. Reuses the existing teleport-in / teleport-out effect already played at level start / on player death, but without resetting any level state — the level keeps running, objects stay where they are, only `ship_xpos` / `ship_ypos` / `window_xpos` / `window_ypos` get re-pointed at the destination.
+
+Useful as a level-design tool: shortcuts back to base after a deep descent, one-way drops into a sealed chamber, paired entry/exit doors for Metroidvania-style fast travel between regions of one big map.
+
+**Implementation notes:**
+- New object type. Per-instance destination stored in obj_data slots: slot 0 = destination X (chars), slots 1/2 = destination Y (16-bit pixels). Slot layout matches how lasers / mines already split a 16-bit value across two slots.
+- Trigger: ship-vs-pad AABB test in the same place as the bobbing-mine ship-contact check (`check_planet_explode_trigger`). On overlap, kick off the teleport-out animation, then on completion stamp the destination into `ship_xpos_INT` / `ship_ypos_INT(_HI)` and the window position, and play the teleport-in animation. The existing animation already handles the in/out cleanly at level start; the work is letting it fire mid-level without resetting object state or re-running `initialise_level_pointers`.
+- During the animation the player is non-interactive (matches existing teleport behaviour) — physics paused, input ignored, gravity not integrated. Cheap because it reuses the level-start teleport state machine wholesale.
+- Cooldown / one-shot: probably want a "just teleported" flag that disables re-trigger until the ship leaves the destination pad's AABB, so the player doesn't immediately re-trigger if a return pad sits at the destination.
+- Editor: place pad with type key as usual; selected-pad mode shows a thin coloured line from pad to its destination point (same UX shape as the proposed switch wiring lines). Drag the destination handle to retarget. Pairs of pads (mutual return) are just two pads each pointing at the other.
+- Pod handling: simplest first cut is "pad refuses to fire while tethered or carrying the pod" — avoids having to teleport the pod with the ship and re-establish the tether on the far side. Could be relaxed later.
+
+**Possible variants** (not v1):
+- One-way vs two-way pads (pure data — just whether a return pad exists).
+- Conditional pads gated by a switch state from the [switch system](#configurable-switches-and-triggers).
+- Random destination from a list, for chaotic levels.
 
 ---
 
