@@ -156,6 +156,15 @@ GRAVITY_WELL_HANDLE_HIT_PADDING = 6
 COL_GRAVITY_WELL     = (140, 160, 255)
 COL_GRAVITY_WELL_RING = (140, 160, 255, 110)  # diamond outline (translucent)
 
+# Bobbing mine object ($0E, SWRAM-only). Y position bobs along a sine curve
+# with per-instance phase (slot 0) and signed amplitude (slot 1). Slot 2 is
+# the runtime previous-offset; always 0 in level data.
+OBJECT_BOBBING_MINE  = 0x0E
+BOBBING_MINE_DEFAULT_PHASE = 0
+BOBBING_MINE_DEFAULT_AMP   = 32   # signed pixels
+COL_BOBBING_MINE     = (255, 220, 80)
+COL_BOBBING_MINE_RANGE = (255, 220, 80, 110)  # amplitude indicator (translucent)
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -343,21 +352,30 @@ def import_beebasm(path):
                 if t in LASER_BEAM_DX_PIXELS:
                     dx_byte, dy_byte = slot_1, slot_2
                     wr, ws = 0, 0
+                    mine_phase, mine_amp = 0, 0
                 elif t == OBJECT_GRAVITY_WELL:
                     dx_byte, dy_byte = default_dx & 0xFF, default_dy & 0xFF
                     wr, ws = slot_1, slot_2
+                    mine_phase, mine_amp = 0, 0
+                elif t == OBJECT_BOBBING_MINE:
+                    dx_byte, dy_byte = default_dx & 0xFF, default_dy & 0xFF
+                    wr, ws = 0, 0
+                    mine_phase, mine_amp = gp, slot_1
                 else:
                     dx_byte, dy_byte = default_dx & 0xFF, default_dy & 0xFF
                     wr, ws = 0, 0
+                    mine_phase, mine_amp = 0, 0
             else:
                 dx_byte = legacy_laser_dx[i] if i < len(legacy_laser_dx) else (default_dx & 0xFF)
                 dy_byte = legacy_laser_dy[i] if i < len(legacy_laser_dy) else (default_dy & 0xFF)
                 wr = legacy_well_radius[i] if i < len(legacy_well_radius) else 0
                 ws = legacy_well_strength[i] if i < len(legacy_well_strength) else 0
+                mine_phase, mine_amp = 0, 0
             # Convert from unsigned byte to signed int (-128..127).
             dx_s = dx_byte - 256 if dx_byte >= 128 else dx_byte
             dy_s = dy_byte - 256 if dy_byte >= 128 else dy_byte
             ws_s = ws - 256 if ws >= 128 else ws
+            mine_amp_s = mine_amp - 256 if mine_amp >= 128 else mine_amp
             objects.append({
                 "x": obj_x[i] if i < len(obj_x) else 0,
                 "y": y_world,
@@ -367,6 +385,8 @@ def import_beebasm(path):
                 "laser_dy": dy_s,
                 "well_radius": wr,
                 "well_strength": ws_s,
+                "mine_phase": mine_phase & 0xFF,
+                "mine_amp": mine_amp_s,
             })
 
         # Colours (may not be present in older exports)
@@ -616,20 +636,26 @@ def export_beebasm(levels):
             lines.append(f"        EQUB    {format_bytes([o['type'] for o in obj] + [0xFF])}")
             # Generic per-object data slots. Each object type interprets each
             # slot in its own way (see thrust.6502 OBJ_DATA_* offsets):
-            #   slot 0: gun_aim (guns/lasers); unused (zero) for other types
-            #   slot 1: laser_dx_pixels (lasers) / well_radius (wells)
-            #   slot 2: laser_dy_rows  (lasers) / well_strength (wells)
-            # Lasers and wells are mutually exclusive on a single object slot,
-            # so slots 1/2 carry whichever per-type field applies (or 0).
-            data_0 = [o.get('gun_aim', 0x00) & 0xFF for o in obj]
-            data_1 = [
-                (o.get('laser_dx', 0) & 0xFF) | (o.get('well_radius', 0) & 0xFF)
-                for o in obj
-            ]
-            data_2 = [
-                (o.get('laser_dy', 0) & 0xFF) | (o.get('well_strength', 0) & 0xFF)
-                for o in obj
-            ]
+            #   slot 0: gun_aim (guns/lasers) / mine_phase (mines)
+            #   slot 1: laser_dx_pixels (lasers) / well_radius (wells) / mine_amp (mines)
+            #   slot 2: laser_dy_rows (lasers) / well_strength (wells) / 0 (mines: runtime state)
+            data_0 = []
+            data_1 = []
+            data_2 = []
+            for o in obj:
+                t = o['type']
+                if t == OBJECT_BOBBING_MINE:
+                    data_0.append(o.get('mine_phase', 0) & 0xFF)
+                    data_1.append(o.get('mine_amp', 0) & 0xFF)
+                    data_2.append(0)
+                else:
+                    data_0.append(o.get('gun_aim', 0x00) & 0xFF)
+                    data_1.append(
+                        (o.get('laser_dx', 0) & 0xFF) | (o.get('well_radius', 0) & 0xFF)
+                    )
+                    data_2.append(
+                        (o.get('laser_dy', 0) & 0xFF) | (o.get('well_strength', 0) & 0xFF)
+                    )
             lines.append(f".level_{n}_obj_data_0")
             lines.append(f"        EQUB    {format_bytes(data_0)}")
             lines.append(f".level_{n}_obj_data_1")
@@ -794,7 +820,8 @@ class LevelData:
                             "type": t, "gun_aim": gp,
                             "laser_dx": LASER_BEAM_DX_PIXELS.get(t, 0),
                             "laser_dy": LASER_BEAM_DY_ROWS.get(t, 0),
-                            "well_radius": 0, "well_strength": 0})
+                            "well_radius": 0, "well_strength": 0,
+                            "mine_phase": 0, "mine_amp": 0})
         return cls(level_num, list(left), list(right), objects, terrain_rle)
 
     @property
@@ -1300,6 +1327,9 @@ class Editor:
             elif (self.selected_object is not None
                     and self.level.objects[self.selected_object]["type"] == OBJECT_GRAVITY_WELL):
                 self._adjust_selected_well_strength(event.key, shift)
+            elif (self.selected_object is not None
+                    and self.level.objects[self.selected_object]["type"] == OBJECT_BOBBING_MINE):
+                self._adjust_selected_mine_param(event.key, shift)
             else:
                 self._adjust_selected_gun_aim(event.key)
 
@@ -1410,6 +1440,32 @@ class Editor:
             self.undo.save(self.level)
             obj["well_strength"] = new
             self.level.dirty = True
+
+    def _adjust_selected_mine_param(self, key, shift):
+        """[ / ]  nudge mine_amp by -1 / +1 (or -10 / +10 with shift).
+        , / .    nudge mine_phase by -1 / +1 (or -8 / +8 with shift)."""
+        if self.selected_object is None:
+            return
+        obj = self.level.objects[self.selected_object]
+        if obj["type"] != OBJECT_BOBBING_MINE:
+            return
+        if key in (pygame.K_LEFTBRACKET, pygame.K_RIGHTBRACKET):
+            step = 10 if shift else 1
+            cur = obj.get("mine_amp", 0)
+            new = cur + (step if key == pygame.K_RIGHTBRACKET else -step)
+            new = max(-127, min(127, new))
+            if new != cur:
+                self.undo.save(self.level)
+                obj["mine_amp"] = new
+                self.level.dirty = True
+        elif key in (pygame.K_COMMA, pygame.K_PERIOD):
+            step = 8 if shift else 1
+            cur = obj.get("mine_phase", 0)
+            new = (cur + (step if key == pygame.K_PERIOD else -step)) & 0xFF
+            if new != cur:
+                self.undo.save(self.level)
+                obj["mine_phase"] = new
+                self.level.dirty = True
 
     def _reset_selected_laser_endpoint(self):
         """Restore the selected laser's dx/dy to its orientation default."""
@@ -1551,12 +1607,22 @@ class Editor:
                     self.dragging_well_radius = True
                     self._set_well_radius_from_screen(mx)
                     return
-                # Wells have no sprite, so _hit_test_object skips them; check
-                # well centres separately first.
+                # Wells and mines have no sprite, so _hit_test_object skips
+                # them; check their bespoke hit areas separately first.
                 well_hit = self._hit_test_well(mx, my)
                 if well_hit is not None:
                     self.selected_object = well_hit
                     obj = self.level.objects[well_hit]
+                    wx, wy = self.camera.screen_to_world(mx, my)
+                    grab_dx = wx - obj["x"]
+                    grab_dy = wy - obj["y"]
+                    self.dragging_object = (grab_dx, grab_dy)
+                    self.undo.save(self.level)
+                    return
+                mine_hit = self._hit_test_mine(mx, my)
+                if mine_hit is not None:
+                    self.selected_object = mine_hit
+                    obj = self.level.objects[mine_hit]
                     wx, wy = self.camera.screen_to_world(mx, my)
                     grab_dx = wx - obj["x"]
                     grab_dy = wy - obj["y"]
@@ -1713,6 +1779,8 @@ class Editor:
                 self.hovered_object = self._hit_test_object(mx, my)
                 if self.hovered_object is None:
                     self.hovered_object = self._hit_test_well(mx, my)
+                if self.hovered_object is None:
+                    self.hovered_object = self._hit_test_mine(mx, my)
                 self.hovered_laser_endpoint = self._hit_test_laser_endpoint(mx, my)
                 self.hovered_well_radius = self._hit_test_well_radius(mx, my)
             elif self.mode == "band":
@@ -2018,6 +2086,17 @@ class Editor:
                 return i
         return None
 
+    def _hit_test_mine(self, mx, my):
+        """Return object index if (mx, my) is over a bobbing mine's body."""
+        for i, obj in enumerate(self.level.objects):
+            if obj["type"] != OBJECT_BOBBING_MINE:
+                continue
+            cx, cy = self.camera.world_to_screen(obj["x"], obj["y"])
+            r = 12  # spike-ball draw radius + click slack
+            if (mx - cx) ** 2 + (my - cy) ** 2 <= r * r:
+                return i
+        return None
+
     def _hit_test_well_radius(self, mx, my):
         """If the selected object is a gravity well and (mx, my) is over the
         radius drag handle (right vertex of the diamond), return True."""
@@ -2163,12 +2242,15 @@ class Editor:
             self.undo.save(self.level)
             wx, wy = self.obj_menu_world
             is_well = obj_type == OBJECT_GRAVITY_WELL
+            is_mine = obj_type == OBJECT_BOBBING_MINE
             self.level.objects.append({"x": wx, "y": wy, "type": obj_type,
                                         "gun_aim": 0x00,
                                         "laser_dx": LASER_BEAM_DX_PIXELS.get(obj_type, 0),
                                         "laser_dy": LASER_BEAM_DY_ROWS.get(obj_type, 0),
                                         "well_radius": GRAVITY_WELL_DEFAULT_RADIUS if is_well else 0,
-                                        "well_strength": GRAVITY_WELL_DEFAULT_STRENGTH if is_well else 0})
+                                        "well_strength": GRAVITY_WELL_DEFAULT_STRENGTH if is_well else 0,
+                                        "mine_phase": BOBBING_MINE_DEFAULT_PHASE if is_mine else 0,
+                                        "mine_amp": BOBBING_MINE_DEFAULT_AMP if is_mine else 0})
             self.level.dirty = True
             self.selected_object = len(self.level.objects) - 1
         self.show_obj_menu = False
@@ -2519,6 +2601,9 @@ class Editor:
             if obj["type"] == OBJECT_GRAVITY_WELL:
                 self._render_gravity_well(obj, i)
                 continue
+            if obj["type"] == OBJECT_BOBBING_MINE:
+                self._render_bobbing_mine(obj, i)
+                continue
             sprite = self.sprite_cache.get(obj["type"], lv)
             if sprite is None:
                 continue
@@ -2677,6 +2762,42 @@ class Editor:
             ring_col_handle = (255, 255, 255) if highlight else (180, 180, 180)
             pygame.draw.circle(self.screen, ring_col_handle, (hx, hy),
                                GRAVITY_WELL_HANDLE_RADIUS + 1, 1)
+
+    def _render_bobbing_mine(self, obj, i):
+        """Draw a bobbing mine: small star at the base Y, with a vertical
+        bar showing the amplitude extent when selected."""
+        cam = self.camera
+        sx, sy = cam.world_to_screen(obj["x"], obj["y"])
+        cxi, cyi = int(sx), int(sy)
+
+        amp = obj.get("mine_amp", 0)
+        amp_screen_y = abs(amp) * cam.zoom
+        if amp_screen_y > 1:
+            bar_surf = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
+            pygame.draw.line(bar_surf, COL_BOBBING_MINE_RANGE,
+                             (cxi, cyi - int(amp_screen_y)),
+                             (cxi, cyi + int(amp_screen_y)), 2)
+            pygame.draw.line(bar_surf, COL_BOBBING_MINE_RANGE,
+                             (cxi - 4, cyi - int(amp_screen_y)),
+                             (cxi + 4, cyi - int(amp_screen_y)), 1)
+            pygame.draw.line(bar_surf, COL_BOBBING_MINE_RANGE,
+                             (cxi - 4, cyi + int(amp_screen_y)),
+                             (cxi + 4, cyi + int(amp_screen_y)), 1)
+            self.screen.blit(bar_surf, (0, 0))
+
+        pygame.draw.circle(self.screen, COL_BOBBING_MINE, (cxi, cyi), 5)
+        for ang in (0, 45, 90, 135):
+            import math
+            rad = math.radians(ang)
+            dx = int(8 * math.cos(rad))
+            dy = int(8 * math.sin(rad))
+            pygame.draw.line(self.screen, COL_BOBBING_MINE,
+                             (cxi - dx, cyi - dy), (cxi + dx, cyi + dy), 1)
+
+        if i == self.selected_object:
+            pygame.draw.circle(self.screen, COL_SELECT, (cxi, cyi), 10, 2)
+        elif i == self.hovered_object and self.mode == "object":
+            pygame.draw.circle(self.screen, (200, 200, 200), (cxi, cyi), 9, 1)
 
     def _laser_beam_screen_coords(self, obj, sx, sy, draw_w, draw_h):
         """Return (barrel_sx, barrel_sy, end_sx, end_sy) screen positions for
@@ -3087,6 +3208,11 @@ class Editor:
                 s = obj.get("well_strength", 0)
                 parts.append(
                     f"r={r} s={s:+d}  (drag handle to resize; [/] strength ±1, shift = ±10)")
+            elif obj["type"] == OBJECT_BOBBING_MINE:
+                phase = obj.get("mine_phase", 0)
+                amp = obj.get("mine_amp", 0)
+                parts.append(
+                    f"phase=${phase:02X} amp={amp:+d}  ([/] amp ±1 (shift ±10)  ,/. phase ±1 (shift ±8))")
             elif obj["type"] in OBJECT_FIRING_TYPES:
                 aim = obj.get("gun_aim", 0x00)
                 base = aim & 0x1C

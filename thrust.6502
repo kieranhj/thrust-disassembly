@@ -39,6 +39,7 @@ _NO_WRAP_UNDERGROUND = (_SWRAM_BUILD AND TRUE)    ; Skip X wrap when below surfa
 _TIMED_LASER         = (_SWRAM_BUILD AND TRUE)    ; Timed laser turret enemy ($09)
 _GRAVITY_WELL        = (_SWRAM_BUILD AND TRUE)    ; Gravity well object ($0D)
 _Y_BANDS             = (_SWRAM_BUILD AND TRUE)    ; Y-banded per-level parameter overrides (gravity)
+_BOBBING_MINES       = (_SWRAM_BUILD AND TRUE)    ; Bobbing mine hazard object ($0E)
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -120,6 +121,9 @@ OBJECT_laser_turret_down_left       = $C        ; laser turret facing down-left 
 ENDIF
 IF _GRAVITY_WELL
 OBJECT_gravity_well                 = $D        ; gravity well: radial pull on ship inside radius (SWRAM only)
+ENDIF
+IF _BOBBING_MINES
+OBJECT_bobbing_mine                 = $E        ; bobbing mine: floating sine-wave hazard, destroyed by bullets (SWRAM only)
 ENDIF
 
 OBJ_flag_drawn                      = $01       ; level_obj_flags bit 0: sprite was XOR-plotted (needs erase before redraw)
@@ -1412,6 +1416,9 @@ ENDIF
 IF _GRAVITY_WELL
         EQUB    $04                              ; [D] gravity_well (small AABB; non-collidable)
 ENDIF
+IF _BOBBING_MINES
+        EQUB    $04                              ; [E] bobbing_mine
+ENDIF
 
 .obj_type_height
         EQUB    $08,$08,$08,$08,$0A,$08,$0A,$08,$08
@@ -1420,6 +1427,9 @@ IF _TIMED_LASER
 ENDIF
 IF _GRAVITY_WELL
         EQUB    $04                              ; [D] gravity_well
+ENDIF
+IF _BOBBING_MINES
+        EQUB    $08                              ; [E] bobbing_mine
 ENDIF
 
 .obj_type_explosion_particle
@@ -1431,6 +1441,9 @@ ENDIF
 IF _GRAVITY_WELL
         EQUB    $00                              ; [D] gravity_well (not destructible)
 ENDIF
+IF _BOBBING_MINES
+        EQUB    $02                              ; [E] bobbing_mine (destructible by bullets)
+ENDIF
 
 .obj_type_score_value                            ; only guns and fuel can be destroyed
         EQUB    $75,$75,$75,$75,$15
@@ -1440,6 +1453,9 @@ IF _TIMED_LASER
 ENDIF
 IF _GRAVITY_WELL
         EQUB    $00                              ; [D] gravity_well
+ENDIF
+IF _BOBBING_MINES
+        EQUB    $50                              ; [E] bobbing_mine
 ENDIF
 
 \ ******************************************************************************
@@ -1625,6 +1641,17 @@ IF _GRAVITY_WELL
         BNE     not_gravity_well
         JMP     next_object
     .not_gravity_well
+ENDIF
+IF _BOBBING_MINES
+        \\ Mines: animate Y by writing the new displayed position into
+        \\ level_obj_pos_Y / _EXT before object_visibility_test loads it.
+        \\ obj_data slot 2 carries the previous frame's signed offset so
+        \\ each frame can apply (new_offset - prev_offset) as a delta.
+        LDY     object_type
+        CPY     #OBJECT_bobbing_mine
+        BNE     not_bobbing_mine
+        JSR     update_bobbing_mine
+    .not_bobbing_mine
 ENDIF
         PHA
         AND     #$1C
@@ -1875,6 +1902,10 @@ IF _TIMED_LASER
         CMP     #(OBJECT_laser_turret_down_left+1)  ; $0D
         BCC     destroy_object                      ; $09..$0C: laser turret → destroy
     .check_pod_stand
+ENDIF
+IF _BOBBING_MINES
+        CMP     #OBJECT_bobbing_mine                ; $0E
+        BEQ     destroy_object                      ; mine is destructible by bullets
 ENDIF
         CMP     #OBJECT_pod_stand
         BCS     try_next_bullet                     ; pod_stand and above are inert
@@ -2171,6 +2202,9 @@ IF _TIMED_LASER
 ENDIF
 IF _GRAVITY_WELL
         EQUB    $44                              ; [D] gravity_well (no sprite yet; cull width borrowed from guns)
+ENDIF
+IF _BOBBING_MINES
+        EQUB    $44                              ; [E] bobbing_mine
 ENDIF
 
 \ ******************************************************************************
@@ -7062,6 +7096,44 @@ IF _Y_BANDS
         LDA     level_band_gravity_lookup_HI,X
         STA     band_load_gravity_addr_HI                 ; **MODIFIES CODE**
 ENDIF
+IF _BOBBING_MINES
+        LDA     level_obj_data_0_lookup_LO,X
+        STA     bm_phase_addr_LO                          ; **MODIFIES CODE** (slot 0 = phase)
+        LDA     level_obj_data_0_lookup_HI,X
+        STA     bm_phase_addr_HI                          ; **MODIFIES CODE**
+
+        LDA     level_obj_data_1_lookup_LO,X
+        STA     bm_amp_addr_LO                            ; **MODIFIES CODE** (slot 1 = amp)
+        LDA     level_obj_data_1_lookup_HI,X
+        STA     bm_amp_addr_HI                            ; **MODIFIES CODE**
+
+        LDA     level_obj_data_2_lookup_LO,X
+        STA     bm_prev_addr_LO                           ; **MODIFIES CODE** (slot 2 = prev offset)
+        LDA     level_obj_data_2_lookup_HI,X
+        STA     bm_prev_addr_HI                           ; **MODIFIES CODE**
+        LDA     level_obj_data_2_lookup_LO,X
+        STA     bm_prev_store_addr_LO                     ; **MODIFIES CODE**
+        LDA     level_obj_data_2_lookup_HI,X
+        STA     bm_prev_store_addr_HI                     ; **MODIFIES CODE**
+
+        LDA     level_obj_pos_Y_lookup_LO,X
+        STA     bm_pos_y_load_addr_LO                     ; **MODIFIES CODE**
+        LDA     level_obj_pos_Y_lookup_HI,X
+        STA     bm_pos_y_load_addr_HI                     ; **MODIFIES CODE**
+        LDA     level_obj_pos_Y_lookup_LO,X
+        STA     bm_pos_y_store_addr_LO                    ; **MODIFIES CODE**
+        LDA     level_obj_pos_Y_lookup_HI,X
+        STA     bm_pos_y_store_addr_HI                    ; **MODIFIES CODE**
+
+        LDA     level_obj_pos_Y_EXT_lookup_LO,X
+        STA     bm_pos_y_ext_load_addr_LO                 ; **MODIFIES CODE**
+        LDA     level_obj_pos_Y_EXT_lookup_HI,X
+        STA     bm_pos_y_ext_load_addr_HI                 ; **MODIFIES CODE**
+        LDA     level_obj_pos_Y_EXT_lookup_LO,X
+        STA     bm_pos_y_ext_store_addr_LO                ; **MODIFIES CODE**
+        LDA     level_obj_pos_Y_EXT_lookup_HI,X
+        STA     bm_pos_y_ext_store_addr_HI                ; **MODIFIES CODE**
+ENDIF
 
         TXA
         ROR     A                                        ; level_number /= 2
@@ -11363,6 +11435,147 @@ IF _Y_BANDS
         BNE     update_band_scan_loop
 .update_band_done
         RTS
+ENDIF
+
+IF _BOBBING_MINES
+\ ******************************************************************************
+\ * Bobbing mines
+\ *
+\ * Mine Y position bobs along a sine curve with per-instance phase and
+\ * amplitude. obj_data slots:
+\ *   slot 0 = phase byte (added to vsync_count, masked to ANGLE_MASK)
+\ *   slot 1 = signed amplitude byte (peak-to-peak ≈ 2*amp pixels)
+\ *   slot 2 = previous frame's signed offset (state; starts at 0)
+\ *
+\ * level_obj_pos_Y / _EXT track the live displayed Y. Each frame the routine
+\ * computes new_offset = (sin(phase + vsync_count) * amp) >> 7, applies
+\ * (new_offset - prev_offset) as a 16-bit signed delta to the live Y, and
+\ * writes new_offset back to slot 2.
+\ ******************************************************************************
+
+.bobbing_mine_sin_table
+        \\ signed Q.7 sin(2*pi*angle/256) for angle 0..255. -128 ($80) is
+        \\ clamped to -127 ($81) at the trough so multiply_signed_8x8 stays
+        \\ well-defined (its negate path can't represent +128).
+        EQUB $00,$03,$06,$09,$0C,$10,$13,$16
+        EQUB $19,$1C,$1F,$22,$25,$28,$2B,$2E
+        EQUB $31,$33,$36,$39,$3C,$3F,$41,$44
+        EQUB $47,$49,$4C,$4E,$51,$53,$55,$58
+        EQUB $5A,$5C,$5E,$60,$62,$64,$66,$68
+        EQUB $6A,$6B,$6D,$6F,$70,$71,$73,$74
+        EQUB $75,$76,$78,$79,$7A,$7A,$7B,$7C
+        EQUB $7D,$7D,$7E,$7E,$7E,$7F,$7F,$7F
+        EQUB $7F,$7F,$7F,$7F,$7E,$7E,$7E,$7D
+        EQUB $7D,$7C,$7B,$7A,$7A,$79,$78,$76
+        EQUB $75,$74,$73,$71,$70,$6F,$6D,$6B
+        EQUB $6A,$68,$66,$64,$62,$60,$5E,$5C
+        EQUB $5A,$58,$55,$53,$51,$4E,$4C,$49
+        EQUB $47,$44,$41,$3F,$3C,$39,$36,$33
+        EQUB $31,$2E,$2B,$28,$25,$22,$1F,$1C
+        EQUB $19,$16,$13,$10,$0C,$09,$06,$03
+        EQUB $00,$FD,$FA,$F7,$F4,$F0,$ED,$EA
+        EQUB $E7,$E4,$E1,$DE,$DB,$D8,$D5,$D2
+        EQUB $CF,$CD,$CA,$C7,$C4,$C1,$BF,$BC
+        EQUB $B9,$B7,$B4,$B2,$AF,$AD,$AB,$A8
+        EQUB $A6,$A4,$A2,$A0,$9E,$9C,$9A,$98
+        EQUB $96,$95,$93,$91,$90,$8F,$8D,$8C
+        EQUB $8B,$8A,$88,$87,$86,$86,$85,$84
+        EQUB $83,$83,$82,$82,$82,$81,$81,$81
+        EQUB $81,$81,$81,$81,$82,$82,$82,$83
+        EQUB $83,$84,$85,$86,$86,$87,$88,$8A
+        EQUB $8B,$8C,$8D,$8F,$90,$91,$93,$95
+        EQUB $96,$98,$9A,$9C,$9E,$A0,$A2,$A4
+        EQUB $A6,$A8,$AB,$AD,$AF,$B2,$B4,$B7
+        EQUB $B9,$BC,$BF,$C1,$C4,$C7,$CA,$CD
+        EQUB $CF,$D2,$D5,$D8,$DB,$DE,$E1,$E4
+        EQUB $E7,$EA,$ED,$F0,$F4,$F7,$FA,$FD
+
+.bobbing_mine_save_x        EQUB $00
+.bobbing_mine_new_offset    EQUB $00
+.bobbing_mine_delta_hi      EQUB $00
+
+.update_bobbing_mine
+\\ {
+        STX     bobbing_mine_save_x
+
+        \\ amp byte (slot 1) -> multiply_operand_a (signed)
+.bm_load_amp
+        LDA     level_0_obj_data_1,X                    ; **SELF-MODIFIED CODE** (slot 1 = amp)
+        bm_amp_addr_LO = bm_load_amp+1
+        bm_amp_addr_HI = bm_load_amp+2
+        STA     multiply_operand_a
+
+        \\ angle index = (phase + level_tick_counter) AND $FF. The 256-entry
+        \\ sin table gives smooth motion with one cycle every 256 frames and
+        \\ full 256-step phase resolution. level_tick_counter (rather than
+        \\ vsync_count) only advances during the main tick loop, so the mine
+        \\ doesn't drift through phase during the player teleport animation
+        \\ between level start and the first tick.
+.bm_load_phase
+        LDA     level_0_obj_data_0,X                    ; **SELF-MODIFIED CODE** (slot 0 = phase)
+        bm_phase_addr_LO = bm_load_phase+1
+        bm_phase_addr_HI = bm_load_phase+2
+        CLC
+        ADC     level_tick_counter
+        TAY
+        LDA     bobbing_mine_sin_table,Y                ; A = signed Q.7 sin
+        JSR     multiply_signed_8x8
+
+        \\ Double the 16-bit product, then take high byte ≈ amp * sin
+        ASL     multiply_result_lo
+        ROL     multiply_result_hi
+        LDA     multiply_result_hi                      ; A = signed pixel offset
+        STA     bobbing_mine_new_offset
+
+        LDX     bobbing_mine_save_x
+
+        \\ delta = new_offset - prev_offset (slot 2)
+        SEC
+.bm_load_prev
+        SBC     level_0_obj_data_2,X                    ; **SELF-MODIFIED CODE** (slot 2 = prev offset)
+        bm_prev_addr_LO = bm_load_prev+1
+        bm_prev_addr_HI = bm_load_prev+2
+        TAY                                             ; Y = signed delta_lo
+
+        \\ Sign-extend Y to delta_hi
+        LDA     #$00
+        CPY     #$80
+        BCC     bm_delta_sign_done
+        LDA     #$FF
+.bm_delta_sign_done
+        STA     bobbing_mine_delta_hi
+
+        \\ level_obj_pos_Y / _EXT += delta (16-bit signed add)
+        TYA
+        CLC
+.bm_pos_y_load
+        ADC     level_0_obj_pos_Y,X                     ; **SELF-MODIFIED CODE**
+        bm_pos_y_load_addr_LO = bm_pos_y_load+1
+        bm_pos_y_load_addr_HI = bm_pos_y_load+2
+.bm_pos_y_store
+        STA     level_0_obj_pos_Y,X                     ; **SELF-MODIFIED CODE**
+        bm_pos_y_store_addr_LO = bm_pos_y_store+1
+        bm_pos_y_store_addr_HI = bm_pos_y_store+2
+
+        LDA     bobbing_mine_delta_hi
+.bm_pos_y_ext_load
+        ADC     level_0_obj_pos_Y_EXT,X                 ; **SELF-MODIFIED CODE**
+        bm_pos_y_ext_load_addr_LO = bm_pos_y_ext_load+1
+        bm_pos_y_ext_load_addr_HI = bm_pos_y_ext_load+2
+.bm_pos_y_ext_store
+        STA     level_0_obj_pos_Y_EXT,X                 ; **SELF-MODIFIED CODE**
+        bm_pos_y_ext_store_addr_LO = bm_pos_y_ext_store+1
+        bm_pos_y_ext_store_addr_HI = bm_pos_y_ext_store+2
+
+        \\ slot 2 := new_offset
+        LDA     bobbing_mine_new_offset
+.bm_prev_store
+        STA     level_0_obj_data_2,X                    ; **SELF-MODIFIED CODE**
+        bm_prev_store_addr_LO = bm_prev_store+1
+        bm_prev_store_addr_HI = bm_prev_store+2
+
+        RTS
+\\ }
 ENDIF
 
 IF PARTICLE_table_max<>$1F
