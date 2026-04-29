@@ -1769,6 +1769,56 @@ ENDIF
 
 \ --- 6. Planet-explode trigger: fires when countdown hits zero for any non-pod object ---
     .check_planet_explode_trigger
+IF _BOBBING_MINES
+\ Mine ship-contact: if the ship is inside the mine's bounding box, destroy
+\ both the mine and the ship. We force the ship's destruction by setting
+\ plot_ship_collision_detected here rather than relying on the per-frame
+\ pixel collision (which the bounding-box overlap can outpace by a frame).
+\ Sits in front of the planet-explode trigger so every visible mine gets
+\ the test (the trigger's BNE/BEQ paths skip everything below).
+        LDA     object_type
+        CMP     #OBJECT_bobbing_mine
+        BNE     not_mine_ship_contact
+
+        SEC                                          ; 16-bit dy = mine_y - player_y
+        LDA     current_obj_ypos_INT
+        SBC     player_ypos_INT
+        TAY                                          ; Y = dy_lo (signed)
+        LDA     current_obj_ypos_EXT
+        SBC     player_ypos_INT_HI
+        BMI     mine_dy_neg
+        BNE     not_mine_ship_contact                ; dy_hi > 0: too far below
+        CPY     #$09                                 ; |dy| < 9
+        BCS     not_mine_ship_contact
+        JMP     mine_test_dx
+    .mine_dy_neg
+        CMP     #$FF
+        BNE     not_mine_ship_contact                ; dy_hi < -1: too far above
+        TYA
+        EOR     #$FF
+        CLC
+        ADC     #$01                                 ; A = |dy_lo|
+        CMP     #$09
+        BCS     not_mine_ship_contact
+
+    .mine_test_dx
+        SEC                                          ; 8-bit dx = mine_x - player_x
+        LDA     current_obj_xpos_INT
+        SBC     player_xpos_INT
+        BPL     mine_dx_pos
+        EOR     #$FF
+        CLC
+        ADC     #$01                                 ; A = |dx|
+    .mine_dx_pos
+        CMP     #$08                                 ; |dx| < 8
+        BCS     not_mine_ship_contact
+
+        \\ Geometric overlap → kill the ship and explode the mine.
+        LDA     #$FF
+        STA     plot_ship_collision_detected
+        JMP     destroy_object
+    .not_mine_ship_contact
+ENDIF
         LDA     object_type
         CMP     #OBJECT_pod_stand
         BEQ     bullet_test_object                  ; pod_stand is inert to the trigger
