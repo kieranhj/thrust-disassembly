@@ -1128,14 +1128,31 @@ class UndoManager:
         self.redo_stack = []
         self.max_size = max_size
 
-    def save(self, level):
-        """Save a snapshot before making changes."""
-        snapshot = (
+    @staticmethod
+    def _snapshot(level):
+        return (
             list(level.left_wall),
             list(level.right_wall),
             copy.deepcopy(level.objects),
+            copy.deepcopy(level.checkpoints),
+            copy.deepcopy(level.bands),
+            level.gravity,
+            level.no_wrap_y,
+            level.landscape_colour,
+            level.object_colour,
         )
-        self.stack.append((level.level_num, snapshot))
+
+    @staticmethod
+    def _restore(level, snap):
+        (level.left_wall, level.right_wall, level.objects,
+         level.checkpoints, level.bands, level.gravity,
+         level.no_wrap_y, level.landscape_colour,
+         level.object_colour) = snap
+        level.dirty = True
+
+    def save(self, level):
+        """Save a snapshot before making changes."""
+        self.stack.append((level.level_num, self._snapshot(level)))
         if len(self.stack) > self.max_size:
             self.stack.pop(0)
         self.redo_stack.clear()
@@ -1144,28 +1161,19 @@ class UndoManager:
         """Restore the most recent snapshot."""
         if not self.stack:
             return False
-        lvn, (left, right, objs) = self.stack.pop()
+        lvn, snap = self.stack.pop()
         lv = levels[lvn]
-        # Save current state for redo
-        self.redo_stack.append((lvn, (list(lv.left_wall), list(lv.right_wall),
-                                      copy.deepcopy(lv.objects))))
-        lv.left_wall = left
-        lv.right_wall = right
-        lv.objects = objs
-        lv.dirty = True
+        self.redo_stack.append((lvn, self._snapshot(lv)))
+        self._restore(lv, snap)
         return True
 
     def redo(self, levels):
         if not self.redo_stack:
             return False
-        lvn, (left, right, objs) = self.redo_stack.pop()
+        lvn, snap = self.redo_stack.pop()
         lv = levels[lvn]
-        self.stack.append((lvn, (list(lv.left_wall), list(lv.right_wall),
-                                  copy.deepcopy(lv.objects))))
-        lv.left_wall = left
-        lv.right_wall = right
-        lv.objects = objs
-        lv.dirty = True
+        self.stack.append((lvn, self._snapshot(lv)))
+        self._restore(lv, snap)
         return True
 
 
