@@ -35,6 +35,7 @@ Open work items, one line each. Full details in the sections below; completed wo
 - [Custom directional line drawing routine](#custom-directional-line-drawing-routine) — walk-until-hit; renderer + collision query in one
 - [Configurable switches and triggers](#configurable-switches-and-triggers) — per-level wiring tables and editor UX for shoot-to-toggle puzzles
 - [Hostile bullets activate switches](#hostile-bullets-activate-switches) — let stray turret fire trigger switches to enable ricochet / self-defeat puzzles
+- [Editor UI overhaul](plan-editor-ui-overhaul.md) — right-pane parameter inspector + sprite palette grid, replacing the overloaded status bar and right-click placement menu
 
 ### Ship upgrades
 - [Upgrade system](#ship-upgrades) — nine candidate upgrades feeding the Metroidvania reward loop
