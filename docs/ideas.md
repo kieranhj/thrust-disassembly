@@ -16,7 +16,6 @@ Open work items, one line each. Full details in the sections below; completed wo
 - [Rotating gun emplacements](#rotating-gun-emplacements) — per-frame angle sweep, fires when aim crosses player
 - [Hot areas](#hot-areas) — heat accumulation degrades flight; offset by a heatsink upgrade
 - [Water as a general element](#water-as-a-general-element) — submerged regions with modified physics
-- [Teleporter pads](#teleporter-pads) — paired source/destination pads that warp the player elsewhere on the map
 
 ### Gravity wells — open follow-ups
 - [Well sprite](#gravity-well-follow-ups) — replace the type $0D early-exit with a real non-lethal sprite
@@ -43,6 +42,7 @@ Open work items, one line each. Full details in the sections below; completed wo
 - [More than 6 levels / level packs](#more-than-6-levels--level-packs) — bake more or stream from disc per gravity cycle
 - [Multiple / split landscape paths](#multiple--split-paths) — replace the two-wall corridor model
 - [Standalone landscape segments](#standalone-landscape-segments) — floating islands / isolated obstacles
+- [Disconnected caverns](#disconnected-caverns) — sealed sub-levels reachable only via teleporter pads
 
 ### Mission types
 - [Land safely / collect-and-deliver / briefings / popups](#new-mission-types) — table of new mission requirements
@@ -131,25 +131,6 @@ Distinct from the flooding-mine scenario below: water as a static (or slowly-ani
 - **Bubbles released by thrust** when submerged, using the existing particle pool
 
 **Implementation notes:** rendering-wise, the timer-based palette switch described in the flooding-mine section works for a static water line too. Physics changes would branch on `ship_ypos > water_line_y` to swap in alternate gravity/damping constants.
-
-### Teleporter pads
-
-A placeable object that warps the player to a destination point elsewhere on the map. Reuses the existing teleport-in / teleport-out effect already played at level start / on player death, but without resetting any level state — the level keeps running, objects stay where they are, only `ship_xpos` / `ship_ypos` / `window_xpos` / `window_ypos` get re-pointed at the destination.
-
-Useful as a level-design tool: shortcuts back to base after a deep descent, one-way drops into a sealed chamber, paired entry/exit doors for Metroidvania-style fast travel between regions of one big map.
-
-**Implementation notes:**
-- New object type. Per-instance destination stored in obj_data slots: slot 0 = destination X (chars), slots 1/2 = destination Y (16-bit pixels). Slot layout matches how lasers / mines already split a 16-bit value across two slots.
-- Trigger: ship-vs-pad AABB test in the same place as the bobbing-mine ship-contact check (`check_planet_explode_trigger`). On overlap, kick off the teleport-out animation, then on completion stamp the destination into `ship_xpos_INT` / `ship_ypos_INT(_HI)` and the window position, and play the teleport-in animation. The existing animation already handles the in/out cleanly at level start; the work is letting it fire mid-level without resetting object state or re-running `initialise_level_pointers`.
-- During the animation the player is non-interactive (matches existing teleport behaviour) — physics paused, input ignored, gravity not integrated. Cheap because it reuses the level-start teleport state machine wholesale.
-- Cooldown / one-shot: probably want a "just teleported" flag that disables re-trigger until the ship leaves the destination pad's AABB, so the player doesn't immediately re-trigger if a return pad sits at the destination.
-- Editor: place pad with type key as usual; selected-pad mode shows a thin coloured line from pad to its destination point (same UX shape as the proposed switch wiring lines). Drag the destination handle to retarget. Pairs of pads (mutual return) are just two pads each pointing at the other.
-- Pod handling: simplest first cut is "pad refuses to fire while tethered or carrying the pod" — avoids having to teleport the pod with the ship and re-establish the tether on the far side. Could be relaxed later.
-
-**Possible variants** (not v1):
-- One-way vs two-way pads (pure data — just whether a return pad exists).
-- Conditional pads gated by a switch state from the [switch system](#configurable-switches-and-triggers).
-- Random destination from a list, for chaotic levels.
 
 ---
 
@@ -346,6 +327,46 @@ Floating islands, pillars, or isolated walls cannot be represented in the curren
 - Each obstacle defined as a rectangular or polygon region
 - Collision detection against obstacle bounds in addition to wall checks at lines 5871-5874
 
+### Disconnected caverns
+
+Use the existing two-wall RLE plus the [teleporter](#completed) system to fake a network of separate cave systems inside one level. A run of rows where `left_wall == right_wall` (zero-width corridor) reads in-game as a solid rock band — the player can't fly through it. After that band the walls re-open into a fresh chamber that is unreachable by flight but can be entered by stepping on a teleporter pad whose destination checkpoint sits inside the new chamber.
+
+Combined with [Y-banded level parameters](#completed), each chamber can have its own gravity sign, palette, etc., so the chambers feel like distinct sub-levels rather than just disconnected rooms with the same physics. Layout becomes a hub-and-spokes topology:
+
+- **Surface / hub band:** flyable terrain with one or more outbound teleporters.
+- **Solid divider:** a band of rows with `left == right` walls — visually a continuous rock layer.
+- **Sub-cavern:** new walls open out, gravity may invert via a Y-band override, with its own pickups / objects / return teleporter.
+- **Repeat:** stack multiple dividers for a multi-room level.
+
+**Why this is a cheap way to expand worlds:**
+- No engine work needed beyond what's already shipped (RLE, teleporters, Y-bands all exist).
+- A level's vertical RLE budget already supports many thousands of rows; a divider band costs only a couple of RLE segments per wall.
+- Object count is the more likely budget pressure — each cavern needs its own pads, switches, hazards. Watch the level's object cap.
+
+**Editor support to add:**
+- Visualise teleporter destinations more clearly when navigating between caverns (the wiring line is already there but needs to handle off-screen targets gracefully — pan-to-destination on `Enter` while a pad is selected is in the [teleporter plan](plan-teleporter.md)).
+- Optional "go to next cavern" navigation in the editor: sort caverns by Y, shortcut keys to jump the camera between them.
+- Validation: warn if a cavern has no outbound teleporter (player would be trapped) or no inbound teleporter (cavern would be unreachable).
+
+**Composes well with:**
+- [Metroidvania structure](#metroidvania-structure) — gated upgrades unlock teleporters into new caverns.
+- [Configurable switches and triggers](#configurable-switches-and-triggers) — switches in cavern A enable a teleporter in cavern B, sequencing exploration.
+- [Keys and doors](#keys-and-doors) — teleporters that need a key to activate, found in another cavern.
+
+**Status of the underlying primitives:**
+
+The editor now supports rock bands as a level-design primitive — `_clamp_converging_walls` preserves any contiguous run of rows where the painted walls touch (`left == right == X`), pins them to a single midpoint X (zero delta across the band), and continues encoding past the band into the next open cavern. Encoding stops one row past the last open row so the decoder's `$FF, $00` terminator freezes the walls on a closed-bottom row, not mid-cavern. Round-trip verified: open / band / open / closed bottom decodes byte-identically; existing 6-level export is unchanged.
+
+Band detection is **sticky**: once a row enters a band (painted `gap <= 1`), subsequent rows whose painted gap is also `<= 1` get snapped to the band's entry X regardless of any drift in the painted X. This matters because the line tool paints each wall independently, so a hand-painted band where the user dragged the two walls down in parallel can easily end up with each row converged at a slightly different X. Without the snap, the engine would render that as wall-edge wobble inside what should be solid rock; with it, the band exports as a clean zero-delta strip. The band ends at the first row where the painted gap re-opens (`gap > 1`).
+
+Caveats and follow-ups:
+
+1. **Seg1 constraint (engine, unchanged).** The engine's RLE decoder uses a hardcoded 255-step initial counter on segment 1, so the first 255 rows of each wall must follow a single linear delta. Rock bands placed within those rows would require seg1 to carry a non-uniform run — not representable. Practically: divider bands must sit below row 255. Listed already in [Engine constraints](#first-255-terrain-rows-are-fixed); flagged here too.
+
+2. **Transition rows (engine, to verify in play).** Rows where walls snap from open → `left==right` → open are the highest-risk for EOR artifacts. The clamp prevents one wall from crossing the other's previous position so the math should be safe, but if a transition row glitches the cheapest mitigation is for the level designer to converge over a couple of rows rather than snap.
+
+3. **Editor visualisation (already works).** The wall renderer already paints rows where `right - left <= 1` between the first and last open rows as a solid rock strip, so bands are visible while painting.
+
 ---
 
 ## New mission types
@@ -481,6 +502,7 @@ Implemented features and finished investigations, newest first. Each entry links
 
 ### Features
 
+- **Teleporter pads** (`_TELEPORTER`, SWRAM build, type `$10`). One-way warp pads that send the ship to an existing level checkpoint. Per-instance destination index in obj_data slot 0; debris emitted each gravity tick via `well_emit_debris_particle` in repulsor mode for a visible field. AABB ship-contact test in `update_and_draw_all_objects` (|dx| < 5 chars, |dy| < 8 px, with `TELEPORTER_CENTRE_X/Y_OFFSET` to align the trigger zone with the visible particle ring) sets a deferred `teleporter_pending_index`; `teleporter_dispatch_pending` runs at end-of-frame and re-uses the level-restart path (pre-nudges `midpoint_ypos` so the matching loop in `level_reset` lands on checkpoint K, forces `level_reset_with_pod_flag = 0`, plays the teleport-out animation + `enter_orbit_sound`, resets the stack, and `JMP level_retry`). Guarded by `teleporter_just_warped` / `teleporter_overlap_this_frame` flags so the sound and warp don't re-trigger while the ship is still inside the AABB. Pad refuses to fire while pod is tethered. Editor: type-`$10` placement, `[`/`]` cycle through the level's checkpoints as destination, status bar shows `dest=#N/M -> (x, y)`, render is a cyan ring with a wiring line + arrowhead to the destination checkpoint. Placeholder 12×8 hollow-rectangle sprite registered (sprite is suppressed in-game so it can't collide with the ship). Plan in [`docs/plan-teleporter.md`](plan-teleporter.md).
 - **Bobbing mines** (`_BOBBING_MINES`, SWRAM build, types `$0E` vertical and `$0F` horizontal). Passive sine-wave hazards: each mine carries `phase` (slot 0) and signed `amplitude` (slot 1) and bobs along its axis with one cycle per 256 frames (~4s). 256-entry signed Q.7 sin table indexed by `(phase + level_tick_counter) & $FF`. `update_bobbing_mine[_horizontal]` runs once per frame per mine in `update_and_draw_all_objects`, applying `(new_offset − slot_2)` as a delta to `level_obj_pos_Y` (16-bit) or `level_obj_pos_X` (8-bit, wraps). Using `level_tick_counter` (rather than `vsync_count`) means the mine doesn't drift through phase during the player teleport-in animation between level start and the first tick. Bullet contact destroys mines via the existing `check_generic_destructible` → `destroy_object` path. Ship contact uses an AABB test in `check_planet_explode_trigger` (sized to the sum of mine + ship widths, X in chars / Y in pixels) that jumps to `destroy_object` and forces `plot_ship_collision_detected = $FF` so the player and mine pop together. Real 12×12 spike-ball sprite via `sprite_codec.py` / `sprite_editor.py`; gravity-well placeholder (1×4) added too so the sprite tables stay aligned. Editor: new types in the object menu, mine renders via the standard sprite-cache path, amplitude indicator drawn as a vertical or horizontal bar; `[`/`]` adjust amp ±1 (shift = ±10), `,`/`.` adjust phase ±1 (shift = ±8). **Note:** ship-contact AABB thresholds (`|dx| < 5` chars, `|dy| < 11` px) are tuned by feel against the current mine sprite and ship sprite — revisit if either sprite changes size or if play feels too forgiving / unforgiving.
 - **Y-banded level parameters — gravity** (`_Y_BANDS`, SWRAM build). Per-level sorted list of Y thresholds, each carrying a `gravity_FRAC` byte. `update_active_band` runs once per frame: scans the level's `band_y_HI` / `band_y_LO` arrays (terminated by `$FF` in the high byte), reseeds `gravity_FRAC` / `gravity_SIGN` from the level base, then overrides with the deepest crossed band's value. Band gravity bytes are sign-extended (bit 7 → `gravity_SIGN`) so `$80..$FF` give upward gravity for "hollow earth" mid-sections. Level-base gravity is also sign-extended at level init and on each frame's reseed, so negative base gravity is supported. Respawn passes the spawn-point Y through `update_active_band` before the orientation test, so dying inside a reverse-gravity band respawns the ship with the correct orientation. Editor: new "Band" mode (`B`), draggable horizontal lines spanning full editor width, gravity ±1/±$10 with `[`/`]`/`,`/`.`, signed-decimal display on band labels and toolbar gravity widget; band Y-lines render only in band mode. Other band overrides (palette, colour bytes, X-wrap generalisation, ambient hazard flags, smooth blending) deferred. Non-SWRAM CRC remains anchored at `6389c446`.
 - **Generic per-object extra-data slots** — `level_N_obj_data_0/1/2`, with each object type interpreting the slots itself (slot 0 = gun_aim; slots 1/2 = laser dx/dy or well radius/strength). Laser and well code share the slot 1/2 lookups via separate SMC sites; the two well-specific lookup tables were dropped. SWRAM build shrank by 256 bytes; non-SWRAM CRC remains anchored at `6389c446`. Adding a new object type with config bytes is now a code change only — no new export array, no new SMC patch, no new lookup table.

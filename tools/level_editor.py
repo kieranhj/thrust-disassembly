@@ -461,57 +461,100 @@ def import_beebasm(path):
 
 
 def _clamp_converging_walls(left, right):
-    """Clamp wall arrays for EOR-safe encoding, returning the truncation point.
+    """Clamp wall arrays for EOR-safe encoding, returning the last row to encode.
 
     The game draws terrain using EOR (exclusive-or) delta rendering: each
     frame, only the columns that changed are toggled. Two issues arise when
-    walls converge:
+    walls move:
 
     1. If left[row] jumps past right[row-1] (or vice versa), the EOR draws
        for both walls overlap on some columns. Those columns get toggled
        twice and remain as black gaps instead of solid rock.
 
-    2. Once walls meet (gap=0), any variation in position creates wall edge
-       movement in what should be solid rock, causing further EOR artifacts.
+    2. Inside a "rock band" (a stretch of rows where left == right at a
+       constant X) any wobble in that X creates wall edge movement in what
+       should be solid rock, causing further EOR artifacts.
 
-    Fix: limit each wall's per-row movement so it never crosses the other
-    wall's previous position. Returns the row index where the walls first
-    meet (gap <= 1), or None if they never meet. The caller should only
-    encode positions up to (and including) that row.
+    Rock bands are preserved as a level-design primitive — the cavern can
+    converge to solid rock for N rows then re-open into a disconnected
+    sub-cavern. The encoder emits zero-delta RLE segments through the band,
+    and the renderer paints the row as solid because left==right.
+
+    Band detection is sticky: a row painted with `gap <= 1` (walls touching
+    or crossed) enters a band at the midpoint X. Subsequent rows whose
+    painted gap is also <= 1 get snapped to that same X — so a hand-painted
+    band where each row's X drifts slightly (easy to do with the line tool)
+    still encodes as a clean solid strip, not as alternating pinned / gap=2
+    rows that would render with EOR wobble. The band ends at the first row
+    where the painted gap is > 1 (the cavern re-opens).
+
+    Pass 2 finds the last open row (gap > 1) and returns the row index
+    one past it, so the encoder's terminator freezes the decoder on a
+    closed-bottom row rather than mid-cavern. Returns None for a fully
+    solid level (no open rows at all).
 
     Operates on copies — does not truncate the source arrays.
     """
     min_len = min(len(left), len(right))
+    if min_len == 0:
+        return None
 
-    # Pass 1: prevent EOR overlap by limiting per-row wall movement.
-    # Left can't advance past previous row's right; right can't retreat
-    # past previous row's left.
-    for row in range(1, min_len):
-        if left[row] > right[row - 1]:
-            left[row] = right[row - 1]
-        if right[row] < left[row - 1]:
-            right[row] = left[row - 1]
-        if left[row] > right[row]:
+    # Pass 1: walk rows, switching between "open" and "in band" state.
+    # Sticky band: once we enter a band, painted rows with gap <= 1 stay
+    # pinned to the entry X regardless of any drift in painted X.
+    band_x = None
+    for row in range(min_len):
+        painted_gap = right[row] - left[row]
+
+        if band_x is not None:
+            if painted_gap <= 1:
+                # Still in the band. Snap to band X (ignore painted drift).
+                left[row] = band_x
+                right[row] = band_x
+                continue
+            # Cavern re-opens — exit the band and fall through to open
+            # handling. Previous row was at band_x, so EOR clamps below
+            # use that as the "previous row" reference.
+            band_x = None
+
+        # Open-row processing.
+        if row > 0:
+            # Per-row movement clamp: left can't advance past prev row's
+            # right; right can't retreat past prev row's left.
+            if left[row] > right[row - 1]:
+                left[row] = right[row - 1]
+            if right[row] < left[row - 1]:
+                right[row] = left[row - 1]
+
+        # If walls touched after clamping, enter a rock band at midpoint.
+        if right[row] - left[row] <= 1:
             mid = (left[row] + right[row]) // 2
             left[row] = mid
             right[row] = mid
+            band_x = mid
 
-    # Pass 2: find where walls first meet (gap <= 1). Rows beyond this
-    # point are solid rock and should not be encoded — the encoder's $FF
-    # terminator segment will keep both walls frozen indefinitely.
+    # Pass 2: find the last open row. Encoding through last_open + 1
+    # ensures the terminator freezes the decoder on a closed-bottom row
+    # (or the natural array end), not mid-cavern.
+    last_open = None
     for row in range(min_len):
-        if right[row] - left[row] <= 1:
-            frozen = (left[row] + right[row]) // 2
-            left[row] = frozen
-            right[row] = frozen
-            return row
-    return None
+        if right[row] - left[row] > 1:
+            last_open = row
+
+    if last_open is None:
+        return None
+    return min(last_open + 1, min_len - 1)
 
 
 def _has_wall_issues(left, right):
-    """Check if decoded wall data has wall crossings (left >= right)."""
+    """Check if decoded wall data has wall crossings (left > right).
+
+    `left == right` is allowed — that's a rock-band row, a legitimate
+    level-design primitive (zero-width corridor reads as solid rock).
+    Only strict crossings indicate corruption that warrants re-encoding.
+    """
     for row in range(min(len(left), len(right))):
-        if left[row] >= right[row]:
+        if left[row] > right[row]:
             return True
     return False
 
