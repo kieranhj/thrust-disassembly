@@ -34,6 +34,7 @@ Open work items, one line each. Full details in the sections below; completed wo
 ### Engine / editor
 - [Custom directional line drawing routine](#custom-directional-line-drawing-routine) — walk-until-hit; renderer + collision query in one
 - [Configurable switches and triggers](#configurable-switches-and-triggers) — per-level wiring tables and editor UX for shoot-to-toggle puzzles
+- [Hostile bullets activate switches](#hostile-bullets-activate-switches) — let stray turret fire trigger switches to enable ricochet / self-defeat puzzles
 
 ### Ship upgrades
 - [Upgrade system](#ship-upgrades) — nine candidate upgrades feeding the Metroidvania reward loop
@@ -178,7 +179,7 @@ Generalise the laser draw path: given a start pixel and direction `(dx, dy)`, wa
 
 ## Configurable switches and triggers
 
-A meta-mechanic that lets the level designer wire shoot-the-button switches to changes in other objects (lasers, doors, fields), entirely from the editor. This is the foundation for puzzles: ordering challenges, gated laser grids, "shoot all four switches to unlock the exit" rooms, etc.
+A meta-mechanic that lets the level designer wire shoot-the-button switches to changes in other objects (lasers, doors, fields), entirely from the editor. This is the foundation for puzzles: ordering challenges, gated laser grids, "shoot all four switches to unlock the exit" rooms, etc. Detailed implementation plan in [`docs/plan-switches-and-triggers.md`](plan-switches-and-triggers.md).
 
 ### Current state (level 3/4/5 doors)
 
@@ -244,7 +245,7 @@ Approach 1 alone covers most cases. Approach 2 layered on top opens up puzzle de
 ### Engine implications
 
 - `tick_door_logic` becomes `tick_switch_logic`: walk the wiring table, advance any pulses/cycles, write the resulting bytes into target objects' state. No more `level_number` test. The current per-level door routines collapse into the `pulse_door` action's body — generic door drawing into terrain given a (row, width, screen-Y) tuple.
-- Hostile-bullet collision against switch objects already exists (it's how shooting them is detected). The collision hook just sets the switch's per-instance latch byte instead of the global counter.
+- Bullet collision against switch objects already exists for player bullets (it's how shooting them is detected). The collision hook just sets the switch's per-instance latch byte instead of the global counter. Extending the loop to also consider hostile-bullet particles is a separate idea — see [Hostile bullets activate switches](#hostile-bullets-activate-switches).
 - Per-level wiring table lives alongside the existing object arrays in `tools/output/thrust_levels_export*.asm`, exported by the editor like everything else.
 
 ### Puzzle implications
@@ -255,6 +256,16 @@ Once switches can target anything and the editor exposes wiring, a few puzzle ar
 - **Mutually-exclusive switches.** Two switches each toggle the *same* laser between horizontal and vertical; the player must pick the orientation that matches the path they need. Re-shootable, encouraging trial.
 - **Field flips for routing bullets.** A switch flips a gravity well from pull to push so the player's bullets curve to a hidden target — combines with the "fields act on bullets" idea.
 - **Timed corridors.** A switch sets a laser's duty to a long-off phase; the player has a window to fly through before duty creeps back up via a separate `cycle_laser` somewhere else.
+
+## Hostile bullets activate switches
+
+Today only player bullets can activate door switches. The bullet-vs-object loop at `thrust.6502:1907` walks particle slots `X = 3..0` (the four player-bullet slots only) and bails at `:1911-1912` on any particle whose `particles_type` is non-zero, so hostile-bullet particles (`PARTICLE_type_hostile_bullet = $03`) never reach the `handle_door_switch` latch.
+
+Generalising this so hostile bullets can also trigger switches opens a puzzle archetype that doesn't otherwise exist: turrets that defeat themselves. Place a switch where a turret's bullet trajectory will end up — directly with a deflecting gravity well, indirectly via a ricochet off geometry, or after a routing field flip — and the level becomes solvable by *not* shooting, just by surviving long enough for the turret to hit its own switch. Combines naturally with [field flips for routing bullets](#configurable-switches-and-triggers) and the gravity-well [bullet pull](#gravity-well-follow-ups) follow-up.
+
+**Implementation:** drop the player-only filter at `:1911-1912` (or relax it to also accept type `$03`), and walk all 32 particle slots instead of just the four player-bullet slots so all live hostile bullets are considered. Cost is a wider AABB sweep per shootable object per frame; with the [generalised switches](#configurable-switches-and-triggers) wiring table in place, the per-switch action runs the same code path regardless of which side fired the bullet.
+
+**Risk:** existing levels with player-only puzzles may degenerate if a wandering turret bullet trips a switch the designer assumed was player-gated. Either gate it per-switch (a "accepts hostile fire" flag in the wiring entry) or per-level via a build flag during the transition; the per-switch flag is the more durable answer once wiring tables exist.
 
 ### Migration path
 

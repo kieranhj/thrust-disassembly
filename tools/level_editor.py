@@ -1086,11 +1086,16 @@ class SpriteCache:
         self._cache.clear()      # force re-render at next get()
         return list(new_pixels.keys())
 
-    def get(self, obj_type, level):
-        """Get cached sprite. level is a LevelData instance."""
-        key = (obj_type, level.landscape_colour, level.object_colour)
+    def get(self, obj_type, level, landscape_colour=None, object_colour=None):
+        """Get cached sprite. level is a LevelData instance.
+        landscape_colour / object_colour optionally override the level's
+        defaults (used in band mode to render objects in their band-resolved
+        colours)."""
+        lc = level.landscape_colour if landscape_colour is None else landscape_colour
+        oc = level.object_colour if object_colour is None else object_colour
+        key = (obj_type, lc, oc)
         if key not in self._cache:
-            self._cache[key] = self._render(obj_type, level)
+            self._cache[key] = self._render(obj_type, level, lc, oc)
         return self._cache[key]
 
     def get_ship(self):
@@ -1110,7 +1115,7 @@ class SpriteCache:
         self._cache.clear()
         self._ship_surf = None
 
-    def _render(self, obj_type, level):
+    def _render(self, obj_type, level, landscape_colour=None, object_colour=None):
         pixel_array = self._live_pixels.get(obj_type)
         if pixel_array is None:
             if obj_type not in SPRITE_DATA:
@@ -1120,11 +1125,13 @@ class SpriteCache:
             return None                           # unpainted sprite, skip render
         h, w = pixel_array.shape
 
+        lc = level.landscape_colour if landscape_colour is None else landscape_colour
+        oc = level.object_colour if object_colour is None else object_colour
         palette = {
             0: (0, 0, 0, 0),
             1: (255, 255, 0, 255),
-            2: hex_to_rgb(BBC_COLOURS[level.landscape_colour]) + (255,),
-            3: hex_to_rgb(BBC_COLOURS[level.object_colour]) + (255,),
+            2: hex_to_rgb(BBC_COLOURS[lc]) + (255,),
+            3: hex_to_rgb(BBC_COLOURS[oc]) + (255,),
         }
 
         surf = pygame.Surface((w, h), pygame.SRCALPHA)
@@ -2576,6 +2583,23 @@ class Editor:
 
         pygame.display.flip()
 
+    def _resolve_band_colours(self, world_y):
+        """Walk the level's bands (sorted ascending by y) and return
+        (landscape_colour, object_colour) resolved at world_y. Each band's
+        non-None colour overrides the previous; deepest active band wins.
+        Mirrors the engine's update_active_band scan."""
+        lv = self.level
+        lc = lv.landscape_colour
+        oc = lv.object_colour
+        for b in sorted(lv.bands, key=lambda b: b["y"]):
+            if world_y < b["y"]:
+                break
+            if b.get("landscape_colour") is not None:
+                lc = b["landscape_colour"]
+            if b.get("object_colour") is not None:
+                oc = b["object_colour"]
+        return lc, oc
+
     def _render_terrain(self):
         """Draw the terrain (rock fills + wall edges)."""
         lv = self.level
@@ -2583,8 +2607,11 @@ class Editor:
         screen = self.screen
         sw = screen.get_width()
 
-        landscape_rgb = hex_to_rgb(BBC_COLOURS[lv.landscape_colour])
-        rock_rgb = darken(landscape_rgb)
+        default_landscape_rgb = hex_to_rgb(BBC_COLOURS[lv.landscape_colour])
+        default_rock_rgb = darken(default_landscape_rgb)
+        # In band mode, each row picks its colour from the deepest active band
+        # so the override is visible while authoring.
+        band_mode = self.mode == "band" and bool(lv.bands)
 
         y_min, y_max = cam.visible_y_range()
         y_max = min(y_max, lv.num_rows)
@@ -2614,6 +2641,14 @@ class Editor:
 
             if right_x - left_x <= 1:
                 continue
+
+            if band_mode:
+                lc_row, _ = self._resolve_band_colours(row)
+                landscape_rgb = hex_to_rgb(BBC_COLOURS[lc_row])
+                rock_rgb = darken(landscape_rgb)
+            else:
+                landscape_rgb = default_landscape_rgb
+                rock_rgb = default_rock_rgb
 
             # Left rock: world 0 to left_x
             lsx, _ = cam.world_to_screen(0, row)
@@ -2667,7 +2702,12 @@ class Editor:
                 row_h = max(1, int(sy_next - sy))
                 if sy + row_h < VIEWPORT_Y or sy > VIEWPORT_Y + cam.viewport_h:
                     continue
-                pygame.draw.rect(screen, rock_rgb,
+                if band_mode:
+                    lc_row, _ = self._resolve_band_colours(row)
+                    rr = darken(hex_to_rgb(BBC_COLOURS[lc_row]))
+                else:
+                    rr = default_rock_rgb
+                pygame.draw.rect(screen, rr,
                                  (rock_sx, int(sy), rock_w, max(1, row_h // 2)))
 
             # Sky rows within the cave region that are "all rock"
@@ -2678,7 +2718,12 @@ class Editor:
                     _, sy = cam.world_to_screen(0, row)
                     _, sy_next = cam.world_to_screen(0, row + 1)
                     row_h = max(1, int(sy_next - sy))
-                    pygame.draw.rect(screen, rock_rgb,
+                    if band_mode:
+                        lc_row, _ = self._resolve_band_colours(row)
+                        rr = darken(hex_to_rgb(BBC_COLOURS[lc_row]))
+                    else:
+                        rr = default_rock_rgb
+                    pygame.draw.rect(screen, rr,
                                      (rock_sx, int(sy), rock_w, max(1, row_h // 2)))
 
         # In wall mode, draw wall edge markers for converged rows (gap <= 1)
@@ -2747,6 +2792,7 @@ class Editor:
         lv = self.level
         cam = self.camera
         screen = self.screen
+        band_mode = self.mode == "band" and bool(lv.bands)
 
         clip_rect = pygame.Rect(0, VIEWPORT_Y, screen.get_width(), cam.viewport_h)
         screen.set_clip(clip_rect)
@@ -2758,7 +2804,13 @@ class Editor:
             if obj["type"] == OBJECT_TELEPORTER:
                 self._render_teleporter(obj, i)
                 continue
-            sprite = self.sprite_cache.get(obj["type"], lv)
+            if band_mode:
+                lc_obj, oc_obj = self._resolve_band_colours(obj["y"])
+                sprite = self.sprite_cache.get(obj["type"], lv,
+                                               landscape_colour=lc_obj,
+                                               object_colour=oc_obj)
+            else:
+                sprite = self.sprite_cache.get(obj["type"], lv)
             if sprite is None:
                 continue
 
