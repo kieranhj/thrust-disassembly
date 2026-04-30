@@ -97,10 +97,17 @@ Optional follow-up:
 
 ## 11. Implementation order
 
-1. Add `_LAST_USED_CHECKPOINT` flag, `active_checkpoint_index` ZP byte, init to $FF on level start. No behavioural change yet.
-2. Add the per-frame checkpoint-advance scan (§5), with debug print or temp screen-edge dump to verify it's tracking the right index in play.
-3. Replace `level_reset_loop` with the active-index lookup (§6), keeping the height-based scan as fallback when index = $FF. End of fallback path writes back to the index. Test: dying in a normal level should respawn at the same checkpoint as before (height-based path runs, then caches).
-4. Add the pod pickup snap (§7) — verify the pod-carry anti-cheat still holds.
-5. Wire the teleporter warp to write `active_checkpoint_index` directly (§4) and drop the midpoint nudge.
-6. Build a test level with a divider band and a sub-cavern containing one checkpoint; verify dying inside the sub-cavern respawns inside it, and dying in the hub respawns in the hub.
-7. Document in `ideas.md` "Completed" once shipped; cross off the disconnected-caverns respawn follow-up.
+1. ✅ Add `_LAST_USED_CHECKPOINT` flag, ZP bytes at `$00AA` (`active_checkpoint_index`) and `$00AB` (`deepest_checkpoint_visited`), both outside the ZP-clear range so they persist across deaths. Init both to `$00` on level start in `initialise_level_pointers`.
+2. ✅ `update_active_checkpoint` — bidirectional per-frame scan. Direction-agnostic: retreat while `player_y < cp[active-1].y`, advance while `player_y > cp[active+1].y`. Each advance bumps `deepest_checkpoint_visited` if it grows past it. Called after `update_active_band` in the tick loop.
+3. ✅ Replace `level_reset_loop` with `LDY active_checkpoint_index; JMP active_checkpoint_loaded` — historical height-based scan and pod-flag direction flip bypassed under the build flag.
+4. ✅ Respawn-with-pod rule at `active_checkpoint_loaded`: phase 1 maybe bumps Y to `min(active+1, deepest)` if `cp[active].y < death_y`; phase 2 drops the pod whenever the final Y equals `deepest_checkpoint_visited`. Mirrors the original game's "respawn at the bottom drops the pod" semantic, applied to the segment-local watermark instead of `cp[size-1]`.
+5. ✅ Teleporter warp writes both `active_checkpoint_index` and `deepest_checkpoint_visited` to the destination index — player has only just arrived in the sub-cavern, so the watermark resets so the bump can never reference a checkpoint they haven't been to.
+6. ✅ Tested in-game: dying in normal play, with pod, near deepest cp, and after teleport all behave as designed.
+
+Final design notes (differs from earlier drafts):
+
+- **No pod-pickup snap.** Bidirectional tracking + respawn-time logic handles all the pod-carry anti-cheat correctly without needing to mutate `active` at the moment of pickup.
+- **Watermark, not bump-without-cap.** An earlier draft just bumped to `active+1` unconditionally; that breaks across teleporters because `cp[active+1]` could sit in a cavern the player has never visited. The watermark cap (`deepest_visited`, reset on teleport) means the bump can never overshoot the player's actual exploration.
+- **Drop applies in both phase-1 paths.** Whether or not the bump fired, if the final respawn `Y` equals `deepest_visited`, the pod drops. Keeps the rule symmetric and matches the original game's "bottom of progress = lose pod" feel.
+
+Build status: SWRAM CRC `3b377812`. Non-SWRAM canonical CRC `6389c446` preserved (feature fully gated by `_LAST_USED_CHECKPOINT = (_SWRAM_BUILD AND TRUE)`).

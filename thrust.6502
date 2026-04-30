@@ -41,6 +41,7 @@ _GRAVITY_WELL        = (_SWRAM_BUILD AND TRUE)    ; Gravity well object ($0D)
 _Y_BANDS             = (_SWRAM_BUILD AND TRUE)    ; Y-banded per-level parameter overrides (gravity)
 _BOBBING_MINES       = (_SWRAM_BUILD AND TRUE)    ; Bobbing mine hazard object ($0E)
 _TELEPORTER          = (_SWRAM_BUILD AND TRUE)    ; One-way teleporter pad object ($10)
+_LAST_USED_CHECKPOINT = (_SWRAM_BUILD AND TRUE)   ; Track active checkpoint across deaths
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -496,6 +497,10 @@ gravity_FRAC                        = $00A7     ; " (fractional part)
 IF _NO_WRAP_UNDERGROUND
 no_wrap_y_INT                       = $00A8     ; Y threshold below which X wrap is disabled
 no_wrap_y_INT_HI                    = $00A9     ; " high byte
+ENDIF
+IF _LAST_USED_CHECKPOINT
+active_checkpoint_index             = $00AA     ; index into current level's checkpoint table; preserved across deaths, reset on level start
+deepest_checkpoint_visited          = $00AB     ; high-watermark of active checkpoint within the current segment; reset on teleport
 ENDIF
 
 \ ******************************************************************************
@@ -6888,9 +6893,19 @@ ENDIF
         STA     level_reset_size
 
 \\ Think this code is matching current ship (x,y) position against respawn positions & screen offset:
-        
+
         LDY     #$00
-        
+
+IF _LAST_USED_CHECKPOINT
+        \\ Active-checkpoint model: respawn at the index tracked across deaths
+        \\ by update_active_checkpoint (per-frame advance scan, teleporter
+        \\ writes, pod-pickup snap). The historical height-based scan and the
+        \\ pod-flag direction flip below it are bypassed entirely — the
+        \\ direction-of-travel logic now lives in the per-frame scan.
+        LDY     active_checkpoint_index
+        JMP     active_checkpoint_loaded
+ENDIF
+
     .level_reset_loop
         LDA     (level_reset_ptr2),Y
         SBC     midpoint_ypos_INT
@@ -6904,7 +6919,7 @@ ENDIF
 
         LDA     #$00
         STA     level_reset_with_pod_flag
-        
+
     .L2B4B
         CPY     #$00
         BEQ     L2B55
@@ -6913,7 +6928,7 @@ ENDIF
         BNE     L2B55
 
         DEY
-        
+
     .L2B55
         INY
         CPY     level_reset_size
@@ -6921,13 +6936,77 @@ ENDIF
 
         LDA     #$00
         STA     level_reset_with_pod_flag
-        
+
     .L2B5F
         DEY
+    .active_checkpoint_loaded
+
+IF _LAST_USED_CHECKPOINT
+        \\ Pod-respawn rule: with pod attached, push respawn one checkpoint
+        \\ deeper than the player-tracked active index — but never deeper
+        \\ than the deepest checkpoint they've reached on foot in the current
+        \\ segment (deepest_checkpoint_visited). Teleporters reset both
+        \\ trackers to the destination, so this can never reference a
+        \\ checkpoint the player hasn't actually been to.
+        \\
+        \\   target = min(active + 1, deepest_visited)
+        \\   if target == deepest_visited: drop the pod
+        \\
+        \\ The "drop on deepest" clause means the player loses the pod when
+        \\ the bump-or-clamp lands them at their high-watermark — there's
+        \\ nowhere "further down" they could be respawned, so the pod gets
+        \\ stranded at its original spawn instead of teleporting with the
+        \\ ship. Mirrors the original game's "fell off the bottom" / "matched
+        \\ cp[size-1] with pod" pod-drop semantics.
+        LDA     level_reset_with_pod_flag
+        BEQ     active_cp_pod_done
+
+        \\ Phase 1 — maybe bump Y. The bump (active+1, clamped to deepest)
+        \\ only fires when cp[active] is *above* the death Y, i.e. respawn
+        \\ at cp[active] would let the player progress upward by dying.
+        \\ When cp[active] is at or below death, no bump — respawn there.
+        \\ midpoint_ypos at this point is the death Y (restored from the
+        \\ stack at the start of level_reset).
+        LDA     (level_reset_ptr),Y                     ; cp[active].y_HI
+        CMP     midpoint_ypos_INT_HI
+        BCC     active_cp_pod_bump                      ; cp_HI < death_HI -> cp above, bump
+        BNE     active_cp_pod_check_drop                ; cp_HI > death_HI -> cp below, no bump
+        \\ HI bytes equal: compare LO. PHA preserves carry across the LO
+        \\ lookup; PLA / TAY both leave C alone.
+        TYA
+        PHA
+        CLC
+        ADC     level_reset_size
+        TAY
+        LDA     (level_reset_ptr),Y                     ; cp[active].y_LO
+        CMP     midpoint_ypos_INT
+        PLA
+        TAY                                              ; restore Y = active
+        BCS     active_cp_pod_check_drop                ; cp_LO >= death_LO -> cp at or below, no bump
+
+    .active_cp_pod_bump
+        \\ cp[active] above death — bump to min(active+1, deepest).
+        INY
+        CPY     deepest_checkpoint_visited
+        BCC     active_cp_pod_check_drop                ; active+1 < deepest -> Y = active+1
+        LDY     deepest_checkpoint_visited              ; clamp
+
+    .active_cp_pod_check_drop
+        \\ Phase 2 — drop the pod whenever the final respawn target equals
+        \\ the deepest checkpoint visited, regardless of how Y got there.
+        \\ Mirrors the original game's "respawn at the bottom drops the pod"
+        \\ rule, applied to the segment-local watermark instead of cp[size-1].
+        CPY     deepest_checkpoint_visited
+        BNE     active_cp_pod_done
+        LDA     #$00
+        STA     level_reset_with_pod_flag
+    .active_cp_pod_done
+ENDIF
+
         CLC
 
 \\ Matched nearest respawn position so set new ship (x,y) coordinates
-        
+
         LDA     (level_reset_ptr),Y
         STA     midpoint_ypos_INT_HI
         TYA
@@ -7030,6 +7109,14 @@ ENDIF
 {
         LDA     #$00
         STA     level_reset_with_pod_flag
+IF _LAST_USED_CHECKPOINT
+        \\ Reset checkpoint trackers to top spawn at every level start. The
+        \\ editor exports checkpoints sorted by ascending Y, so index 0 is
+        \\ always the topmost spawn point. Both bytes sit outside the ZP-clear
+        \\ range so they persist across death-respawn cycles.
+        STA     active_checkpoint_index
+        STA     deepest_checkpoint_visited
+ENDIF
         LDA     #$32
         STA     generator_recharge_increase
         
@@ -9316,6 +9403,9 @@ SET_BG_COL PAL_green
         JSR     update_sound_timer
 IF _Y_BANDS
         JSR     update_active_band
+ENDIF
+IF _LAST_USED_CHECKPOINT
+        JSR     update_active_checkpoint
 ENDIF
         JSR     ship_input_thrust_calculate_force
 SET_BG_COL PAL_black
@@ -11741,18 +11831,11 @@ TELEPORTER_CENTRE_Y_OFFSET  = $04          ; pixel rows
 \ ******************************************************************************
 .teleporter_perform_warp
 {
-        \\ Reuse the existing level-retry flow: it already wipes ZP, rebuilds
-        \\ landscape, and plays the teleport-in animation correctly. We just
-        \\ need to nudge level_reset's checkpoint-matching loop so it picks
-        \\ our destination index.
-        \\
-        \\ Strategy: set midpoint_ypos to cp[K].y + 1. The matching loop
-        \\ iterates Y until cp[Y].y >= midpoint, which fires at Y = K+1
-        \\ (or falls off the end if K is the last cp). Either way, the L2B4B
-        \\ post-match block then DEYs back to K when level_reset_with_pod_flag
-        \\ is 0 — which we guarantee by clearing it explicitly. (This also
-        \\ stops level_reset from re-attaching a pod that wasn't carried in,
-        \\ which the AABB gate has already ensured.)
+        \\ Reuse the level-retry flow (it wipes ZP, rebuilds landscape, plays
+        \\ the teleport-in animation). With the active-checkpoint model we
+        \\ write the destination directly into active_checkpoint_index;
+        \\ level_reset reads it as Y and the position-load block does the rest.
+        \\ No midpoint nudge / pod-flag dance needed any more.
         STA     teleporter_dest_save
         \\ Clear pending state up front: JMP level_retry never returns, so
         \\ anything after the JMP in our caller (dispatch_pending) won't run.
@@ -11772,39 +11855,21 @@ TELEPORTER_CENTRE_Y_OFFSET  = $04          ; pixel rows
         RTS                                            ; no checkpoints
     .tp_have_checkpoints
 
-        \\ Clamp dest to range.
+        \\ Clamp dest to range, then commit. Reset deepest watermark to the
+        \\ destination — the player has only just arrived, so respawn-with-pod
+        \\ must not bump beyond this index until they've crossed further cps
+        \\ on foot.
         LDA     teleporter_dest_save
         CMP     level_reset_size
         BCC     tp_dest_in_range
         LDA     #$00
-        STA     teleporter_dest_save
     .tp_dest_in_range
+        STA     active_checkpoint_index
+        STA     deepest_checkpoint_visited
 
-        \\ Read cp[K].y into midpoint_ypos, then add 1 to it.
-        LDX     level_number
-        LDA     level_reset_ptr_table_LO,X
-        STA     level_reset_ptr
-        LDA     level_reset_ptr_table_HI,X
-        STA     level_reset_ptr+1
-
-        LDY     teleporter_dest_save
-        LDA     (level_reset_ptr),Y                    ; cp[K].y_HI
-        STA     midpoint_ypos_INT_HI
-        TYA
-        CLC
-        ADC     level_reset_size
-        TAY
-        LDA     (level_reset_ptr),Y                    ; cp[K].y_LO
-        CLC
-        ADC     #$01                                   ; +1 nudges matching to land on Y=K
-        STA     midpoint_ypos_INT
-        BCC     tp_y_no_carry
-        INC     midpoint_ypos_INT_HI
-    .tp_y_no_carry
-
-        \\ Force the with-pod flag clear so the post-match block doesn't
-        \\ re-attach a pod (the AABB already gated this case out anyway), and
-        \\ so the matching loop's L2B4B path takes the DEY adjustment.
+        \\ Force the with-pod flag clear so the post-match block in
+        \\ level_reset doesn't re-attach a pod (the AABB already gated this
+        \\ case out anyway).
         LDA     #$00
         STA     level_reset_with_pod_flag
 
@@ -11904,6 +11969,96 @@ IF _Y_BANDS
         BNE     update_band_scan_loop
 .update_band_done
         RTS
+ENDIF
+
+IF _LAST_USED_CHECKPOINT
+\ ******************************************************************************
+\ * Per-frame active-checkpoint advance scan
+\ *
+\ * Bidirectional tracking. Direction-agnostic during play; pod handling lives
+\ * entirely in level_reset's respawn path (using deepest_checkpoint_visited
+\ * as a safety cap).
+\ *
+\ *   Retreat: while player_y < cp[active-1].y. Player has gone above prev cp.
+\ *   Advance: while player_y > cp[active+1].y. Player has gone below next cp.
+\ *
+\ * Each advance also bumps deepest_checkpoint_visited if it grows past it,
+\ * so the respawn-with-pod path never references a checkpoint the player
+\ * hasn't reached on foot in the current segment (teleporters reset both
+\ * active and deepest to the destination index).
+\ *
+\ * Equality on the boundary doesn't move active — "higher than" / "lower
+\ * than" are interpreted strictly.
+\ ******************************************************************************
+
+.update_active_checkpoint
+{
+        LDX     level_number
+        LDA     level_reset_data_sizes,X
+        STA     level_reset_size
+        BNE     uac_have_cps
+        RTS                                            ; level has no checkpoints (shouldn't happen)
+    .uac_have_cps
+        LDA     level_reset_ptr_table_LO,X
+        STA     level_reset_ptr
+        LDA     level_reset_ptr_table_HI,X
+        STA     level_reset_ptr+1
+
+\\ ----- Retreat: player_y < cp[active-1].y (player above prev cp). -----
+    .uac_retreat_loop
+        LDA     active_checkpoint_index
+        BEQ     uac_advance_loop                       ; already at index 0
+        SEC
+        SBC     #$01
+        TAY                                             ; Y = active-1
+        LDA     (level_reset_ptr),Y                    ; cp[Y].y_HI
+        CMP     midpoint_ypos_INT_HI
+        BCC     uac_advance_loop                       ; cp_HI < player_HI -> cp above player, no retreat
+        BNE     uac_do_retreat                         ; cp_HI > player_HI -> cp below player, retreat
+        \\ HI bytes equal: compare LO.
+        TYA
+        CLC
+        ADC     level_reset_size
+        TAY
+        LDA     (level_reset_ptr),Y                    ; cp[Y].y_LO
+        CMP     midpoint_ypos_INT
+        BCC     uac_advance_loop                       ; cp_LO < player_LO -> cp above (HI eq), no retreat
+        BEQ     uac_advance_loop                       ; equal -> not strictly higher, no retreat
+    .uac_do_retreat
+        DEC     active_checkpoint_index
+        JMP     uac_retreat_loop
+
+\\ ----- Advance: player_y > cp[active+1].y (player below next cp). -----
+    .uac_advance_loop
+        LDA     active_checkpoint_index
+        CLC
+        ADC     #$01
+        CMP     level_reset_size
+        BCS     uac_done                               ; already at last index
+        TAY                                             ; Y = active+1
+        LDA     (level_reset_ptr),Y                    ; cp[Y].y_HI
+        CMP     midpoint_ypos_INT_HI
+        BCC     uac_do_advance                         ; cp_HI < player_HI -> cp above player, advance
+        BNE     uac_done                               ; cp_HI > player_HI -> cp below player, done
+        \\ HI bytes equal: compare LO.
+        TYA
+        CLC
+        ADC     level_reset_size
+        TAY
+        LDA     (level_reset_ptr),Y                    ; cp[Y].y_LO
+        CMP     midpoint_ypos_INT
+        BCS     uac_done                               ; cp_LO >= player_LO -> cp at or below, done
+    .uac_do_advance
+        INC     active_checkpoint_index
+        \\ Update deepest watermark when active grows past the previous max.
+        LDA     active_checkpoint_index
+        CMP     deepest_checkpoint_visited
+        BCC     uac_advance_loop                       ; active < deepest -> no update
+        STA     deepest_checkpoint_visited
+        JMP     uac_advance_loop
+    .uac_done
+        RTS
+}
 ENDIF
 
 IF _BOBBING_MINES
