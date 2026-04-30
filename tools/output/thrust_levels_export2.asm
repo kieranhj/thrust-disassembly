@@ -176,6 +176,10 @@
         EQUB    $00
 .level_0_band_gravity
         EQUB    $00
+.level_0_band_landscape_colour
+        EQUB    $FF
+.level_0_band_object_colour
+        EQUB    $FF
 
 .level_1_band_y_HI
         EQUB    $02,$02,$02,$FF
@@ -183,6 +187,10 @@
         EQUB    $04,$4C,$D8,$00
 .level_1_band_gravity
         EQUB    $0E,$F8,$07,$00
+.level_1_band_landscape_colour
+        EQUB    $05,$01,$06,$FF
+.level_1_band_object_colour
+        EQUB    $06,$02,$02,$FF
 
 .level_2_band_y_HI
         EQUB    $FF
@@ -190,6 +198,10 @@
         EQUB    $00
 .level_2_band_gravity
         EQUB    $00
+.level_2_band_landscape_colour
+        EQUB    $FF
+.level_2_band_object_colour
+        EQUB    $FF
 
 .level_3_band_y_HI
         EQUB    $FF
@@ -197,6 +209,10 @@
         EQUB    $00
 .level_3_band_gravity
         EQUB    $00
+.level_3_band_landscape_colour
+        EQUB    $FF
+.level_3_band_object_colour
+        EQUB    $FF
 
 .level_4_band_y_HI
         EQUB    $FF
@@ -204,6 +220,10 @@
         EQUB    $00
 .level_4_band_gravity
         EQUB    $00
+.level_4_band_landscape_colour
+        EQUB    $FF
+.level_4_band_object_colour
+        EQUB    $FF
 
 .level_5_band_y_HI
         EQUB    $FF
@@ -211,6 +231,10 @@
         EQUB    $00
 .level_5_band_gravity
         EQUB    $00
+.level_5_band_landscape_colour
+        EQUB    $FF
+.level_5_band_object_colour
+        EQUB    $FF
 
 \ ******************************************************************************
 \ * No-wrap Y threshold per level

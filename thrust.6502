@@ -7084,6 +7084,16 @@ ENDIF
         LDY     #$03
         JSR     palette_set_colour_Y_to_A    ; set default object colour
 
+IF _Y_BANDS
+        \\ The level-default palette writes above clobbered any band-correct
+        \\ colour that update_active_band applied earlier in this routine.
+        \\ Invalidate the cache and re-run the scan so the post-respawn
+        \\ teleport-appear animation renders in the band's colours instead
+        \\ of flashing level defaults until the first per-frame band scan.
+        LDA     #$FF
+        STA     band_current_active_index
+        JSR     update_active_band
+ENDIF
         RTS
 }
 
@@ -7284,6 +7294,20 @@ IF _Y_BANDS
         STA     band_load_gravity_addr_LO                 ; **MODIFIES CODE**
         LDA     level_band_gravity_lookup_HI,X
         STA     band_load_gravity_addr_HI                 ; **MODIFIES CODE**
+
+        LDA     level_band_landscape_colour_lookup_LO,X
+        STA     band_load_landscape_addr_LO               ; **MODIFIES CODE**
+        LDA     level_band_landscape_colour_lookup_HI,X
+        STA     band_load_landscape_addr_HI               ; **MODIFIES CODE**
+
+        LDA     level_band_object_colour_lookup_LO,X
+        STA     band_load_object_addr_LO                  ; **MODIFIES CODE**
+        LDA     level_band_object_colour_lookup_HI,X
+        STA     band_load_object_addr_HI                  ; **MODIFIES CODE**
+
+        \\ Force a colour-transition on the next update_active_band scan.
+        LDA     #$FF
+        STA     band_current_active_index
 ENDIF
 IF _BOBBING_MINES
         LDA     level_obj_data_0_lookup_LO,X
@@ -10768,6 +10792,26 @@ IF _Y_BANDS
         EQUB    LO(level_3_band_gravity), HI(level_3_band_gravity)
         EQUB    LO(level_4_band_gravity), HI(level_4_band_gravity)
         EQUB    LO(level_5_band_gravity), HI(level_5_band_gravity)
+
+.level_band_landscape_colour_lookup_LO
+        EQUB    LO(level_0_band_landscape_colour)
+.level_band_landscape_colour_lookup_HI
+        EQUB    HI(level_0_band_landscape_colour)
+        EQUB    LO(level_1_band_landscape_colour), HI(level_1_band_landscape_colour)
+        EQUB    LO(level_2_band_landscape_colour), HI(level_2_band_landscape_colour)
+        EQUB    LO(level_3_band_landscape_colour), HI(level_3_band_landscape_colour)
+        EQUB    LO(level_4_band_landscape_colour), HI(level_4_band_landscape_colour)
+        EQUB    LO(level_5_band_landscape_colour), HI(level_5_band_landscape_colour)
+
+.level_band_object_colour_lookup_LO
+        EQUB    LO(level_0_band_object_colour)
+.level_band_object_colour_lookup_HI
+        EQUB    HI(level_0_band_object_colour)
+        EQUB    LO(level_1_band_object_colour), HI(level_1_band_object_colour)
+        EQUB    LO(level_2_band_object_colour), HI(level_2_band_object_colour)
+        EQUB    LO(level_3_band_object_colour), HI(level_3_band_object_colour)
+        EQUB    LO(level_4_band_object_colour), HI(level_4_band_object_colour)
+        EQUB    LO(level_5_band_object_colour), HI(level_5_band_object_colour)
 ENDIF
 
 \ Per-object cached screen coords for the laser beam: when
@@ -11909,6 +11953,16 @@ IF _Y_BANDS
 
 .level_base_gravity_FRAC EQUB $00       ; raw level gravity (pre reverse-flag), set in initialise_level_pointers
 
+\\ Cached state for band-driven palette transitions. Holds the index of the
+\\ deepest band active on the previous frame ($FF = no band active). The
+\\ palette is only re-applied when this changes, so the existing
+\\ hide_landscape / show_landscape paths can still drive the palette in
+\\ between transitions without being fought every frame.
+.band_current_active_index EQUB $FF
+.band_target_landscape_colour EQUB $00
+.band_target_object_colour    EQUB $00
+.band_active_index_this_frame EQUB $FF
+
 .update_active_band
         \\ Start each frame from the level's base gravity. gravity is a
         \\ 16-bit signed value (gravity_SIGN:gravity_FRAC); base byte's bit 7
@@ -11930,6 +11984,17 @@ IF _Y_BANDS
         STA     gravity_FRAC
         STY     gravity_SIGN
 
+        \\ Pre-fill colour targets with level defaults; band overrides
+        \\ stomp these as they activate during the scan. $FF in a band's
+        \\ colour byte means "inherit", so the level default sticks.
+        LDX     level_number
+        LDA     level_landscape_colour,X
+        STA     band_target_landscape_colour
+        LDA     level_object_colour,X
+        STA     band_target_object_colour
+        LDA     #$FF
+        STA     band_active_index_this_frame
+
         LDX     #$00
 .update_band_scan_loop
 .band_load_y_hi
@@ -11949,6 +12014,7 @@ IF _Y_BANDS
         BEQ     update_band_active                      ; equal counts as active
         BCS     update_band_done                        ; band_LO > player_LO -> not yet
 .update_band_active
+        STX     band_active_index_this_frame
         \\ Band byte is a signed Q-format gravity value: bit 7 sign-extends
         \\ into gravity_SIGN so $80..$FF give upward (negative) gravity.
         \\ Band override is absolute -- reverse_gravity_flag has already been
@@ -11965,9 +12031,41 @@ IF _Y_BANDS
         DEY                                             ; Y = $FF when bit 7 set
 .update_band_sign_pos
         STY     gravity_SIGN
+
+        \\ Per-band colour override. $FF = inherit (leave target alone).
+.band_load_landscape
+        LDA     level_0_band_landscape_colour,X        ; **SELF-MODIFIED CODE**
+        band_load_landscape_addr_LO = band_load_landscape+1
+        band_load_landscape_addr_HI = band_load_landscape+2
+        CMP     #$FF
+        BEQ     band_skip_landscape
+        STA     band_target_landscape_colour
+.band_skip_landscape
+.band_load_object
+        LDA     level_0_band_object_colour,X           ; **SELF-MODIFIED CODE**
+        band_load_object_addr_LO = band_load_object+1
+        band_load_object_addr_HI = band_load_object+2
+        CMP     #$FF
+        BEQ     band_skip_object
+        STA     band_target_object_colour
+.band_skip_object
         INX
         BNE     update_band_scan_loop
 .update_band_done
+        \\ Apply colour targets only when the active band actually changed,
+        \\ so we don't fight hide_landscape / show_landscape on intervening
+        \\ frames.
+        LDA     band_active_index_this_frame
+        CMP     band_current_active_index
+        BEQ     update_band_colours_done
+        STA     band_current_active_index
+        LDA     band_target_landscape_colour
+        LDY     #$02
+        JSR     palette_set_colour_Y_to_A
+        LDA     band_target_object_colour
+        LDY     #$03
+        JSR     palette_set_colour_Y_to_A
+.update_band_colours_done
         RTS
 ENDIF
 

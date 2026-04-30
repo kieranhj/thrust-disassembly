@@ -441,16 +441,26 @@ def import_beebasm(path):
         else:
             no_wrap_y = None
 
-        # Y-banded gravity overrides (may not be present in older exports).
-        # Three parallel arrays terminated by $FF in y_HI.
+        # Y-banded parameter overrides (may not be present in older exports).
+        # Parallel arrays terminated by $FF in y_HI. Optional landscape/object
+        # colour overrides use $FF as a sentinel meaning "inherit level default".
         bands = []
         b_hi = labels.get(f"level_{n}_band_y_HI", [])
         b_lo = labels.get(f"level_{n}_band_y_LO", [])
         b_g  = labels.get(f"level_{n}_band_gravity", [])
+        b_lc = labels.get(f"level_{n}_band_landscape_colour", [])
+        b_oc = labels.get(f"level_{n}_band_object_colour", [])
         for i in range(min(len(b_hi), len(b_lo), len(b_g))):
             if b_hi[i] == 0xFF:
                 break
-            bands.append({"y": (b_hi[i] << 8) | b_lo[i], "gravity": b_g[i]})
+            lc = b_lc[i] if i < len(b_lc) else 0xFF
+            oc = b_oc[i] if i < len(b_oc) else 0xFF
+            bands.append({
+                "y": (b_hi[i] << 8) | b_lo[i],
+                "gravity": b_g[i],
+                "landscape_colour": None if lc == 0xFF else lc,
+                "object_colour": None if oc == 0xFF else oc,
+            })
 
         lv = LevelData(n, list(left_wall), list(right_wall), objects,
                         terrain_rle, land_col, obj_col, checkpoints, grav,
@@ -776,12 +786,20 @@ def export_beebasm(levels):
         y_hi = [(b["y"] >> 8) & 0xFF for b in bands] + [0xFF]
         y_lo = [b["y"] & 0xFF for b in bands] + [0x00]
         grav = [b["gravity"] & 0xFF for b in bands] + [0x00]
+        lc   = [(b.get("landscape_colour") if b.get("landscape_colour") is not None else 0xFF) & 0xFF
+                for b in bands] + [0xFF]
+        oc   = [(b.get("object_colour") if b.get("object_colour") is not None else 0xFF) & 0xFF
+                for b in bands] + [0xFF]
         lines.append(f".level_{n}_band_y_HI")
         lines.append(f"        EQUB    {format_bytes(y_hi)}")
         lines.append(f".level_{n}_band_y_LO")
         lines.append(f"        EQUB    {format_bytes(y_lo)}")
         lines.append(f".level_{n}_band_gravity")
         lines.append(f"        EQUB    {format_bytes(grav)}")
+        lines.append(f".level_{n}_band_landscape_colour")
+        lines.append(f"        EQUB    {format_bytes(lc)}")
+        lines.append(f".level_{n}_band_object_colour")
+        lines.append(f"        EQUB    {format_bytes(oc)}")
         lines.append("")
 
     # No-wrap Y threshold table
@@ -1420,6 +1438,11 @@ class Editor:
                 self.level.dirty = True
                 self.selected_band = None
 
+        elif event.key in (pygame.K_k, pygame.K_j) \
+                and self.mode == "band" and self.selected_band is not None:
+            attr = "landscape_colour" if event.key == pygame.K_k else "object_colour"
+            self._cycle_band_colour(attr)
+
         elif event.key in (pygame.K_LEFTBRACKET, pygame.K_RIGHTBRACKET,
                            pygame.K_COMMA, pygame.K_PERIOD):
             if self.mode == "band" and self.selected_band is not None:
@@ -1959,11 +1982,30 @@ class Editor:
         new_y = max(0, min(0xFFFE, int(wy)))
         self.undo.save(self.level)
         # Default new band gravity = level base, so it has no effect until edited.
-        self.level.bands.append({"y": new_y, "gravity": self.level.gravity})
+        # Colour overrides default to None (inherit level default).
+        self.level.bands.append({"y": new_y, "gravity": self.level.gravity,
+                                  "landscape_colour": None, "object_colour": None})
         self.level.bands.sort(key=lambda b: b["y"])
         self.level.dirty = True
         self.selected_band = next(
             (i for i, b in enumerate(self.level.bands) if b["y"] == new_y), None)
+
+    def _cycle_band_colour(self, attr):
+        """Cycle a band's landscape/object colour override.
+        None (inherit) -> 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> None.
+        Skips 0 (black) to match the level swatch behaviour."""
+        band = self.level.bands[self.selected_band]
+        cur = band.get(attr)
+        if cur is None:
+            new = 1
+        elif cur >= 7:
+            new = None
+        else:
+            new = cur + 1
+        self.undo.save(self.level)
+        band[attr] = new
+        self.level.dirty = True
+        self.sprite_cache.clear()
 
     def _adjust_selected_band_gravity(self, key, shift):
         """[/]/,/. tweak the selected band's gravity_FRAC; shift = ±$10."""
@@ -3405,9 +3447,14 @@ class Editor:
                 b = lv.bands[self.selected_band]
                 g = b["gravity"]
                 g_signed = g - 256 if g >= 128 else g
+                lc = b.get("landscape_colour")
+                oc = b.get("object_colour")
+                lc_txt = "inherit" if lc is None else f"{lc} ({BBC_COLOUR_NAMES[lc]})"
+                oc_txt = "inherit" if oc is None else f"{oc} ({BBC_COLOUR_NAMES[oc]})"
                 parts.append(
                     f"Band Y={b['y']}  gravity=${g:02X} ({g_signed:+d})  "
-                    f"([/] ±1, ,/. ±$10, shift = ±$10×16, Del to remove)")
+                    f"land={lc_txt}  obj={oc_txt}  "
+                    f"([/] gravity, K/J colours, Del to remove)")
             else:
                 parts.append(
                     f"{len(lv.bands)} band(s)  (click to select; right-click empty to add)")
