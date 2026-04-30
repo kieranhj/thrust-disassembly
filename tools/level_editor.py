@@ -617,6 +617,31 @@ def _close_bottom(left, right):
 
 def export_beebasm(levels):
     """Generate BeebAsm assembly source for terrain and object data."""
+    # Per-level checkpoint sort permutation. The engine starts every life at
+    # checkpoint 0, so checkpoint 0 must be the topmost spawn point in the
+    # exported table. Sort each level's checkpoints by ascending spawn_y on
+    # export, and remap any teleporter's destination index through the sort
+    # permutation so warps still land on the same checkpoint after the sort.
+    # In-editor state is NOT mutated — the sort applies only to the emitted
+    # bytes, and the sort is deterministic so repeated saves are byte-stable.
+    sorted_checkpoints = {}
+    checkpoint_remap = {}
+    for lv in levels:
+        cps = lv.checkpoints or []
+        order = sorted(range(len(cps)), key=lambda i: cps[i]["spawn_y"])
+        sorted_checkpoints[lv.level_num] = [cps[i] for i in order]
+        old_to_new = [0] * len(cps)
+        for new_i, old_i in enumerate(order):
+            old_to_new[old_i] = new_i
+        checkpoint_remap[lv.level_num] = old_to_new
+
+    def remap_teleport_dest(level_num, dest):
+        """Apply the sort permutation to a teleporter's checkpoint index."""
+        perm = checkpoint_remap.get(level_num, [])
+        if not perm:
+            return 0
+        return perm[dest % len(perm)]
+
     lines = []
     lines.append("\\ ******************************************************************************")
     lines.append("\\ ******************************************************************************")
@@ -710,7 +735,7 @@ def export_beebasm(levels):
                     data_1.append(o.get('mine_amp', 0) & 0xFF)
                     data_2.append(0)
                 elif t == OBJECT_TELEPORTER:
-                    data_0.append(o.get('teleport_dest', 0) & 0xFF)
+                    data_0.append(remap_teleport_dest(n, o.get('teleport_dest', 0)) & 0xFF)
                     data_1.append(0)
                     data_2.append(0)
                 else:
@@ -793,7 +818,8 @@ def export_beebasm(levels):
     lines.append("")
     for lv in levels:
         n = lv.level_num
-        cps = lv.checkpoints
+        # Use sort-by-Y order so checkpoint 0 is always the topmost spawn.
+        cps = sorted_checkpoints[n]
         s = len(cps)
         # Encode as struct-of-arrays: 6 rows of 's' bytes each
         y_hi =    [cp["spawn_y"] >> 8 for cp in cps]
