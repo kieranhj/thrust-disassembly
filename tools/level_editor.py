@@ -1137,37 +1137,58 @@ SCHEMA_SIMPLE = [
 ]
 
 
+def _readonly(label, value):
+    """Build a readonly field that displays a fixed value."""
+    return Field(label.lower().replace(" ", "_") + "_ro", label, "readonly",
+                 getter=lambda t, _v=value: _v, setter=lambda t, v: None)
+
+
+def _section_header(title):
+    """Build a title-bar field that spans the full inspector width."""
+    return Field("section_header", title, "header",
+                 getter=lambda t, _v=title: _v, setter=lambda t, v: None)
+
+
 def schema_for_selection(editor):
     """Return (schema, target, level) for the current editor selection."""
     lv = editor.level
     mode = editor.mode
+    ln = lv.level_num + 1
     if mode == "band" and editor.selected_band is not None:
         bi = editor.selected_band
         if 0 <= bi < len(lv.bands):
-            return SCHEMA_BAND, lv.bands[bi], lv
+            prefix = [_section_header(f"Level {ln} Bands"),
+                      _readonly("Index", str(bi))]
+            return prefix + SCHEMA_BAND, lv.bands[bi], lv
     if mode == "checkpoint" and editor.selected_checkpoint is not None:
         ci = editor.selected_checkpoint
         if 0 <= ci < len(lv.checkpoints):
-            return SCHEMA_CHECKPOINT, lv.checkpoints[ci], lv
+            prefix = [_section_header(f"Level {ln} Checkpoints"),
+                      _readonly("Index", str(ci))]
+            return prefix + SCHEMA_CHECKPOINT, lv.checkpoints[ci], lv
     if mode == "object" and editor.selected_object is not None:
         oi = editor.selected_object
         if 0 <= oi < len(lv.objects):
             obj = lv.objects[oi]
             t = obj["type"]
+            type_name = OBJECT_TYPE_NAMES.get(t, f"${t:02X}")
+            prefix = [_section_header(f"Level {ln} Objects"),
+                      _readonly("Index", str(oi)),
+                      _readonly("Type", f"{type_name} (${t:02X})")]
             if t in OBJECT_LASER_TYPES:
-                return SCHEMA_LASER, obj, lv
+                return prefix + SCHEMA_LASER, obj, lv
             if t == OBJECT_GRAVITY_WELL:
-                return SCHEMA_GRAVITY_WELL, obj, lv
+                return prefix + SCHEMA_GRAVITY_WELL, obj, lv
             if t in BOBBING_MINE_TYPES:
-                return SCHEMA_BOBBING_MINE, obj, lv
+                return prefix + SCHEMA_BOBBING_MINE, obj, lv
             if t == OBJECT_TELEPORTER:
-                return SCHEMA_TELEPORTER, obj, lv
+                return prefix + SCHEMA_TELEPORTER, obj, lv
             if t in OBJECT_FIRING_TYPES:
-                return SCHEMA_GUN, obj, lv
+                return prefix + SCHEMA_GUN, obj, lv
             if t in (0x07, 0x08):
-                return SCHEMA_DOOR_SWITCH, obj, lv
-            return SCHEMA_SIMPLE, obj, lv
-    return SCHEMA_LEVEL, lv, lv
+                return prefix + SCHEMA_DOOR_SWITCH, obj, lv
+            return prefix + SCHEMA_SIMPLE, obj, lv
+    return [_section_header(f"Level {ln}")] + SCHEMA_LEVEL[1:], lv, lv
 
 
 class LevelData:
@@ -1529,6 +1550,7 @@ class Editor:
 
         # Editing state
         self.dragging_wall = None     # ("left"|"right", start_row, saved_snapshot)
+        self.dragging_pinch = None    # (anchor_x, last_row) — Shift+drag L=R
         self.drag_start_y = None
         self.selected_object = None   # index into objects list
         self.dragging_object = None    # None or (grab_dx, grab_dy) world-coord offset
@@ -2049,8 +2071,20 @@ class Editor:
                 if hit:
                     side, row = hit
                     self.undo.save(self.level)
-                    self.dragging_wall = (side, row)
-                    self.drag_start_y = row
+                    if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                        # Snap the opposite wall to match (L=R pinch point).
+                        # Drag continues to apply the same anchor value to
+                        # subsequent rows the cursor passes through.
+                        lv = self.level
+                        anchor_x = lv.left_wall[row] if side == "left" else lv.right_wall[row]
+                        lv.left_wall[row] = anchor_x
+                        lv.right_wall[row] = anchor_x
+                        lv.terrain_dirty = True
+                        self.hovered_wall = (side, row)
+                        self.dragging_pinch = (anchor_x, row)
+                    else:
+                        self.dragging_wall = (side, row)
+                        self.drag_start_y = row
                 else:
                     # Start panning if clicking in empty space
                     self.panning = True
@@ -2141,6 +2175,9 @@ class Editor:
                 self.level.dirty = True
                 self.dragging_wall = None
                 self.drag_start_y = None
+            if self.dragging_pinch:
+                self.level.dirty = True
+                self.dragging_pinch = None
             if self.dragging_bottom:
                 self.level.dirty = True
                 self.dragging_bottom = False
@@ -2199,6 +2236,21 @@ class Editor:
                 lv.left_wall = lv.left_wall[:new_rows]
                 lv.right_wall = lv.right_wall[:new_rows]
             lv.terrain_dirty = True
+            return
+
+        if self.dragging_pinch:
+            _, wy = self.camera.screen_to_world(mx, my)
+            anchor_x, last_row = self.dragging_pinch
+            lv = self.level
+            row = max(0, min(int(wy), len(lv.left_wall) - 1, len(lv.right_wall) - 1))
+            step = 1 if row >= last_row else -1
+            for r in range(last_row, row + step, step):
+                if 0 <= r < len(lv.left_wall) and r < len(lv.right_wall):
+                    lv.left_wall[r] = anchor_x
+                    lv.right_wall[r] = anchor_x
+            lv.terrain_dirty = True
+            self.hovered_wall = ("left", row)
+            self.dragging_pinch = (anchor_x, row)
             return
 
         if self.dragging_wall:
@@ -2540,11 +2592,12 @@ class Editor:
         if sprite is None:
             return False
         # Recompute beam screen coords using the same draw_w/draw_h as the
-        # renderer (sprite dimensions in screen px).
-        sx, sy = self.camera.world_to_screen(obj["x"], obj["y"] - 1)
+        # renderer (sprite dimensions in screen px). Must match the renderer's
+        # ox/oy of obj["x"], obj["y"] — no -1 offset.
+        sx, sy = self.camera.world_to_screen(obj["x"], obj["y"])
         ex, ey = self.camera.world_to_screen(
             obj["x"] + sprite.get_width() / 4,
-            obj["y"] - 1 + sprite.get_height() / 2)
+            obj["y"] + sprite.get_height() / 2)
         draw_w = ex - sx
         draw_h = ey - sy
         _, _, end_sx, end_sy = self._laser_beam_screen_coords(obj, sx, sy, draw_w, draw_h)
@@ -2559,10 +2612,10 @@ class Editor:
         sprite = self.sprite_cache.get(obj["type"], self.level)
         if sprite is None:
             return
-        sx, sy = self.camera.world_to_screen(obj["x"], obj["y"] - 1)
+        sx, sy = self.camera.world_to_screen(obj["x"], obj["y"])
         ex, ey = self.camera.world_to_screen(
             obj["x"] + sprite.get_width() / 4,
-            obj["y"] - 1 + sprite.get_height() / 2)
+            obj["y"] + sprite.get_height() / 2)
         draw_w = ex - sx
         draw_h = ey - sy
         char_w_px = draw_w / 5.0
@@ -3234,11 +3287,12 @@ class Editor:
             cx, cy = int(end_sx), int(end_sy)
             highlight = (self.dragging_laser_endpoint
                          or self.hovered_laser_endpoint)
-            pygame.draw.circle(self.screen, COL_LASER_BEAM, (cx, cy),
-                               LASER_ENDPOINT_HANDLE_RADIUS)
+            r = LASER_ENDPOINT_HANDLE_RADIUS
+            blob = pygame.Surface((r * 2 + 2, r * 2 + 2), pygame.SRCALPHA)
+            pygame.draw.circle(blob, (*COL_LASER_BEAM, 130), (r + 1, r + 1), r)
+            self.screen.blit(blob, (cx - r - 1, cy - r - 1))
             ring_col = (255, 255, 255) if highlight else (180, 180, 180)
-            pygame.draw.circle(self.screen, ring_col, (cx, cy),
-                               LASER_ENDPOINT_HANDLE_RADIUS + 1, 1)
+            pygame.draw.circle(self.screen, ring_col, (cx, cy), r + 1, 1)
 
     def _render_gravity_well(self, obj, i):
         """Draw a gravity well placeholder: centre dot + diamond outline at
@@ -3516,6 +3570,21 @@ class Editor:
         screen = self.screen
         sw = screen.get_width() - INSPECTOR_W
 
+        # Faint crosshair guidelines extending from the cursor to the viewport edges
+        mx, my = pygame.mouse.get_pos()
+        sh_full = screen.get_height()
+        if 0 <= mx < sw and TOOLBAR_H <= my < sh_full - STATUS_H:
+            guide_col = (90, 95, 110)
+            prev_clip = screen.get_clip()
+            screen.set_clip(pygame.Rect(0, TOOLBAR_H, sw, sh_full - STATUS_H - TOOLBAR_H))
+            # Vertical guide
+            for y in range(TOOLBAR_H, sh_full - STATUS_H, 4):
+                screen.set_at((mx, y), guide_col)
+            # Horizontal guide
+            for x in range(0, sw, 4):
+                screen.set_at((x, my), guide_col)
+            screen.set_clip(prev_clip)
+
         # Bottom boundary handle — always visible in wall mode
         lv = self.level
         wx0, _ = cam.world_to_screen(0, lv.num_rows)
@@ -3682,11 +3751,17 @@ class Editor:
         if self._has_unsaved_changes():
             fname += "*"
 
+        row = int(wy)
+        l_val = lv.left_wall[row] if 0 <= row < len(lv.left_wall) else None
+        r_val = lv.right_wall[row] if 0 <= row < len(lv.right_wall) else None
+        walls_str = f"L={'-' if l_val is None else l_val} R={'-' if r_val is None else r_val}"
+
         parts = [
             f"[{mode_label}]",
             f"[Level {lv.level_num + 1}]",
             f"[{fname}]",
-            f"L={int(wx)} R={int(wy)}",
+            f"X={int(wx)} Y={int(wy)}",
+            walls_str,
         ]
 
         # Transient hint (rightmost)
@@ -3702,12 +3777,22 @@ class Editor:
         elif self.line_start:
             side, r, x = self.line_start
             hint = f"Line: {side} from row {r} x={x} — click to set end"
+        elif self.dragging_pinch:
+            hint = "Pinch drag — both walls set to L=R; release to stop"
         elif self.dragging_bottom or self.hovered_bottom:
             hint = "Drag to resize landscape"
         elif self.dragging_no_wrap or self.hovered_no_wrap:
             hint = "Drag no-wrap line (right-click to remove)"
+        elif self.mode == "wall" and self.hovered_wall:
+            hint = "Drag to edit wall  •  Shift+drag = pinch (L=R)"
         elif self.mode == "wall" and lv.no_wrap_y >= 0xFFFF:
-            hint = "Right-click to place no-wrap line"
+            hint = "Right-click to place no-wrap line  •  Shift+click wall = pinch (L=R)"
+        elif self.mode == "wall":
+            hint = "Shift+click a wall = pinch row (L=R); drag to extend"
+        elif self.mode == "checkpoint":
+            hint = "Right-click to add a checkpoint at the cursor"
+        elif self.mode == "band":
+            hint = "Right-click to add a Y-band at the cursor"
 
         status_left = "  ".join(parts)
         txt_left = self.font_small.render(status_left, True, COL_STATUS_TEXT)
@@ -3763,13 +3848,7 @@ class Editor:
 
         schema, target, level = schema_for_selection(self)
 
-        # Header strip
-        pygame.draw.rect(screen, COL_INSP_HEADER, (insp_x, TOOLBAR_H, INSPECTOR_W, 18))
-        hdr_text = self._selection_label()
-        hdr = self.font_small.render(hdr_text, True, (170, 175, 200))
-        screen.blit(hdr, (insp_x + INSPECTOR_PAD, TOOLBAR_H + 2))
-
-        field_top = TOOLBAR_H + 19
+        field_top = self._inspector_field_top()
         insp_h = split_y - field_top
 
         # Clip to fields section
@@ -3794,28 +3873,23 @@ class Editor:
         # Palette / mode tools section
         self._render_palette_section(insp_x, split_y + 1, sh - STATUS_H)
 
-    def _selection_label(self):
-        lv = self.level
-        if self.mode == "band" and self.selected_band is not None:
-            bi = self.selected_band
-            if 0 <= bi < len(lv.bands):
-                return f"Band #{bi}  Y={lv.bands[bi]['y']}"
-        if self.mode == "checkpoint" and self.selected_checkpoint is not None:
-            ci = self.selected_checkpoint
-            if 0 <= ci < len(lv.checkpoints):
-                return f"Checkpoint #{ci}"
-        if self.mode == "object" and self.selected_object is not None:
-            oi = self.selected_object
-            if 0 <= oi < len(lv.objects):
-                t = lv.objects[oi]["type"]
-                name = OBJECT_TYPE_NAMES.get(t, f'${t:02X}')
-                return f"{name}  #{oi} (${t:02X})"
-        return f"Level {lv.level_num + 1}"
+    def _inspector_field_top(self):
+        return TOOLBAR_H + 1
 
     def _render_inspector_field(self, rect, field, target, level):
         screen = self.screen
         is_active = (field.id == self.inspector_active_field)
         is_text = (field.id == self.text_entry_field)
+
+        # Section header — full-width title strip, no value widget.
+        if field.kind == "header":
+            pygame.draw.rect(screen, COL_INSP_HEADER, rect)
+            pygame.draw.line(screen, COL_INSP_BORDER,
+                             (rect.x, rect.bottom - 1), (rect.right, rect.bottom - 1))
+            t = self.font.render(field.label, True, (210, 215, 235))
+            screen.blit(t, (rect.x + (rect.width - t.get_width()) // 2,
+                            rect.y + (rect.height - t.get_height()) // 2))
+            return
 
         bg = COL_FIELD_ACTIVE if is_active else COL_FIELD_BG
         pygame.draw.rect(screen, bg, rect)
@@ -4085,7 +4159,7 @@ class Editor:
             return
 
         schema, target, level = schema_for_selection(self)
-        field_top = TOOLBAR_H + 19
+        field_top = self._inspector_field_top()
         y = field_top - self.inspector_scroll
         for field in schema:
             if field.kind not in ("byte", "signed_byte", "word"):
@@ -4116,7 +4190,7 @@ class Editor:
         sw = self.screen.get_width()
         insp_x = sw - INSPECTOR_W
         split_y = self._inspector_split_y()
-        field_top = TOOLBAR_H + 19
+        field_top = self._inspector_field_top()
 
         if button == 4 or button == 5:
             return  # handled by MOUSEWHEEL
@@ -4146,7 +4220,7 @@ class Editor:
             self._commit_text_entry()
 
     def _handle_field_click(self, rect, field, target, level, mx, my, button):
-        if field.kind == "readonly":
+        if field.kind in ("readonly", "header"):
             return
 
         wx = rect.x + FIELD_LABEL_W
