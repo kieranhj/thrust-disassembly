@@ -237,6 +237,43 @@
         EQUB    $FF
 
 \ ******************************************************************************
+\ * Switch wiring tables per level
+\ * level_N_switch_obj_indices: object indices of switches, $FF terminator.
+\ * level_N_switch_wiring: 4 bytes per switch (target, action, arg_a, arg_b).
+\ * Phase A emits empty arrays for every level — wiring data lands in Phase B.
+\ ******************************************************************************
+
+.level_0_switch_obj_indices
+        EQUB    $FF
+.level_0_switch_wiring
+        EQUB    $FF,$00,$00,$00
+
+.level_1_switch_obj_indices
+        EQUB    $FF
+.level_1_switch_wiring
+        EQUB    $FF,$00,$00,$00
+
+.level_2_switch_obj_indices
+        EQUB    $FF
+.level_2_switch_wiring
+        EQUB    $FF,$00,$00,$00
+
+.level_3_switch_obj_indices
+        EQUB    $FF
+.level_3_switch_wiring
+        EQUB    $FF,$00,$00,$00
+
+.level_4_switch_obj_indices
+        EQUB    $FF
+.level_4_switch_wiring
+        EQUB    $FF,$00,$00,$00
+
+.level_5_switch_obj_indices
+        EQUB    $FF
+.level_5_switch_wiring
+        EQUB    $FF,$00,$00,$00
+
+\ ******************************************************************************
 \ * No-wrap Y threshold per level
 \ * X wrap disabled when player Y >= this value ($FFFF = always wrap)
 \ ******************************************************************************

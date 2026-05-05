@@ -825,6 +825,22 @@ def export_beebasm(levels):
         lines.append(f"        EQUB    {format_bytes(oc)}")
         lines.append("")
 
+    # Switch wiring tables per level (Phase A: empty placeholders)
+    lines.append("\\ ******************************************************************************")
+    lines.append("\\ * Switch wiring tables per level")
+    lines.append("\\ * level_N_switch_obj_indices: object indices of switches, $FF terminator.")
+    lines.append("\\ * level_N_switch_wiring: 4 bytes per switch (target, action, arg_a, arg_b).")
+    lines.append("\\ * Phase A emits empty arrays for every level — wiring data lands in Phase B.")
+    lines.append("\\ ******************************************************************************")
+    lines.append("")
+    for lv in levels:
+        n = lv.level_num
+        lines.append(f".level_{n}_switch_obj_indices")
+        lines.append("        EQUB    $FF")
+        lines.append(f".level_{n}_switch_wiring")
+        lines.append("        EQUB    $FF,$00,$00,$00")
+        lines.append("")
+
     # No-wrap Y threshold table
     lines.append("\\ ******************************************************************************")
     lines.append("\\ * No-wrap Y threshold per level")

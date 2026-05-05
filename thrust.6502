@@ -42,6 +42,7 @@ _Y_BANDS             = (_SWRAM_BUILD AND TRUE)    ; Y-banded per-level parameter
 _BOBBING_MINES       = (_SWRAM_BUILD AND TRUE)    ; Bobbing mine hazard object ($0E)
 _TELEPORTER          = (_SWRAM_BUILD AND TRUE)    ; One-way teleporter pad object ($10)
 _LAST_USED_CHECKPOINT = (_SWRAM_BUILD AND TRUE)   ; Track active checkpoint across deaths
+_SWITCHES            = (_SWRAM_BUILD AND TRUE)    ; Editor-driven switches & triggers (wiring table)
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -7403,6 +7404,19 @@ IF _TELEPORTER
         STA     teleporter_just_warped
         STA     teleporter_overlap_this_frame
 ENDIF
+IF _SWITCHES
+        \\ Clear per-switch refractory state at level start. Lookup-pointer
+        \\ SMC patches land in Phase C alongside the dispatcher. 8 slots.
+        LDA     #$00
+        STA     level_switch_state+0
+        STA     level_switch_state+1
+        STA     level_switch_state+2
+        STA     level_switch_state+3
+        STA     level_switch_state+4
+        STA     level_switch_state+5
+        STA     level_switch_state+6
+        STA     level_switch_state+7
+ENDIF
 
         TXA
         ROR     A                                        ; level_number /= 2
@@ -10814,6 +10828,34 @@ IF _Y_BANDS
         EQUB    LO(level_5_band_object_colour), HI(level_5_band_object_colour)
 ENDIF
 
+IF _SWITCHES
+\\ Per-level switch wiring tables. One entry per switch object.
+\\ - level_N_switch_obj_indices: object indices of switches on the level,
+\\   $FF terminator. Empty list = single $FF byte.
+\\ - level_N_switch_wiring: parallel 4-byte entries (target_obj_index,
+\\   action_code, arg_a, arg_b). Action codes and the dispatcher land in
+\\   Phase C; Phase A only reserves the storage.
+.level_switch_obj_indices_lookup_LO
+        EQUB    LO(level_0_switch_obj_indices)
+.level_switch_obj_indices_lookup_HI
+        EQUB    HI(level_0_switch_obj_indices)
+        EQUB    LO(level_1_switch_obj_indices), HI(level_1_switch_obj_indices)
+        EQUB    LO(level_2_switch_obj_indices), HI(level_2_switch_obj_indices)
+        EQUB    LO(level_3_switch_obj_indices), HI(level_3_switch_obj_indices)
+        EQUB    LO(level_4_switch_obj_indices), HI(level_4_switch_obj_indices)
+        EQUB    LO(level_5_switch_obj_indices), HI(level_5_switch_obj_indices)
+
+.level_switch_wiring_lookup_LO
+        EQUB    LO(level_0_switch_wiring)
+.level_switch_wiring_lookup_HI
+        EQUB    HI(level_0_switch_wiring)
+        EQUB    LO(level_1_switch_wiring), HI(level_1_switch_wiring)
+        EQUB    LO(level_2_switch_wiring), HI(level_2_switch_wiring)
+        EQUB    LO(level_3_switch_wiring), HI(level_3_switch_wiring)
+        EQUB    LO(level_4_switch_wiring), HI(level_4_switch_wiring)
+        EQUB    LO(level_5_switch_wiring), HI(level_5_switch_wiring)
+ENDIF
+
 \ Per-object cached screen coords for the laser beam: when
 \ OBJ_flag_laser_beam_drawn is set in level_obj_flags[X], these hold the
 \ obj_screen_x/obj_screen_y from the frame the beam was XOR-drawn so
@@ -10829,6 +10871,15 @@ ENDIF
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+
+IF _SWITCHES
+\\ Per-switch refractory state, parallel-indexed to level_N_switch_obj_indices.
+\\ $00 = idle (switch is shootable). Non-zero = refractory countdown.
+\\ Decremented each frame by tick_switch_logic; cleared on level start in
+\\ initialise_level_pointers. 8 slots — same cap as the wiring entries.
+.level_switch_state
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+ENDIF
 
 \ ******************************************************************************
 \ * Function: update_all_laser_beams
