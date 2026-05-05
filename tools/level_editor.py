@@ -113,6 +113,29 @@ WALL_HIT_TOLERANCE = 5  # pixels
 BOTTOM_HIT_TOLERANCE = 6  # pixels for bottom boundary handle
 COL_BOTTOM_HANDLE = (100, 180, 255)
 
+# Inspector / palette pane (right strip)
+INSPECTOR_W     = 300   # right-hand strip width (pixels)
+INSPECTOR_PAD   = 6     # inner padding
+FIELD_H         = 26    # height of one inspector field row
+FIELD_LABEL_W   = 90    # label column width within a field
+PALETTE_TILE_W  = 90    # sprite palette tile width
+PALETTE_TILE_H  = 74    # sprite palette tile height
+PALETTE_COLS    = 3
+PALETTE_PAD     = 4
+COL_INSP_BG      = (22, 22, 28)
+COL_INSP_BORDER  = (55, 55, 68)
+COL_INSP_HEADER  = (32, 34, 44)
+COL_FIELD_BG     = (28, 28, 38)
+COL_FIELD_ACTIVE = (38, 42, 60)
+COL_FIELD_LABEL  = (125, 128, 155)
+COL_FIELD_VALUE  = (200, 205, 220)
+COL_FIELD_TEXT   = (255, 255, 140)
+COL_BTN          = (46, 48, 62)
+COL_BTN_HOVER    = (66, 70, 90)
+COL_PALETTE_BG   = (18, 18, 26)
+COL_PALETTE_SEL  = (40, 90, 50)
+COL_PALETTE_ARMED = (55, 140, 65)
+
 # Object types whose gun_aim byte actually drives firing behaviour.
 # thrust.6502 gates firing at try_gun_fire: types < OBJECT_fuel (0-3) for
 # regular guns, plus OBJECT_laser_turret_* ($09..$0C). Lasers reuse the
@@ -884,6 +907,269 @@ BBC_COLOUR_NAMES = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Inspector field schemas
+# ---------------------------------------------------------------------------
+
+class Field:
+    """One editable parameter shown in the inspector pane."""
+    __slots__ = ('id', 'label', 'kind', 'getter', 'setter',
+                 'min', 'max', 'step', 'shift_step', 'fmt',
+                 'hotkey', 'hotkey_2', 'allow_none', 'values', 'target_kind')
+
+    def __init__(self, id, label, kind, getter, setter, *,
+                 min=0, max=255, step=1, shift_step=16, fmt=None,
+                 hotkey=None, hotkey_2=None, allow_none=False,
+                 values=None, target_kind=None):
+        self.id = id; self.label = label; self.kind = kind
+        self.getter = getter; self.setter = setter
+        self.min = min; self.max = max; self.step = step
+        self.shift_step = shift_step; self.fmt = fmt
+        self.hotkey = hotkey; self.hotkey_2 = hotkey_2
+        self.allow_none = allow_none; self.values = values
+        self.target_kind = target_kind
+
+    def get(self, t):
+        return self.getter(t)
+
+    def set(self, t, v):
+        self.setter(t, v)
+
+    def clamp(self, v):
+        if v is None:
+            return v
+        return max(self.min, min(self.max, v))
+
+    def format_value(self, v):
+        if v is None:
+            return "inherit"
+        if self.fmt:
+            try:
+                return self.fmt.format(v)
+            except Exception:
+                pass
+        if self.kind == 'signed_byte':
+            s = v - 256 if v >= 128 else v
+            return f"${v:02X} ({s:+d})"
+        if self.kind == 'byte':
+            return f"${v:02X} ({v})"
+        if self.kind == 'word':
+            if v == 0xFFFF:
+                return "$FFFF (disabled)"
+            return f"${v:04X} ({v})"
+        if self.kind == 'colour':
+            return BBC_COLOUR_NAMES.get(v, str(v))
+        if self.kind == 'enum' and self.values:
+            for lbl, val in self.values:
+                if val == v:
+                    return lbl
+        return str(v)
+
+
+def _g(key):
+    return lambda t: t[key]
+
+def _s(key):
+    return lambda t, v: t.__setitem__(key, v)
+
+
+_GUN_BASE_ANGLES  = [(f"{a}", a) for a in range(0, 32, 4)]
+_GUN_SPREAD_VALS  = [("Tight (1px)", 0), ("Narrow (3px)", 1),
+                     ("Medium (7px)", 2), ("Wide (15px)", 3)]
+_LASER_PHASE_VALS = [(f"{i*8}f", i) for i in range(16)]
+_LASER_DUTY_VALS  = [(f"{i*4+4}f", i) for i in range(16)]
+
+
+def _gun_base_get(t):  return t.get("gun_aim", 0) & 0x1C
+def _gun_spread_get(t): return t.get("gun_aim", 0) & 0x03
+def _gun_base_set(t, v): t["gun_aim"] = (v & 0x1C) | (t.get("gun_aim", 0) & 0x03)
+def _gun_spread_set(t, v): t["gun_aim"] = (t.get("gun_aim", 0) & 0x1C) | (v & 0x03)
+def _laser_phase_get(t): return t.get("gun_aim", 0) & 0x0F
+def _laser_duty_get(t):  return (t.get("gun_aim", 0) >> 4) & 0x0F
+def _laser_phase_set(t, v): t["gun_aim"] = (t.get("gun_aim", 0) & 0xF0) | (v & 0x0F)
+def _laser_duty_set(t, v):  t["gun_aim"] = (t.get("gun_aim", 0) & 0x0F) | ((v & 0x0F) << 4)
+
+
+SCHEMA_LEVEL = [
+    Field("level_num", "Level", "readonly",
+          getter=lambda t: t.level_num + 1, setter=lambda t, v: None),
+    Field("gravity", "Gravity", "signed_byte",
+          getter=lambda t: t.gravity,
+          setter=lambda t, v: setattr(t, 'gravity', v & 0xFF),
+          min=0, max=255, step=1, shift_step=16, hotkey=("[", "]")),
+    Field("landscape_colour", "Land colour", "colour",
+          getter=lambda t: t.landscape_colour,
+          setter=lambda t, v: setattr(t, 'landscape_colour', v),
+          min=0, max=7, allow_none=False),
+    Field("object_colour", "Obj colour", "colour",
+          getter=lambda t: t.object_colour,
+          setter=lambda t, v: setattr(t, 'object_colour', v),
+          min=0, max=7, allow_none=False),
+    Field("no_wrap_y", "No-wrap Y", "word",
+          getter=lambda t: t.no_wrap_y,
+          setter=lambda t, v: setattr(t, 'no_wrap_y', v),
+          min=0, max=0xFFFF, step=1, shift_step=256),
+]
+
+SCHEMA_BAND = [
+    Field("y", "Y threshold", "word",
+          getter=_g("y"), setter=_s("y"),
+          min=0, max=0xFFFE, step=1, shift_step=256),
+    Field("gravity", "Gravity", "signed_byte",
+          getter=_g("gravity"), setter=_s("gravity"),
+          min=0, max=255, step=1, shift_step=16,
+          hotkey=("[", "]"), hotkey_2=(",", ".")),
+    Field("landscape_colour", "Land colour", "colour",
+          getter=_g("landscape_colour"), setter=_s("landscape_colour"),
+          min=0, max=7, allow_none=True, hotkey=("k", "k")),
+    Field("object_colour", "Obj colour", "colour",
+          getter=_g("object_colour"), setter=_s("object_colour"),
+          min=0, max=7, allow_none=True, hotkey=("j", "j")),
+]
+
+SCHEMA_CHECKPOINT = [
+    Field("spawn_x", "Spawn X", "byte",
+          getter=_g("spawn_x"), setter=_s("spawn_x"),
+          min=0, max=255, step=1, shift_step=8),
+    Field("spawn_y", "Spawn Y", "word",
+          getter=_g("spawn_y"), setter=_s("spawn_y"),
+          min=0, max=0xFFFF, step=1, shift_step=32),
+    Field("window_x", "Window X", "byte",
+          getter=_g("window_x"), setter=_s("window_x"),
+          min=0, max=255, step=1, shift_step=8),
+    Field("window_y", "Window Y", "word",
+          getter=_g("window_y"), setter=_s("window_y"),
+          min=0, max=0xFFFF, step=1, shift_step=32),
+]
+
+SCHEMA_GUN = [
+    Field("x", "X", "byte", getter=_g("x"), setter=_s("x"),
+          min=0, max=255, step=1, shift_step=8),
+    Field("y", "Y", "word", getter=_g("y"), setter=_s("y"),
+          min=0, max=0xFFFF, step=1, shift_step=32),
+    Field("gun_aim_base", "Base angle", "enum",
+          getter=_gun_base_get, setter=_gun_base_set,
+          min=0, max=28, step=4, values=_GUN_BASE_ANGLES,
+          hotkey=("[", "]")),
+    Field("gun_aim_spread", "Spread", "enum",
+          getter=_gun_spread_get, setter=_gun_spread_set,
+          min=0, max=3, step=1, values=_GUN_SPREAD_VALS,
+          hotkey=(",", ".")),
+]
+
+SCHEMA_LASER = [
+    Field("x", "X", "byte", getter=_g("x"), setter=_s("x"),
+          min=0, max=255, step=1, shift_step=8),
+    Field("y", "Y", "word", getter=_g("y"), setter=_s("y"),
+          min=0, max=0xFFFF, step=1, shift_step=32),
+    Field("laser_phase", "Phase", "enum",
+          getter=_laser_phase_get, setter=_laser_phase_set,
+          min=0, max=15, step=1, values=_LASER_PHASE_VALS,
+          hotkey=("[", "]")),
+    Field("laser_duty", "Duty", "enum",
+          getter=_laser_duty_get, setter=_laser_duty_set,
+          min=0, max=15, step=1, values=_LASER_DUTY_VALS,
+          hotkey=(",", ".")),
+    Field("laser_dx", "Beam dx", "signed_byte",
+          getter=_g("laser_dx"), setter=_s("laser_dx"),
+          min=-127, max=127, step=1, shift_step=8),
+    Field("laser_dy", "Beam dy", "signed_byte",
+          getter=_g("laser_dy"), setter=_s("laser_dy"),
+          min=-127, max=127, step=1, shift_step=8),
+]
+
+SCHEMA_GRAVITY_WELL = [
+    Field("x", "X", "byte", getter=_g("x"), setter=_s("x"),
+          min=0, max=255, step=1, shift_step=8),
+    Field("y", "Y", "word", getter=_g("y"), setter=_s("y"),
+          min=0, max=0xFFFF, step=1, shift_step=32),
+    Field("well_radius", "Radius", "byte",
+          getter=_g("well_radius"), setter=_s("well_radius"),
+          min=0, max=255, step=1, shift_step=10),
+    Field("well_strength", "Strength", "signed_byte",
+          getter=_g("well_strength"), setter=_s("well_strength"),
+          min=-127, max=127, step=1, shift_step=10,
+          hotkey=("[", "]")),
+]
+
+SCHEMA_BOBBING_MINE = [
+    Field("x", "X", "byte", getter=_g("x"), setter=_s("x"),
+          min=0, max=255, step=1, shift_step=8),
+    Field("y", "Y", "word", getter=_g("y"), setter=_s("y"),
+          min=0, max=0xFFFF, step=1, shift_step=32),
+    Field("mine_amp", "Amplitude", "signed_byte",
+          getter=_g("mine_amp"), setter=_s("mine_amp"),
+          min=-127, max=127, step=1, shift_step=10,
+          hotkey=("[", "]")),
+    Field("mine_phase", "Phase", "byte",
+          getter=_g("mine_phase"), setter=_s("mine_phase"),
+          min=0, max=255, step=1, shift_step=8,
+          hotkey=(",", ".")),
+]
+
+SCHEMA_TELEPORTER = [
+    Field("x", "X", "byte", getter=_g("x"), setter=_s("x"),
+          min=0, max=255, step=1, shift_step=8),
+    Field("y", "Y", "word", getter=_g("y"), setter=_s("y"),
+          min=0, max=0xFFFF, step=1, shift_step=32),
+    Field("teleport_dest", "Destination", "ref",
+          getter=_g("teleport_dest"), setter=_s("teleport_dest"),
+          min=0, max=255, step=1, target_kind="checkpoint",
+          hotkey=("[", "]")),
+]
+
+SCHEMA_DOOR_SWITCH = [
+    Field("x", "X", "byte", getter=_g("x"), setter=_s("x"),
+          min=0, max=255, step=1, shift_step=8),
+    Field("y", "Y", "word", getter=_g("y"), setter=_s("y"),
+          min=0, max=0xFFFF, step=1, shift_step=32),
+    Field("type", "Side", "enum",
+          getter=_g("type"), setter=_s("type"),
+          min=7, max=8, step=1,
+          values=[("Left wall ($07)", 7), ("Right wall ($08)", 8)]),
+]
+
+SCHEMA_SIMPLE = [
+    Field("x", "X", "byte", getter=_g("x"), setter=_s("x"),
+          min=0, max=255, step=1, shift_step=8),
+    Field("y", "Y", "word", getter=_g("y"), setter=_s("y"),
+          min=0, max=0xFFFF, step=1, shift_step=32),
+]
+
+
+def schema_for_selection(editor):
+    """Return (schema, target, level) for the current editor selection."""
+    lv = editor.level
+    mode = editor.mode
+    if mode == "band" and editor.selected_band is not None:
+        bi = editor.selected_band
+        if 0 <= bi < len(lv.bands):
+            return SCHEMA_BAND, lv.bands[bi], lv
+    if mode == "checkpoint" and editor.selected_checkpoint is not None:
+        ci = editor.selected_checkpoint
+        if 0 <= ci < len(lv.checkpoints):
+            return SCHEMA_CHECKPOINT, lv.checkpoints[ci], lv
+    if mode == "object" and editor.selected_object is not None:
+        oi = editor.selected_object
+        if 0 <= oi < len(lv.objects):
+            obj = lv.objects[oi]
+            t = obj["type"]
+            if t in OBJECT_LASER_TYPES:
+                return SCHEMA_LASER, obj, lv
+            if t == OBJECT_GRAVITY_WELL:
+                return SCHEMA_GRAVITY_WELL, obj, lv
+            if t in BOBBING_MINE_TYPES:
+                return SCHEMA_BOBBING_MINE, obj, lv
+            if t == OBJECT_TELEPORTER:
+                return SCHEMA_TELEPORTER, obj, lv
+            if t in OBJECT_FIRING_TYPES:
+                return SCHEMA_GUN, obj, lv
+            if t in (0x07, 0x08):
+                return SCHEMA_DOOR_SWITCH, obj, lv
+            return SCHEMA_SIMPLE, obj, lv
+    return SCHEMA_LEVEL, lv, lv
+
+
 class LevelData:
     """Mutable level state: decoded walls + object list."""
 
@@ -950,7 +1236,7 @@ class Camera:
         self.world_x = 0.0    # world X at left edge of viewport
         self.world_y = 0.0    # world Y at top edge of viewport
         self.zoom = 2.0       # pixels per world Y unit (base scale)
-        self.viewport_w = WINDOW_W
+        self.viewport_w = WINDOW_W - INSPECTOR_W
         self.viewport_h = VIEWPORT_H
 
     @property
@@ -1268,7 +1554,21 @@ class Editor:
         self.panning = False
         self.pan_start = None
 
-        # Object creation menu
+        # Inspector pane state
+        self.inspector_scroll = 0          # field section y-scroll offset (px)
+        self.palette_scroll = 0            # palette section y-scroll offset (px)
+        self.inspector_active_field = None # field id with keyboard focus
+        self.input_focus = False           # True when a text widget owns the keyboard
+        self.text_entry_field = None       # field id being text-edited
+        self.text_entry_buf = ""
+        self.text_entry_orig = None
+        self.inspector_split = 0.25        # fraction of inspector height for fields (palette gets the rest)
+        self.hovered_btn = None            # (field_id, "dec"|"inc"|"val") or None
+        self.palette_armed_type = None     # object type armed for click-to-place
+        self.ref_pick_field = None         # field id expecting a canvas pick
+        self.ref_pick_target = None
+        self.ref_pick_level = None
+        # Legacy obj_menu state (kept briefly for compatibility)
         self.show_obj_menu = False
         self.obj_menu_pos = (0, 0)
         self.obj_menu_world = (0, 0)
@@ -1282,11 +1582,10 @@ class Editor:
 
     def _centre_on_level(self):
         """Centre camera to show the whole level."""
+        self.camera.viewport_w = self.screen.get_width() - INSPECTOR_W
         lv = self.level
         total_h = lv.num_rows
-        # Fit level height into viewport
         self.camera.zoom = max(0.5, self.camera.viewport_h / total_h * 0.9)
-        # Centre horizontally
         visible_w = self.camera.viewport_w / self.camera.x_scale
         self.camera.world_x = (256 - visible_w) / 2
         self.camera.world_y = -total_h * 0.05
@@ -1309,7 +1608,7 @@ class Editor:
                     self.running = False
 
             elif event.type == pygame.VIDEORESIZE:
-                self.camera.viewport_w = event.w
+                self.camera.viewport_w = event.w - INSPECTOR_W
                 self.camera.viewport_h = event.h - TOOLBAR_H - STATUS_H
 
             elif event.type == pygame.KEYDOWN:
@@ -1326,7 +1625,14 @@ class Editor:
 
             elif event.type == pygame.MOUSEWHEEL:
                 mx, my = pygame.mouse.get_pos()
-                if my > TOOLBAR_H and my < self.screen.get_height() - STATUS_H:
+                insp_x = self.screen.get_width() - INSPECTOR_W
+                if mx >= insp_x:
+                    # Scroll inspector pane sections
+                    if my < self._inspector_split_y():
+                        self.inspector_scroll = max(0, self.inspector_scroll - event.y * 20)
+                    else:
+                        self.palette_scroll = max(0, self.palette_scroll - event.y * 20)
+                elif my > TOOLBAR_H and my < self.screen.get_height() - STATUS_H:
                     factor = 1.15 if event.y > 0 else 1 / 1.15
                     self.camera.zoom_at(mx, my, factor)
 
@@ -1347,6 +1653,27 @@ class Editor:
         ctrl = mods & pygame.KMOD_CTRL
         shift = mods & pygame.KMOD_SHIFT
 
+        # Text entry mode: only Enter/Escape/Tab/Backspace pass through
+        if self.input_focus:
+            if event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
+                self._commit_text_entry()
+            elif event.key == pygame.K_ESCAPE:
+                self._cancel_text_entry()
+            elif event.key == pygame.K_BACKSPACE:
+                self.text_entry_buf = self.text_entry_buf[:-1]
+            elif event.unicode and event.unicode.isprintable():
+                self.text_entry_buf += event.unicode
+            return
+
+        # Cancel armed placement or ref-pick on Escape (early return so they
+        # take priority over the mode-specific Escape in the elif chain below)
+        if event.key == pygame.K_ESCAPE and self.palette_armed_type is not None:
+            self.palette_armed_type = None
+            return
+        if event.key == pygame.K_ESCAPE and self.ref_pick_field is not None:
+            self.ref_pick_field = None
+            return
+
         # Level switching: 1-6
         if event.key in (pygame.K_1, pygame.K_2, pygame.K_3,
                          pygame.K_4, pygame.K_5, pygame.K_6):
@@ -1361,6 +1688,7 @@ class Editor:
             self.mode = "wall"
             self.selected_object = None
             self.selected_checkpoint = None
+            self.palette_armed_type = None
 
         elif event.key == pygame.K_l:
             if self.mode == "wall":
@@ -1374,6 +1702,7 @@ class Editor:
             self.dragging_no_wrap = False
             self.line_start = None
             self.selected_object = None
+            self.palette_armed_type = None
 
         elif event.key == pygame.K_o:
             self.mode = "object"
@@ -1391,6 +1720,7 @@ class Editor:
             self.line_start = None
             self.selected_object = None
             self.selected_checkpoint = None
+            self.palette_armed_type = None
 
         elif event.key == pygame.K_g:
             self.show_grid = not self.show_grid
@@ -1426,6 +1756,8 @@ class Editor:
         elif event.key == pygame.K_ESCAPE:
             if self.line_start:
                 self.line_start = None
+            self.palette_armed_type = None
+            self.ref_pick_field = None
 
         elif event.key == pygame.K_DELETE:
             if self.selected_object is not None and self.mode == "object":
@@ -1471,14 +1803,6 @@ class Editor:
 
         elif event.key == pygame.K_F5:
             self._reload_live_sprites()
-
-        elif event.key == pygame.K_ESCAPE:
-            self.selected_object = None
-            self.selected_checkpoint = None
-            self.dragging_wall = None
-            self.dragging_bottom = False
-            self.dragging_no_wrap = False
-            self.show_obj_menu = False
 
     def _reload_live_sprites(self):
         """Reload object sprites from the current live path, or prompt for
@@ -1650,12 +1974,32 @@ class Editor:
         if my > self.screen.get_height() - STATUS_H:
             return
 
-        # Object creation menu
-        if self.show_obj_menu:
-            self._handle_obj_menu_click(mx, my)
+        # Inspector pane click (right strip)
+        if mx >= self.screen.get_width() - INSPECTOR_W:
+            self._handle_inspector_mouse_down(mx, my, event.button)
             return
 
+        # Commit any open text entry when clicking outside inspector
+        if self.input_focus:
+            self._commit_text_entry()
+
         wx, wy = self.camera.screen_to_world(mx, my)
+
+        # Ref-pick mode: route left-clicks on canvas to the picker
+        if self.ref_pick_field is not None and event.button == 1:
+            self._handle_ref_pick_click(mx, my)
+            return
+
+        # Armed placement: left-click drops; SHIFT keeps it armed for rapid placement,
+        # otherwise the palette disarms after a single drop. Right-click cancels.
+        if self.palette_armed_type is not None and event.button == 1:
+            self._place_armed_object(int(wx), int(wy))
+            if not (pygame.key.get_mods() & pygame.KMOD_SHIFT):
+                self.palette_armed_type = None
+            return
+        if self.palette_armed_type is not None and event.button == 3:
+            self.palette_armed_type = None
+            return
 
         # Middle button or right button panning
         if event.button == 2:
@@ -1678,10 +2022,9 @@ class Editor:
                     lv.no_wrap_y = max(0, min(0xFFFE, int(wy)))
                     lv.dirty = True
             elif self.mode == "object":
-                # Open object creation menu
-                self.show_obj_menu = True
-                self.obj_menu_pos = (mx, my)
-                self.obj_menu_world = (int(wx), int(wy))
+                # Right-click: disarm palette if armed; otherwise no-op
+                # (Object placement is done via the palette grid on the right)
+                self.palette_armed_type = None
             elif self.mode == "checkpoint":
                 self._handle_checkpoint_right_click(mx, my)
             elif self.mode == "band":
@@ -1868,6 +2211,7 @@ class Editor:
             new_x = max(0, min(255, int(wx)))
             wall[row] = new_x
             self.level.terrain_dirty = True
+            self.hovered_wall = (side, row)
 
             # Also set nearby rows when dragging vertically for smooth editing
             if self.drag_start_y is not None:
@@ -1915,7 +2259,12 @@ class Editor:
             obj["y"] = max(0, int(wy - grab_dy))
             return
 
-        # Hover detection
+        # Hover detection — update inspector button hover and viewport hover
+        insp_x = self.screen.get_width() - INSPECTOR_W
+        if mx >= insp_x:
+            self._update_inspector_hover(mx, my)
+            return
+        self.hovered_btn = None
         if my > TOOLBAR_H and my < self.screen.get_height() - STATUS_H:
             if self.mode == "wall":
                 self.hovered_no_wrap = self._hit_test_no_wrap(mx, my)
@@ -2306,7 +2655,8 @@ class Editor:
             self.selected_object = None
             self.selected_checkpoint = None
             self.selected_band = None
-        elif mode_x + 65 <= mx < mode_x + 130:
+            self.palette_armed_type = None
+        elif mode_x + 70 <= mx < mode_x + 130:
             self.mode = "object"
             self.dragging_wall = None
             self.dragging_bottom = False
@@ -2314,7 +2664,7 @@ class Editor:
             self.line_start = None
             self.selected_checkpoint = None
             self.selected_band = None
-        elif mode_x + 135 <= mx < mode_x + 195:
+        elif mode_x + 140 <= mx < mode_x + 200:
             self.mode = "checkpoint"
             self.dragging_wall = None
             self.dragging_bottom = False
@@ -2322,7 +2672,8 @@ class Editor:
             self.line_start = None
             self.selected_object = None
             self.selected_band = None
-        elif mode_x + 205 <= mx < mode_x + 265:
+            self.palette_armed_type = None
+        elif mode_x + 210 <= mx < mode_x + 270:
             self.mode = "band"
             self.dragging_wall = None
             self.dragging_bottom = False
@@ -2330,58 +2681,16 @@ class Editor:
             self.line_start = None
             self.selected_object = None
             self.selected_checkpoint = None
-
-        # Wall tool buttons (Draw / Line)
-        tool_x = 660
-        if self.mode == "wall":
-            if tool_x <= mx < tool_x + 50:
-                self.wall_tool = "draw"
-                self.line_start = None
-            elif tool_x + 55 <= mx < tool_x + 105:
-                self.wall_tool = "line"
-                self.line_start = None
-
-        # Colour swatches - hit test on swatch rectangles
-        col_x = 780
-        lv = self.level
-        for attr in ("landscape_colour", "object_colour"):
-            label = "Land" if attr == "landscape_colour" else "Obj"
-            label_w = self.font.size(label)[0]
-            swatch_x = col_x + label_w + 4
-            if swatch_x <= mx < swatch_x + 24:
-                cur = getattr(lv, attr)
-                # Cycle through 1-7 (skip 0/black)
-                new_col = (cur % 7) + 1
-                setattr(lv, attr, new_col)
-                lv.dirty = True
-                self.sprite_cache.clear()
-                return
-            phys_col = getattr(lv, attr)
-            name_w = self.font_small.size(BBC_COLOUR_NAMES[phys_col])[0]
-            col_x = swatch_x + 28 + name_w + 12
-
-        # Gravity +/- buttons
-        grav_x = col_x
-        grav_label_w = self.font.size("Gravity")[0]
-        val_x = grav_x + grav_label_w + 4
-        if val_x <= mx < val_x + 18:  # minus button
-            lv.gravity = (lv.gravity - 1) & 0xFF
-            lv.dirty = True
-            return
-        val_txt_w = self.font.size(f"${lv.gravity:02X}")[0]
-        plus_x = val_x + 22 + val_txt_w + 4
-        if plus_x <= mx < plus_x + 18:  # plus button
-            lv.gravity = (lv.gravity + 1) & 0xFF
-            lv.dirty = True
-            return
+            self.palette_armed_type = None
 
         # Import button
-        import_x = self.screen.get_width() - 200
+        vw = self.screen.get_width() - INSPECTOR_W
+        import_x = vw - 200
         if import_x <= mx < import_x + 90:
             self._import()
 
         # Export button
-        export_x = self.screen.get_width() - 100
+        export_x = vw - 100
         if export_x <= mx < export_x + 90:
             self._export()
 
@@ -2578,8 +2887,7 @@ class Editor:
         self._render_wall_highlights()
         self._render_toolbar()
         self._render_status()
-        if self.show_obj_menu:
-            self._render_obj_menu()
+        self._render_inspector_pane()
 
         pygame.display.flip()
 
@@ -2605,18 +2913,16 @@ class Editor:
         lv = self.level
         cam = self.camera
         screen = self.screen
-        sw = screen.get_width()
+        sw = screen.get_width() - INSPECTOR_W
 
         default_landscape_rgb = hex_to_rgb(BBC_COLOURS[lv.landscape_colour])
         default_rock_rgb = darken(default_landscape_rgb)
-        # In band mode, each row picks its colour from the deepest active band
-        # so the override is visible while authoring.
         band_mode = self.mode == "band" and bool(lv.bands)
 
         y_min, y_max = cam.visible_y_range()
         y_max = min(y_max, lv.num_rows)
 
-        # Clip to viewport
+        # Clip to viewport (exclude inspector strip)
         clip_rect = pygame.Rect(0, VIEWPORT_Y, sw, cam.viewport_h)
         screen.set_clip(clip_rect)
 
@@ -2755,7 +3061,7 @@ class Editor:
         """Draw a grid overlay."""
         cam = self.camera
         screen = self.screen
-        sw = screen.get_width()
+        sw = screen.get_width() - INSPECTOR_W
 
         clip_rect = pygame.Rect(0, VIEWPORT_Y, sw, cam.viewport_h)
         screen.set_clip(clip_rect)
@@ -2794,7 +3100,7 @@ class Editor:
         screen = self.screen
         band_mode = self.mode == "band" and bool(lv.bands)
 
-        clip_rect = pygame.Rect(0, VIEWPORT_Y, screen.get_width(), cam.viewport_h)
+        clip_rect = pygame.Rect(0, VIEWPORT_Y, screen.get_width() - INSPECTOR_W, cam.viewport_h)
         screen.set_clip(clip_rect)
 
         for i, obj in enumerate(lv.objects):
@@ -3085,7 +3391,7 @@ class Editor:
         lv = self.level
         cam = self.camera
         screen = self.screen
-        sw = screen.get_width()
+        sw = screen.get_width() - INSPECTOR_W
 
         clip_rect = pygame.Rect(0, VIEWPORT_Y, sw, cam.viewport_h)
         screen.set_clip(clip_rect)
@@ -3183,7 +3489,7 @@ class Editor:
             return
         cam = self.camera
         screen = self.screen
-        sw = screen.get_width()
+        sw = screen.get_width() - INSPECTOR_W
         for i, band in enumerate(lv.bands):
             _, sy = cam.world_to_screen(0, band["y"])
             y = int(sy)
@@ -3208,7 +3514,7 @@ class Editor:
 
         cam = self.camera
         screen = self.screen
-        sw = screen.get_width()
+        sw = screen.get_width() - INSPECTOR_W
 
         # Bottom boundary handle — always visible in wall mode
         lv = self.level
@@ -3292,20 +3598,20 @@ class Editor:
         if row < 0 or row >= len(wall):
             return
 
-        # Highlight a range of rows around the hovered point
-        for r in range(max(0, row - 2), min(len(wall), row + 3)):
-            sx, sy = cam.world_to_screen(wall[r], r)
-            _, sy_next = cam.world_to_screen(0, r + 1)
-            h = max(1, int(sy_next - sy))
-            pygame.draw.rect(screen, COL_WALL_HIGHLIGHT,
-                             (int(sx) - 3, int(sy), 6, h))
+        # Highlight just the selected row; colour-code left vs right wall
+        col = (255, 120, 120) if side == "left" else (120, 200, 255)
+        sx, sy = cam.world_to_screen(wall[row], row)
+        _, sy_next = cam.world_to_screen(0, row + 1)
+        h = max(1, int(sy_next - sy))
+        pygame.draw.rect(screen, col, (int(sx) - 3, int(sy), 6, h))
 
     def _render_toolbar(self):
         """Draw the top toolbar."""
         screen = self.screen
         sw = screen.get_width()
-        pygame.draw.rect(screen, COL_TOOLBAR, (0, 0, sw, TOOLBAR_H))
-        pygame.draw.line(screen, (60, 60, 60), (0, TOOLBAR_H - 1), (sw, TOOLBAR_H - 1))
+        vw = sw - INSPECTOR_W  # usable viewport width (excludes inspector strip)
+        pygame.draw.rect(screen, COL_TOOLBAR, (0, 0, vw, TOOLBAR_H))
+        pygame.draw.line(screen, (60, 60, 60), (0, TOOLBAR_H - 1), (vw, TOOLBAR_H - 1))
 
         # Level tabs
         tab_x = 10
@@ -3324,7 +3630,7 @@ class Editor:
 
         # Mode buttons
         mode_x = 380
-        for mode_name, offset in [("Wall", 0), ("Object", 65), ("Chkpt", 135), ("Band", 205)]:
+        for mode_name, offset in [("Wall", 0), ("Object", 70), ("Chkpt", 140), ("Band", 210)]:
             col = COL_TOOLBAR_ACTIVE if self.mode == mode_name.lower() \
                 or (mode_name == "Chkpt" and self.mode == "checkpoint") else COL_TOOLBAR
             rect = pygame.Rect(mode_x + offset, 5, 60, 30)
@@ -3333,59 +3639,16 @@ class Editor:
             txt = self.font.render(mode_name, True, COL_TOOLBAR_TEXT)
             screen.blit(txt, (mode_x + offset + 8, 12))
 
-        # Wall tool buttons (Draw / Line) - only shown in wall mode
-        if self.mode == "wall":
-            tool_x = 660
-            for tool_name, offset in [("Draw", 0), ("Line", 55)]:
-                col = COL_TOOLBAR_ACTIVE if self.wall_tool == tool_name.lower() else COL_TOOLBAR
-                rect = pygame.Rect(tool_x + offset, 5, 50, 30)
-                pygame.draw.rect(screen, col, rect, border_radius=4)
-                pygame.draw.rect(screen, (80, 80, 80), rect, 1, border_radius=4)
-                txt = self.font.render(tool_name, True, COL_TOOLBAR_TEXT)
-                screen.blit(txt, (tool_x + offset + 6, 12))
-
-        # Colour swatches
-        col_x = 780
-        lv = self.level
-        for label, phys_col in [("Land", lv.landscape_colour),
-                                ("Obj", lv.object_colour)]:
-            txt = self.font.render(label, True, COL_TOOLBAR_TEXT)
-            screen.blit(txt, (col_x, 12))
-            swatch_x = col_x + txt.get_width() + 4
-            swatch_rgb = hex_to_rgb(BBC_COLOURS[phys_col])
-            rect = pygame.Rect(swatch_x, 8, 24, 24)
-            pygame.draw.rect(screen, swatch_rgb, rect, border_radius=3)
-            pygame.draw.rect(screen, (120, 120, 120), rect, 1, border_radius=3)
-            name_txt = self.font_small.render(BBC_COLOUR_NAMES[phys_col], True,
-                                              COL_TOOLBAR_TEXT)
-            screen.blit(name_txt, (swatch_x + 28, 14))
-            col_x = swatch_x + 28 + name_txt.get_width() + 12
-
-        # Gravity control
-        grav_x = col_x
-        txt = self.font.render("Gravity", True, COL_TOOLBAR_TEXT)
-        screen.blit(txt, (grav_x, 12))
-        val_x = grav_x + txt.get_width() + 4
-        # - button
-        rect = pygame.Rect(val_x, 8, 18, 24)
-        pygame.draw.rect(screen, (50, 50, 50), rect, border_radius=3)
-        pygame.draw.rect(screen, (80, 80, 80), rect, 1, border_radius=3)
-        txt = self.font.render("-", True, COL_TOOLBAR_TEXT)
-        screen.blit(txt, (val_x + 5, 10))
-        # value (signed: bit 7 sign-extends into gravity_SIGN at level init)
-        signed = lv.gravity - 256 if lv.gravity >= 128 else lv.gravity
-        val_txt = self.font.render(f"${lv.gravity:02X} ({signed:+d})", True, COL_TOOLBAR_TEXT)
-        screen.blit(val_txt, (val_x + 22, 12))
-        # + button
-        plus_x = val_x + 22 + val_txt.get_width() + 4
-        rect = pygame.Rect(plus_x, 8, 18, 24)
-        pygame.draw.rect(screen, (50, 50, 50), rect, border_radius=3)
-        pygame.draw.rect(screen, (80, 80, 80), rect, 1, border_radius=3)
-        txt = self.font.render("+", True, COL_TOOLBAR_TEXT)
-        screen.blit(txt, (plus_x + 4, 10))
+        # Current filename (centred between mode buttons and Import/Export)
+        fname = Path(self.last_file_path).name if self.last_file_path else "(unsaved)"
+        if self._has_unsaved_changes():
+            fname += "*"
+        fname_txt = self.font.render(fname, True, (220, 220, 160))
+        fname_x = (vw - 200 + 720) // 2 - fname_txt.get_width() // 2
+        screen.blit(fname_txt, (fname_x, 12))
 
         # Import button
-        import_x = sw - 200
+        import_x = vw - 200
         rect = pygame.Rect(import_x, 5, 90, 30)
         pygame.draw.rect(screen, (40, 40, 60), rect, border_radius=4)
         pygame.draw.rect(screen, (80, 80, 80), rect, 1, border_radius=4)
@@ -3393,7 +3656,7 @@ class Editor:
         screen.blit(txt, (import_x + 16, 12))
 
         # Export button
-        export_x = sw - 100
+        export_x = vw - 100
         rect = pygame.Rect(export_x, 5, 90, 30)
         pygame.draw.rect(screen, (40, 60, 40), rect, border_radius=4)
         pygame.draw.rect(screen, (80, 80, 80), rect, 1, border_radius=4)
@@ -3401,119 +3664,58 @@ class Editor:
         screen.blit(txt, (export_x + 18, 12))
 
     def _render_status(self):
-        """Draw the status bar."""
+        """Draw the slimmed status bar: mode, level, file, coords, transient hint."""
         screen = self.screen
-        sw = screen.get_width()
+        vw = screen.get_width() - INSPECTOR_W
         sh = screen.get_height()
-        pygame.draw.rect(screen, COL_STATUS_BG, (0, sh - STATUS_H, sw, STATUS_H))
+        pygame.draw.rect(screen, COL_STATUS_BG, (0, sh - STATUS_H, vw, STATUS_H))
 
         mx, my = pygame.mouse.get_pos()
         wx, wy = self.camera.screen_to_world(mx, my)
 
+        lv = self.level
         mode_label = self.mode.title()
         if self.mode == "wall":
             mode_label += f" ({self.wall_tool.title()})"
-        parts = [f"Mode: {mode_label}"]
-        parts.append(f"X={int(wx)}  Y={int(wy)}")
 
-        lv = self.level
-        row = int(wy)
-        if 0 <= row < lv.num_rows:
-            lx = lv.left_wall[row] if row < len(lv.left_wall) else None
-            rx = lv.right_wall[row] if row < len(lv.right_wall) else None
-            if lx is not None and rx is not None:
-                parts.append(f"Left=${lx:02X}  Right=${rx:02X}")
+        fname = Path(self.last_file_path).name if self.last_file_path else "(unsaved)"
+        if self._has_unsaved_changes():
+            fname += "*"
 
-        parts.append(f"Rows: {lv.num_rows}")
-        parts.append(f"Zoom: {self.camera.zoom:.1f}x")
+        parts = [
+            f"[{mode_label}]",
+            f"[Level {lv.level_num + 1}]",
+            f"[{fname}]",
+            f"L={int(wx)} R={int(wy)}",
+        ]
 
-        if self.sprite_cache.live_path:
-            parts.append(f"Sprites: {Path(self.sprite_cache.live_path).name} (F5 reload)")
-
-        if self.dragging_bottom or self.hovered_bottom:
-            parts.append("Drag to resize landscape")
-
-        if self.dragging_no_wrap or self.hovered_no_wrap:
-            parts.append("Drag no-wrap line (right-click to remove)")
-        elif self.mode == "wall" and lv.no_wrap_y >= 0xFFFF:
-            parts.append("Right-click to place no-wrap line")
-
-        if self.line_start:
+        # Transient hint (rightmost)
+        hint = ""
+        if self.input_focus:
+            hint = "typing — Enter to commit, Esc to cancel"
+        elif self.ref_pick_field is not None:
+            hint = "click a checkpoint on canvas to pick"
+        elif self.palette_armed_type is not None:
+            name = OBJECT_TYPE_NAMES.get(self.palette_armed_type,
+                                         f"${self.palette_armed_type:02X}")
+            hint = f"Placing: {name} — click to drop (Shift = keep armed), right-click/Esc to cancel"
+        elif self.line_start:
             side, r, x = self.line_start
-            parts.append(f"Line: {side} from row {r} x={x} -- click to set end")
+            hint = f"Line: {side} from row {r} x={x} — click to set end"
+        elif self.dragging_bottom or self.hovered_bottom:
+            hint = "Drag to resize landscape"
+        elif self.dragging_no_wrap or self.hovered_no_wrap:
+            hint = "Drag no-wrap line (right-click to remove)"
+        elif self.mode == "wall" and lv.no_wrap_y >= 0xFFFF:
+            hint = "Right-click to place no-wrap line"
 
-        if self.selected_object is not None:
-            obj = lv.objects[self.selected_object]
-            name = OBJECT_TYPE_NAMES.get(obj["type"], f"?{obj['type']}")
-            parts.append(f"Selected: {name} @ ({obj['x']}, {obj['y']})")
-            if obj["type"] in OBJECT_LASER_TYPES:
-                aim = obj.get("gun_aim", 0x00)
-                phase_idx = aim & 0x0F
-                duty_idx = (aim & 0xF0) >> 4
-                duty_frames = duty_idx * 4 + 4
-                phase_frames = phase_idx * 8
-                dx = obj.get("laser_dx", 0)
-                dy = obj.get("laser_dy", 0)
-                parts.append(
-                    f"dx={dx:+d} dy={dy:+d} duty={duty_frames}f phase={phase_frames}f  "
-                    f"(drag tip; \\ resets; [/] phase  ,/. duty)")
-            elif obj["type"] == OBJECT_GRAVITY_WELL:
-                r = obj.get("well_radius", 0)
-                s = obj.get("well_strength", 0)
-                parts.append(
-                    f"r={r} s={s:+d}  (drag handle to resize; [/] strength ±1, shift = ±10)")
-            elif obj["type"] in BOBBING_MINE_TYPES:
-                phase = obj.get("mine_phase", 0)
-                amp = obj.get("mine_amp", 0)
-                axis = "H" if obj["type"] == OBJECT_BOBBING_MINE_HORIZONTAL else "V"
-                parts.append(
-                    f"axis={axis} phase=${phase:02X} amp={amp:+d}  ([/] amp ±1 (shift ±10)  ,/. phase ±1 (shift ±8))")
-            elif obj["type"] == OBJECT_TELEPORTER:
-                dest = obj.get("teleport_dest", 0)
-                ncp = len(lv.checkpoints)
-                if ncp > 0 and dest < ncp:
-                    cp = lv.checkpoints[dest]
-                    parts.append(
-                        f"dest=#{dest}/{ncp} -> ({cp['spawn_x']}, {cp['spawn_y']})  ([/] cycle dest)")
-                else:
-                    parts.append(
-                        f"dest=#{dest} (out of range; level has {ncp} checkpoint(s))")
-            elif obj["type"] in OBJECT_FIRING_TYPES:
-                aim = obj.get("gun_aim", 0x00)
-                base = aim & 0x1C
-                spread_idx = aim & 0x03
-                mask = GUN_SPREAD_MASKS[spread_idx]
-                parts.append(
-                    f"aim=${aim:02X} base={base} spread=${mask:02X}  ([/] rotate  ,/. spread)")
+        status_left = "  ".join(parts)
+        txt_left = self.font_small.render(status_left, True, COL_STATUS_TEXT)
+        screen.blit(txt_left, (10, sh - STATUS_H + 5))
 
-        if self.selected_checkpoint is not None and self.selected_checkpoint < len(lv.checkpoints):
-            cp = lv.checkpoints[self.selected_checkpoint]
-            parts.append(f"CP{self.selected_checkpoint}: spawn=({cp['spawn_x']}, {cp['spawn_y']})  "
-                         f"window=({cp['window_x']}, {cp['window_y']})")
-
-        if self.mode == "checkpoint":
-            parts.append(f"{len(lv.checkpoints)} checkpoint(s)")
-
-        if self.mode == "band":
-            if self.selected_band is not None and self.selected_band < len(lv.bands):
-                b = lv.bands[self.selected_band]
-                g = b["gravity"]
-                g_signed = g - 256 if g >= 128 else g
-                lc = b.get("landscape_colour")
-                oc = b.get("object_colour")
-                lc_txt = "inherit" if lc is None else f"{lc} ({BBC_COLOUR_NAMES[lc]})"
-                oc_txt = "inherit" if oc is None else f"{oc} ({BBC_COLOUR_NAMES[oc]})"
-                parts.append(
-                    f"Band Y={b['y']}  gravity=${g:02X} ({g_signed:+d})  "
-                    f"land={lc_txt}  obj={oc_txt}  "
-                    f"([/] gravity, K/J colours, Del to remove)")
-            else:
-                parts.append(
-                    f"{len(lv.bands)} band(s)  (click to select; right-click empty to add)")
-
-        status = "  |  ".join(parts)
-        txt = self.font_small.render(status, True, COL_STATUS_TEXT)
-        screen.blit(txt, (10, sh - STATUS_H + 5))
+        if hint:
+            txt_hint = self.font_small.render(hint, True, (200, 200, 100))
+            screen.blit(txt_hint, (vw - txt_hint.get_width() - 10, sh - STATUS_H + 5))
 
     def _render_obj_menu(self):
         """Draw the object creation popup menu."""
@@ -3539,6 +3741,641 @@ class Editor:
             name = OBJECT_TYPE_NAMES[t]
             txt = self.font_small.render(name, True, COL_TOOLBAR_TEXT)
             screen.blit(txt, (mx + 8, iy + 3))
+
+    # -------------------------------------------------------------------
+    # Inspector pane
+    # -------------------------------------------------------------------
+
+    def _inspector_split_y(self):
+        sh = self.screen.get_height()
+        return int(TOOLBAR_H + (sh - TOOLBAR_H - STATUS_H) * self.inspector_split)
+
+    def _render_inspector_pane(self):
+        screen = self.screen
+        sw = screen.get_width()
+        sh = screen.get_height()
+        insp_x = sw - INSPECTOR_W
+        split_y = self._inspector_split_y()
+
+        # Background + border
+        pygame.draw.rect(screen, COL_INSP_BG, (insp_x, 0, INSPECTOR_W, sh))
+        pygame.draw.line(screen, COL_INSP_BORDER, (insp_x, 0), (insp_x, sh))
+
+        schema, target, level = schema_for_selection(self)
+
+        # Header strip
+        pygame.draw.rect(screen, COL_INSP_HEADER, (insp_x, TOOLBAR_H, INSPECTOR_W, 18))
+        hdr_text = self._selection_label()
+        hdr = self.font_small.render(hdr_text, True, (170, 175, 200))
+        screen.blit(hdr, (insp_x + INSPECTOR_PAD, TOOLBAR_H + 2))
+
+        field_top = TOOLBAR_H + 19
+        insp_h = split_y - field_top
+
+        # Clip to fields section
+        clip = pygame.Rect(insp_x, field_top, INSPECTOR_W, insp_h)
+        screen.set_clip(clip)
+
+        y = field_top - self.inspector_scroll
+        max_scroll = max(0, len(schema) * FIELD_H - insp_h)
+        self.inspector_scroll = min(self.inspector_scroll, max_scroll)
+
+        for field in schema:
+            if y + FIELD_H > field_top and y < split_y:
+                rect = pygame.Rect(insp_x + 2, y, INSPECTOR_W - 4, FIELD_H)
+                self._render_inspector_field(rect, field, target, level)
+            y += FIELD_H
+
+        screen.set_clip(None)
+
+        # Divider
+        pygame.draw.line(screen, COL_INSP_BORDER, (insp_x, split_y), (sw, split_y))
+
+        # Palette / mode tools section
+        self._render_palette_section(insp_x, split_y + 1, sh - STATUS_H)
+
+    def _selection_label(self):
+        lv = self.level
+        if self.mode == "band" and self.selected_band is not None:
+            bi = self.selected_band
+            if 0 <= bi < len(lv.bands):
+                return f"Band #{bi}  Y={lv.bands[bi]['y']}"
+        if self.mode == "checkpoint" and self.selected_checkpoint is not None:
+            ci = self.selected_checkpoint
+            if 0 <= ci < len(lv.checkpoints):
+                return f"Checkpoint #{ci}"
+        if self.mode == "object" and self.selected_object is not None:
+            oi = self.selected_object
+            if 0 <= oi < len(lv.objects):
+                t = lv.objects[oi]["type"]
+                name = OBJECT_TYPE_NAMES.get(t, f'${t:02X}')
+                return f"{name}  #{oi} (${t:02X})"
+        return f"Level {lv.level_num + 1}"
+
+    def _render_inspector_field(self, rect, field, target, level):
+        screen = self.screen
+        is_active = (field.id == self.inspector_active_field)
+        is_text = (field.id == self.text_entry_field)
+
+        bg = COL_FIELD_ACTIVE if is_active else COL_FIELD_BG
+        pygame.draw.rect(screen, bg, rect)
+        # Subtle bottom border
+        pygame.draw.line(screen, COL_INSP_BORDER,
+                         (rect.x, rect.bottom - 1), (rect.right, rect.bottom - 1))
+
+        # Label
+        lbl = self.font_small.render(field.label, True, COL_FIELD_LABEL)
+        screen.blit(lbl, (rect.x + 4, rect.y + (FIELD_H - lbl.get_height()) // 2))
+
+        # Widget
+        wx = rect.x + FIELD_LABEL_W
+        ww = rect.right - wx - 4
+        widget_rect = pygame.Rect(wx, rect.y + 2, ww, FIELD_H - 4)
+
+        try:
+            val = field.get(target)
+        except Exception:
+            val = 0
+
+        if field.kind == "colour":
+            self._render_colour_widget(widget_rect, field, val)
+        elif field.kind in ("enum", "ref"):
+            self._render_cycle_widget(widget_rect, field, val, target, level)
+        elif field.kind == "readonly":
+            txt = self.font_small.render(str(val), True, COL_FIELD_VALUE)
+            screen.blit(txt, (widget_rect.x + 2, widget_rect.y + 3))
+        else:
+            self._render_spinner_widget(widget_rect, field, val, is_text)
+
+    def _render_spinner_widget(self, rect, field, val, is_text):
+        screen = self.screen
+        btn_w = 16
+        dec_rect = pygame.Rect(rect.x, rect.y, btn_w, rect.height)
+        inc_rect = pygame.Rect(rect.right - btn_w, rect.y, btn_w, rect.height)
+        val_rect = pygame.Rect(dec_rect.right + 1, rect.y,
+                               inc_rect.x - dec_rect.right - 2, rect.height)
+
+        hover_dec = (self.hovered_btn == (field.id, "dec"))
+        hover_inc = (self.hovered_btn == (field.id, "inc"))
+        hover_val = (self.hovered_btn == (field.id, "val"))
+
+        pygame.draw.rect(screen, COL_BTN_HOVER if hover_dec else COL_BTN,
+                         dec_rect, border_radius=2)
+        pygame.draw.rect(screen, COL_BTN_HOVER if hover_inc else COL_BTN,
+                         inc_rect, border_radius=2)
+        pygame.draw.rect(screen, (40, 44, 58) if hover_val else (32, 35, 48),
+                         val_rect, border_radius=2)
+
+        m = self.font_small.render("-", True, COL_FIELD_VALUE)
+        screen.blit(m, (dec_rect.x + (btn_w - m.get_width()) // 2,
+                        dec_rect.y + (dec_rect.height - m.get_height()) // 2))
+        p = self.font_small.render("+", True, COL_FIELD_VALUE)
+        screen.blit(p, (inc_rect.x + (btn_w - p.get_width()) // 2,
+                        inc_rect.y + (inc_rect.height - p.get_height()) // 2))
+
+        if is_text:
+            text = self.text_entry_buf + "|"
+            col = COL_FIELD_TEXT
+        else:
+            text = field.format_value(val)
+            col = COL_FIELD_VALUE
+
+        screen.set_clip(val_rect)
+        txt = self.font_small.render(text, True, col)
+        screen.blit(txt, (val_rect.x + 3, val_rect.y + (val_rect.height - txt.get_height()) // 2))
+        screen.set_clip(None)
+
+    def _render_colour_widget(self, rect, field, val):
+        screen = self.screen
+        cell_count = 9 if field.allow_none else 8
+        cell_w = max(4, rect.width // cell_count)
+        for ci in range(cell_count):
+            cx = rect.x + ci * cell_w
+            cr = pygame.Rect(cx, rect.y, max(1, cell_w - 1), rect.height)
+            if field.allow_none and ci == 8:
+                pygame.draw.rect(screen, (35, 35, 48), cr, border_radius=2)
+                d = self.font_small.render("—", True, (110, 110, 140))
+                screen.blit(d, (cr.x + (cr.width - d.get_width()) // 2,
+                                cr.y + (cr.height - d.get_height()) // 2))
+                if val is None:
+                    pygame.draw.rect(screen, (220, 220, 220), cr, 2, border_radius=2)
+            else:
+                col = hex_to_rgb(BBC_COLOURS[ci])
+                pygame.draw.rect(screen, col, cr, border_radius=2)
+                if ci == 0:
+                    pygame.draw.rect(screen, (60, 60, 72), cr, 1, border_radius=2)
+                if val == ci:
+                    pygame.draw.rect(screen, (255, 255, 255), cr, 2, border_radius=2)
+
+    def _render_cycle_widget(self, rect, field, val, target, level):
+        screen = self.screen
+        if field.kind == "ref":
+            btn_w = 38
+            pick_rect = pygame.Rect(rect.right - btn_w, rect.y, btn_w, rect.height)
+            val_rect = pygame.Rect(rect.x, rect.y, rect.width - btn_w - 2, rect.height)
+            if field.target_kind == "checkpoint" and level.checkpoints:
+                n = len(level.checkpoints)
+                dest = val if isinstance(val, int) else 0
+                dest = dest % n if n else 0
+                cp = level.checkpoints[dest]
+                val_text = f"CP{dest}: {cp['spawn_x']},{cp['spawn_y']}"
+            else:
+                val_text = str(val)
+            screen.set_clip(val_rect)
+            txt = self.font_small.render(val_text, True, COL_FIELD_VALUE)
+            screen.blit(txt, (val_rect.x + 2, val_rect.y + (val_rect.height - txt.get_height()) // 2))
+            screen.set_clip(None)
+            armed = (self.ref_pick_field == field.id)
+            btn_col = COL_PALETTE_ARMED if armed else COL_BTN
+            pygame.draw.rect(screen, btn_col, pick_rect, border_radius=2)
+            p = self.font_small.render("Pick", True, COL_FIELD_VALUE)
+            screen.blit(p, (pick_rect.x + (pick_rect.width - p.get_width()) // 2,
+                            pick_rect.y + (pick_rect.height - p.get_height()) // 2))
+        else:
+            btn_w = 16
+            dec = pygame.Rect(rect.x, rect.y, btn_w, rect.height)
+            inc = pygame.Rect(rect.right - btn_w, rect.y, btn_w, rect.height)
+            mid = pygame.Rect(dec.right + 1, rect.y, inc.x - dec.right - 2, rect.height)
+            pygame.draw.rect(screen, COL_BTN, dec, border_radius=2)
+            pygame.draw.rect(screen, COL_BTN, inc, border_radius=2)
+            pygame.draw.rect(screen, COL_FIELD_BG, mid, border_radius=2)
+            l = self.font_small.render("◄", True, COL_FIELD_VALUE)
+            r = self.font_small.render("►", True, COL_FIELD_VALUE)
+            screen.blit(l, (dec.x + (dec.width - l.get_width()) // 2,
+                            dec.y + (dec.height - l.get_height()) // 2))
+            screen.blit(r, (inc.x + (inc.width - r.get_width()) // 2,
+                            inc.y + (inc.height - r.get_height()) // 2))
+            val_text = field.format_value(val)
+            screen.set_clip(mid)
+            t = self.font_small.render(val_text, True, COL_FIELD_VALUE)
+            screen.blit(t, (mid.x + (mid.width - t.get_width()) // 2,
+                            mid.y + (mid.height - t.get_height()) // 2))
+            screen.set_clip(None)
+
+    # -------------------------------------------------------------------
+    # Palette section
+    # -------------------------------------------------------------------
+
+    def _render_palette_section(self, insp_x, y_start, y_end):
+        screen = self.screen
+        pane_w = INSPECTOR_W
+        pane_h = y_end - y_start
+
+        pygame.draw.rect(screen, COL_PALETTE_BG,
+                         (insp_x, y_start, pane_w, pane_h))
+
+        if self.mode == "object":
+            self._render_sprite_palette(insp_x, y_start, y_end)
+        elif self.mode == "band":
+            self._render_palette_add_tile(insp_x, y_start, "Add band  (right-click)", "band")
+        elif self.mode == "checkpoint":
+            self._render_palette_add_tile(insp_x, y_start, "Add checkpoint  (right-click)", "checkpoint")
+        else:
+            # Wall tools
+            self._render_wall_tool_palette(insp_x, y_start, y_end)
+
+    def _render_palette_add_tile(self, insp_x, y_start, label, kind):
+        screen = self.screen
+        tile_rect = pygame.Rect(insp_x + PALETTE_PAD, y_start + PALETTE_PAD,
+                                INSPECTOR_W - PALETTE_PAD * 2, 36)
+        pygame.draw.rect(screen, COL_BTN, tile_rect, border_radius=4)
+        pygame.draw.rect(screen, COL_INSP_BORDER, tile_rect, 1, border_radius=4)
+        txt = self.font_small.render(label, True, COL_FIELD_VALUE)
+        screen.blit(txt, (tile_rect.x + (tile_rect.width - txt.get_width()) // 2,
+                          tile_rect.y + (tile_rect.height - txt.get_height()) // 2))
+
+    def _render_wall_tool_palette(self, insp_x, y_start, y_end):
+        screen = self.screen
+        tools = [("Draw", "draw"), ("Line", "line")]
+        tile_w = (INSPECTOR_W - PALETTE_PAD * (len(tools) + 1)) // len(tools)
+        for i, (label, tool_id) in enumerate(tools):
+            tx = insp_x + PALETTE_PAD + i * (tile_w + PALETTE_PAD)
+            tile_rect = pygame.Rect(tx, y_start + PALETTE_PAD, tile_w, 36)
+            active = (self.wall_tool == tool_id)
+            bg = COL_PALETTE_SEL if active else COL_BTN
+            pygame.draw.rect(screen, bg, tile_rect, border_radius=4)
+            pygame.draw.rect(screen, COL_INSP_BORDER, tile_rect, 1, border_radius=4)
+            txt = self.font_small.render(label, True, COL_FIELD_VALUE)
+            screen.blit(txt, (tile_rect.x + (tile_rect.width - txt.get_width()) // 2,
+                              tile_rect.y + (tile_rect.height - txt.get_height()) // 2))
+
+    def _render_sprite_palette(self, insp_x, y_start, y_end):
+        screen = self.screen
+        lv = self.level
+        types = sorted(OBJECT_TYPE_NAMES.keys())
+        tw = PALETTE_TILE_W
+        th = PALETTE_TILE_H
+        cols = PALETTE_COLS
+        pad = PALETTE_PAD
+
+        clip = pygame.Rect(insp_x, y_start, INSPECTOR_W, y_end - y_start)
+        screen.set_clip(clip)
+
+        max_scroll = max(0, math.ceil(len(types) / cols) * (th + pad) - (y_end - y_start))
+        self.palette_scroll = min(self.palette_scroll, max_scroll)
+
+        for idx, obj_type in enumerate(types):
+            row = idx // cols
+            col = idx % cols
+            tx = insp_x + pad + col * (tw + pad)
+            ty = y_start + pad + row * (th + pad) - self.palette_scroll
+
+            if ty + th < y_start or ty > y_end:
+                continue
+
+            tile_rect = pygame.Rect(tx, ty, tw, th)
+            armed = (self.palette_armed_type == obj_type)
+            bg = COL_PALETTE_ARMED if armed else (35, 38, 52)
+            pygame.draw.rect(screen, bg, tile_rect, border_radius=4)
+            pygame.draw.rect(screen, COL_INSP_BORDER if not armed else (100, 180, 100),
+                             tile_rect, 1, border_radius=4)
+
+            label_h = 16
+            sprite_area = pygame.Rect(tile_rect.x + 2, tile_rect.y + 2,
+                                      tile_rect.width - 4,
+                                      tile_rect.height - label_h - 2)
+            label_area = pygame.Rect(tile_rect.x + 2, sprite_area.bottom,
+                                     tile_rect.width - 4, label_h)
+
+            # Sprite — fitted entirely within sprite_area, centred
+            sprite = self.sprite_cache.get(obj_type, lv)
+            if sprite is not None:
+                sw_sp = sprite.get_width()
+                sh_sp = sprite.get_height()
+                scale = min(sprite_area.width / max(1, sw_sp),
+                            sprite_area.height / max(1, sh_sp))
+                if scale <= 0:
+                    scale = 1.0
+                dw = max(1, int(sw_sp * scale))
+                dh = max(1, int(sh_sp * scale))
+                scaled = pygame.transform.scale(sprite, (dw, dh))
+                sx = sprite_area.x + (sprite_area.width - dw) // 2
+                sy = sprite_area.y + (sprite_area.height - dh) // 2
+                prev_clip = screen.get_clip()
+                screen.set_clip(sprite_area)
+                screen.blit(scaled, (sx, sy))
+                screen.set_clip(prev_clip)
+
+            # Object name (truncated to fit label_area)
+            name = OBJECT_TYPE_NAMES.get(obj_type, f"${obj_type:02X}")
+            txt_col = (200, 255, 200) if armed else (160, 165, 185)
+            txt = self.font_small.render(name, True, txt_col)
+            while txt.get_width() > label_area.width and len(name) > 1:
+                name = name[:-1]
+                txt = self.font_small.render(name + "…", True, txt_col)
+            prev_clip = screen.get_clip()
+            screen.set_clip(label_area)
+            screen.blit(txt, (label_area.x + (label_area.width - txt.get_width()) // 2,
+                              label_area.y + (label_area.height - txt.get_height()) // 2))
+            screen.set_clip(prev_clip)
+
+        screen.set_clip(None)
+
+    # -------------------------------------------------------------------
+    # Inspector event handling
+    # -------------------------------------------------------------------
+
+    def _update_inspector_hover(self, mx, my):
+        """Update hovered_btn while mouse is in the inspector pane."""
+        sw = self.screen.get_width()
+        insp_x = sw - INSPECTOR_W
+        split_y = self._inspector_split_y()
+        if my >= split_y:
+            self.hovered_btn = None
+            return
+
+        schema, target, level = schema_for_selection(self)
+        field_top = TOOLBAR_H + 19
+        y = field_top - self.inspector_scroll
+        for field in schema:
+            if field.kind not in ("byte", "signed_byte", "word"):
+                y += FIELD_H
+                continue
+            rect = pygame.Rect(insp_x + 2, y, INSPECTOR_W - 4, FIELD_H)
+            if rect.collidepoint(mx, my):
+                wx = rect.x + FIELD_LABEL_W
+                ww = rect.right - wx - 4
+                w_rect = pygame.Rect(wx, rect.y + 2, ww, FIELD_H - 4)
+                btn_w = 16
+                dec = pygame.Rect(w_rect.x, w_rect.y, btn_w, w_rect.height)
+                inc = pygame.Rect(w_rect.right - btn_w, w_rect.y, btn_w, w_rect.height)
+                val_r = pygame.Rect(dec.right + 1, w_rect.y, inc.x - dec.right - 2, w_rect.height)
+                if dec.collidepoint(mx, my):
+                    self.hovered_btn = (field.id, "dec")
+                elif inc.collidepoint(mx, my):
+                    self.hovered_btn = (field.id, "inc")
+                elif val_r.collidepoint(mx, my):
+                    self.hovered_btn = (field.id, "val")
+                else:
+                    self.hovered_btn = None
+                return
+            y += FIELD_H
+        self.hovered_btn = None
+
+    def _handle_inspector_mouse_down(self, mx, my, button):
+        sw = self.screen.get_width()
+        insp_x = sw - INSPECTOR_W
+        split_y = self._inspector_split_y()
+        field_top = TOOLBAR_H + 19
+
+        if button == 4 or button == 5:
+            return  # handled by MOUSEWHEEL
+
+        if my >= split_y:
+            self._handle_palette_click(mx, my, button, insp_x, split_y)
+            return
+
+        if my < field_top:
+            return
+
+        # Field area click
+        schema, target, level = schema_for_selection(self)
+        y = field_top - self.inspector_scroll
+        for field in schema:
+            rect = pygame.Rect(insp_x + 2, y, INSPECTOR_W - 4, FIELD_H)
+            if rect.collidepoint(mx, my):
+                self.inspector_active_field = field.id
+                if self.text_entry_field and self.text_entry_field != field.id:
+                    self._commit_text_entry()
+                self._handle_field_click(rect, field, target, level, mx, my, button)
+                return
+            y += FIELD_H
+
+        # Click on empty field area: commit text entry
+        if self.input_focus:
+            self._commit_text_entry()
+
+    def _handle_field_click(self, rect, field, target, level, mx, my, button):
+        if field.kind == "readonly":
+            return
+
+        wx = rect.x + FIELD_LABEL_W
+        ww = rect.right - wx - 4
+        w_rect = pygame.Rect(wx, rect.y + 2, ww, FIELD_H - 4)
+
+        mods = pygame.key.get_mods()
+        shift = bool(mods & pygame.KMOD_SHIFT)
+
+        if field.kind == "colour":
+            cell_count = 9 if field.allow_none else 8
+            cell_w = max(1, w_rect.width // cell_count)
+            if cell_w > 0 and w_rect.collidepoint(mx, my):
+                ci = (mx - w_rect.x) // cell_w
+                if 0 <= ci < cell_count:
+                    new_val = None if (field.allow_none and ci == 8) else ci
+                    old_val = field.get(target)
+                    if new_val != old_val:
+                        self.undo.save(level)
+                        field.set(target, new_val)
+                        level.dirty = True
+                        self.sprite_cache.clear()
+            return
+
+        if field.kind in ("byte", "signed_byte", "word"):
+            btn_w = 16
+            dec = pygame.Rect(w_rect.x, w_rect.y, btn_w, w_rect.height)
+            inc = pygame.Rect(w_rect.right - btn_w, w_rect.y, btn_w, w_rect.height)
+            val_r = pygame.Rect(dec.right + 1, w_rect.y, inc.x - dec.right - 2, w_rect.height)
+            step = field.shift_step if shift else field.step
+            cur = field.get(target)
+            if dec.collidepoint(mx, my):
+                new_val = field.clamp(cur - step)
+                if new_val != cur:
+                    self.undo.save(level)
+                    field.set(target, new_val)
+                    level.dirty = True
+            elif inc.collidepoint(mx, my):
+                new_val = field.clamp(cur + step)
+                if new_val != cur:
+                    self.undo.save(level)
+                    field.set(target, new_val)
+                    level.dirty = True
+            elif val_r.collidepoint(mx, my):
+                self.text_entry_field = field.id
+                self.text_entry_buf = ""
+                self.text_entry_orig = cur
+                self.input_focus = True
+            return
+
+        if field.kind == "enum":
+            if field.values:
+                vals = [v for _, v in field.values]
+                cur = field.get(target)
+                try:
+                    ci = vals.index(cur)
+                except ValueError:
+                    ci = -1
+                btn_w = 16
+                dec = pygame.Rect(w_rect.x, w_rect.y, btn_w, w_rect.height)
+                inc = pygame.Rect(w_rect.right - btn_w, w_rect.y, btn_w, w_rect.height)
+                if button == 3 or dec.collidepoint(mx, my):
+                    direction = -1
+                elif inc.collidepoint(mx, my):
+                    direction = 1
+                else:
+                    return
+                new_val = vals[(ci + direction) % len(vals)]
+                if new_val != cur:
+                    self.undo.save(level)
+                    field.set(target, new_val)
+                    level.dirty = True
+            return
+
+        if field.kind == "ref":
+            btn_w = 38
+            pick_rect = pygame.Rect(w_rect.right - btn_w, w_rect.y, btn_w, w_rect.height)
+            cur = field.get(target)
+            if pick_rect.collidepoint(mx, my):
+                # Arm pick mode
+                if self.ref_pick_field == field.id:
+                    self.ref_pick_field = None  # toggle off
+                else:
+                    self.ref_pick_field = field.id
+                    self.ref_pick_target = target
+                    self.ref_pick_level = level
+            else:
+                # Cycle
+                if field.target_kind == "checkpoint":
+                    n = len(level.checkpoints)
+                else:
+                    n = len(level.objects)
+                if n > 0:
+                    new_val = (cur + (1 if button == 1 else -1)) % n
+                    if new_val != cur:
+                        self.undo.save(level)
+                        field.set(target, new_val)
+                        level.dirty = True
+            return
+
+    def _handle_palette_click(self, mx, my, button, insp_x, split_y):
+        if self.mode == "object":
+            types = sorted(OBJECT_TYPE_NAMES.keys())
+            tw, th = PALETTE_TILE_W, PALETTE_TILE_H
+            pad = PALETTE_PAD
+            for idx, obj_type in enumerate(types):
+                row = idx // PALETTE_COLS
+                col = idx % PALETTE_COLS
+                tx = insp_x + pad + col * (tw + pad)
+                ty = split_y + 1 + pad + row * (th + pad) - self.palette_scroll
+                tile_rect = pygame.Rect(tx, ty, tw, th)
+                if tile_rect.collidepoint(mx, my):
+                    if self.palette_armed_type == obj_type:
+                        self.palette_armed_type = None  # disarm
+                    else:
+                        self.palette_armed_type = obj_type
+                    return
+        elif self.mode == "wall":
+            # Wall tool tiles
+            tools = [("draw", 0), ("line", 1)]
+            tile_w = (INSPECTOR_W - PALETTE_PAD * 3) // 2
+            for tool_id, i in tools:
+                tx = insp_x + PALETTE_PAD + i * (tile_w + PALETTE_PAD)
+                tile_rect = pygame.Rect(tx, split_y + 1 + PALETTE_PAD, tile_w, 36)
+                if tile_rect.collidepoint(mx, my):
+                    self.wall_tool = tool_id
+                    self.line_start = None
+                    return
+
+    def _place_armed_object(self, wx, wy):
+        """Place an instance of palette_armed_type at world position (wx, wy)."""
+        obj_type = self.palette_armed_type
+        if obj_type is None:
+            return
+        is_well = obj_type == OBJECT_GRAVITY_WELL
+        is_mine = obj_type in BOBBING_MINE_TYPES
+        is_tp = obj_type == OBJECT_TELEPORTER
+        self.undo.save(self.level)
+        self.level.objects.append({
+            "x": max(0, min(255, wx)), "y": max(0, wy), "type": obj_type,
+            "gun_aim": 0x00,
+            "laser_dx": LASER_BEAM_DX_PIXELS.get(obj_type, 0),
+            "laser_dy": LASER_BEAM_DY_ROWS.get(obj_type, 0),
+            "well_radius": GRAVITY_WELL_DEFAULT_RADIUS if is_well else 0,
+            "well_strength": GRAVITY_WELL_DEFAULT_STRENGTH if is_well else 0,
+            "mine_phase": BOBBING_MINE_DEFAULT_PHASE if is_mine else 0,
+            "mine_amp": BOBBING_MINE_DEFAULT_AMP if is_mine else 0,
+            "teleport_dest": TELEPORTER_DEFAULT_DEST if is_tp else 0,
+        })
+        self.level.dirty = True
+        self.selected_object = len(self.level.objects) - 1
+        # Disarm after placing (keep armed for repeated placement)
+
+    def _handle_ref_pick_click(self, mx, my):
+        """Canvas click during ref-pick mode: set the field to the nearest checkpoint."""
+        if self.ref_pick_field is None:
+            return
+        lv = self.level
+        field_id = self.ref_pick_field
+        target = self.ref_pick_target
+        level = self.ref_pick_level
+        # Find matching field
+        schema, _, _ = schema_for_selection(self)
+        for field in schema:
+            if field.id != field_id:
+                continue
+            if field.target_kind == "checkpoint" and lv.checkpoints:
+                # Pick nearest checkpoint by distance on screen
+                best_i, best_d = 0, float('inf')
+                for i, cp in enumerate(lv.checkpoints):
+                    sx, sy = self.camera.world_to_screen(cp["spawn_x"], cp["spawn_y"])
+                    d = (sx - mx) ** 2 + (sy - my) ** 2
+                    if d < best_d:
+                        best_d, best_i = d, i
+                old_val = field.get(target)
+                if best_i != old_val:
+                    self.undo.save(level)
+                    field.set(target, best_i)
+                    level.dirty = True
+            break
+        self.ref_pick_field = None
+
+    # -------------------------------------------------------------------
+    # Text entry
+    # -------------------------------------------------------------------
+
+    def _commit_text_entry(self):
+        if not self.text_entry_field:
+            self.input_focus = False
+            return
+        schema, target, level = schema_for_selection(self)
+        for field in schema:
+            if field.id != self.text_entry_field:
+                continue
+            parsed = self._parse_value(self.text_entry_buf, field)
+            if parsed is not None:
+                clamped = field.clamp(parsed)
+                old_val = field.get(target)
+                if clamped != old_val:
+                    self.undo.save(level)
+                    field.set(target, clamped)
+                    level.dirty = True
+                    if field.kind == "colour":
+                        self.sprite_cache.clear()
+            break
+        self.text_entry_field = None
+        self.text_entry_buf = ""
+        self.text_entry_orig = None
+        self.input_focus = False
+
+    def _cancel_text_entry(self):
+        self.text_entry_field = None
+        self.text_entry_buf = ""
+        self.text_entry_orig = None
+        self.input_focus = False
+
+    def _parse_value(self, text, field):
+        """Parse a typed value string: decimal, $hex, +N/-N."""
+        text = text.strip()
+        if not text:
+            return None
+        try:
+            if text.startswith("$") or text.startswith("&"):
+                return int(text[1:], 16)
+            if text.startswith("0x") or text.startswith("0X"):
+                return int(text, 16)
+            return int(text)
+        except ValueError:
+            return None
 
 
 # ---------------------------------------------------------------------------
