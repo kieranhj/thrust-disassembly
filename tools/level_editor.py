@@ -487,17 +487,22 @@ def import_beebasm(path):
             })
 
         # Switch wiring tables (may not be present in older exports).
-        # Three parallel arrays terminated by $FF in switch_obj_indices.
+        # Up to five parallel arrays terminated by $FF in switch_obj_indices;
+        # arg_a/arg_b default to 0 when missing (older format compatibility).
         wiring = {}
         sw_idx = labels.get(f"level_{n}_switch_obj_indices", [])
         sw_tgt = labels.get(f"level_{n}_switch_target", [])
         sw_act = labels.get(f"level_{n}_switch_action", [])
+        sw_aa  = labels.get(f"level_{n}_switch_arg_a", [])
+        sw_ab  = labels.get(f"level_{n}_switch_arg_b", [])
         for i in range(min(len(sw_idx), len(sw_tgt), len(sw_act))):
             if sw_idx[i] == 0xFF:
                 break
             wiring[sw_idx[i]] = {
                 "target": sw_tgt[i],
                 "action": sw_act[i],
+                "arg_a":  sw_aa[i] if i < len(sw_aa) else 0,
+                "arg_b":  sw_ab[i] if i < len(sw_ab) else 0,
             }
 
         lv = LevelData(n, list(left_wall), list(right_wall), objects,
@@ -843,11 +848,12 @@ def export_beebasm(levels):
     # Switch wiring tables per level
     lines.append("\\ ******************************************************************************")
     lines.append("\\ * Switch wiring tables per level")
-    lines.append("\\ * Three parallel arrays per level, indexed by switch slot:")
+    lines.append("\\ * Five parallel arrays per level, indexed by switch slot:")
     lines.append("\\ *   level_N_switch_obj_indices: object index of each switch ($FF terminator)")
     lines.append("\\ *   level_N_switch_target:     target object index ($FF = no target / disabled)")
     lines.append("\\ *   level_N_switch_action:     action code (see thrust.6502)")
-    lines.append("\\ * Editor wiring UX lands in Phase B — Phase A emits empty arrays.")
+    lines.append("\\ *   level_N_switch_arg_a:      action arg A (e.g. obj_data slot 0..2 for set_param/xor_param)")
+    lines.append("\\ *   level_N_switch_arg_b:      action arg B (e.g. value or XOR mask)")
     lines.append("\\ ******************************************************************************")
     lines.append("")
     for lv in levels:
@@ -858,12 +864,18 @@ def export_beebasm(levels):
         indices = [oi for oi in switch_objs] + [0xFF]
         targets = [wiring[oi].get("target", 0xFF) & 0xFF for oi in switch_objs] + [0xFF]
         actions = [wiring[oi].get("action", 0x00) & 0xFF for oi in switch_objs] + [0x00]
+        arg_as  = [wiring[oi].get("arg_a", 0x00) & 0xFF for oi in switch_objs] + [0x00]
+        arg_bs  = [wiring[oi].get("arg_b", 0x00) & 0xFF for oi in switch_objs] + [0x00]
         lines.append(f".level_{n}_switch_obj_indices")
         lines.append(f"        EQUB    {format_bytes(indices)}")
         lines.append(f".level_{n}_switch_target")
         lines.append(f"        EQUB    {format_bytes(targets)}")
         lines.append(f".level_{n}_switch_action")
         lines.append(f"        EQUB    {format_bytes(actions)}")
+        lines.append(f".level_{n}_switch_arg_a")
+        lines.append(f"        EQUB    {format_bytes(arg_as)}")
+        lines.append(f".level_{n}_switch_arg_b")
+        lines.append(f"        EQUB    {format_bytes(arg_bs)}")
         lines.append("")
 
     # No-wrap Y threshold table
@@ -1177,16 +1189,64 @@ SWITCH_ACTION_VALUES = [
     ("clear_alive",   2),
     ("toggle_alive",  3),
     ("destroy",       4),
+    ("set_param",     6),
+    ("xor_param",     7),
 ]
+
+# Action codes that need the Slot + Value (Mask) inspector fields.
+SWITCH_PARAM_ACTIONS = {6, 7}
+
+# Per-target-type meaning of the three obj_data slots, for the editor's
+# Slot dropdown. Indexed by object type. Slots that the engine doesn't
+# read are labelled "(unused)"; engine-managed scratch is flagged so
+# designers don't accidentally write to it.
+SWITCH_SLOT_LABELS = {
+    0x00: ("gun_aim",         "(unused)",  "(unused)"),
+    0x01: ("gun_aim",         "(unused)",  "(unused)"),
+    0x02: ("gun_aim",         "(unused)",  "(unused)"),
+    0x03: ("gun_aim",         "(unused)",  "(unused)"),
+    0x04: ("(unused)",        "(unused)",  "(unused)"),  # fuel
+    0x05: ("(unused)",        "(unused)",  "(unused)"),  # pod (blocked anyway)
+    0x06: ("(unused)",        "(unused)",  "(unused)"),  # generator
+    0x07: ("(unused)",        "(unused)",  "(unused)"),  # door switch L
+    0x08: ("(unused)",        "(unused)",  "(unused)"),  # door switch R
+    0x09: ("phase/duty",      "Beam dx",   "Beam dy"),
+    0x0A: ("phase/duty",      "Beam dx",   "Beam dy"),
+    0x0B: ("phase/duty",      "Beam dx",   "Beam dy"),
+    0x0C: ("phase/duty",      "Beam dx",   "Beam dy"),
+    0x0D: ("(unused)",        "Radius",    "Strength (signed)"),
+    0x0E: ("Phase",           "Amplitude", "(engine scratch)"),
+    0x0F: ("Phase",           "Amplitude", "(engine scratch)"),
+    0x10: ("Dest checkpoint", "(unused)",  "(unused)"),
+}
+
+
+def slot_labels_for_target(lv, wiring_entry):
+    """Return (slot0, slot1, slot2) labels for the wiring's current target.
+    Falls back to generic labels when the target is unset or out of range.
+    """
+    if not wiring_entry:
+        return ("Slot 0", "Slot 1", "Slot 2")
+    tgt = wiring_entry.get("target", 0xFF)
+    if not (0 <= tgt < len(lv.objects)):
+        return ("Slot 0", "Slot 1", "Slot 2")
+    obj_type = lv.objects[tgt]["type"]
+    return SWITCH_SLOT_LABELS.get(obj_type, ("Slot 0", "Slot 1", "Slot 2"))
 
 
 def _switch_wiring_fields(lv, obj):
-    """Build per-instance Action and Target fields for a switch object.
+    """Build per-instance fields for a switch object.
 
     Wiring lives on `lv.wiring[obj_idx]`, not on the object dict, so the
     getters/setters resolve obj_idx fresh each call (objects move around as
-    types are added/removed). Empty entries (target=$FF AND action=$00)
-    are pruned so the wiring dict stays minimal on export.
+    types are added/removed). Empty entries (target=$FF AND action=$00 AND
+    arg_a=$00 AND arg_b=$00) are pruned so the wiring dict stays minimal
+    on export.
+
+    The Slot and Value fields are only included when the action is one of
+    the param-write codes (set_param/xor_param), and the Slot dropdown
+    labels are pulled from SWITCH_SLOT_LABELS based on the current target's
+    type so the designer sees what each slot means for the wired target.
     """
     def _idx():
         try:
@@ -1196,41 +1256,93 @@ def _switch_wiring_fields(lv, obj):
 
     def _maybe_prune(idx):
         e = lv.wiring.get(idx)
-        if e is not None and e.get("target", 0xFF) == 0xFF and e.get("action", 0) == 0:
+        if e is None:
+            return
+        if (e.get("target", 0xFF) == 0xFF
+                and e.get("action", 0) == 0
+                and e.get("arg_a", 0) == 0
+                and e.get("arg_b", 0) == 0):
             lv.wiring.pop(idx, None)
 
-    def _action_get(_t):
+    def _entry_get_or_default():
         i = _idx()
-        return lv.wiring.get(i, {}).get("action", 0) if i is not None else 0
+        return lv.wiring.get(i, {}) if i is not None else {}
+
+    def _action_get(_t):
+        return _entry_get_or_default().get("action", 0)
 
     def _action_set(_t, v):
         i = _idx()
         if i is None: return
-        e = lv.wiring.setdefault(i, {"target": 0xFF, "action": 0})
+        e = lv.wiring.setdefault(i, {"target": 0xFF, "action": 0, "arg_a": 0, "arg_b": 0})
         e["action"] = int(v) & 0xFF
         _maybe_prune(i)
 
     def _target_get(_t):
-        i = _idx()
-        return lv.wiring.get(i, {}).get("target", 0xFF) if i is not None else 0xFF
+        return _entry_get_or_default().get("target", 0xFF)
 
     def _target_set(_t, v):
         i = _idx()
         if i is None: return
-        e = lv.wiring.setdefault(i, {"target": 0xFF, "action": 0})
+        e = lv.wiring.setdefault(i, {"target": 0xFF, "action": 0, "arg_a": 0, "arg_b": 0})
         e["target"] = int(v) & 0xFF
         _maybe_prune(i)
 
-    return [
+    def _arg_a_get(_t):
+        return _entry_get_or_default().get("arg_a", 0)
+
+    def _arg_a_set(_t, v):
+        i = _idx()
+        if i is None: return
+        e = lv.wiring.setdefault(i, {"target": 0xFF, "action": 0, "arg_a": 0, "arg_b": 0})
+        e["arg_a"] = int(v) & 0xFF
+        _maybe_prune(i)
+
+    def _arg_b_get(_t):
+        return _entry_get_or_default().get("arg_b", 0)
+
+    def _arg_b_set(_t, v):
+        i = _idx()
+        if i is None: return
+        e = lv.wiring.setdefault(i, {"target": 0xFF, "action": 0, "arg_a": 0, "arg_b": 0})
+        e["arg_b"] = int(v) & 0xFF
+        _maybe_prune(i)
+
+    fields = [
         Field("switch_action", "Action", "enum",
               getter=_action_get, setter=_action_set,
-              min=0, max=4, step=1,
+              min=0, max=7, step=1,
               values=SWITCH_ACTION_VALUES,
               hotkey=("[", "]")),
         Field("switch_target", "Target", "ref",
               getter=_target_get, setter=_target_set,
               min=0, max=255, step=1, target_kind="object"),
     ]
+
+    # Conditionally expose Slot + Value when the action is a param write.
+    entry = _entry_get_or_default()
+    action = entry.get("action", 0)
+    if action in SWITCH_PARAM_ACTIONS:
+        slot0, slot1, slot2 = slot_labels_for_target(lv, entry)
+        slot_values = [
+            (f"Slot 0: {slot0}", 0),
+            (f"Slot 1: {slot1}", 1),
+            (f"Slot 2: {slot2}", 2),
+        ]
+        # set_param writes a value; xor_param's arg_b is a bit mask, so
+        # relabel to make that obvious in the inspector.
+        value_label = "Mask" if action == 7 else "Value"
+        fields.append(
+            Field("switch_slot", "Slot", "enum",
+                  getter=_arg_a_get, setter=_arg_a_set,
+                  min=0, max=2, step=1, values=slot_values,
+                  hotkey=(",", ".")))
+        fields.append(
+            Field("switch_value", value_label, "byte",
+                  getter=_arg_b_get, setter=_arg_b_set,
+                  min=0, max=255, step=1, shift_step=16))
+
+    return fields
 
 SCHEMA_SIMPLE = [
     Field("x", "X", "byte", getter=_g("x"), setter=_s("x"),
@@ -1692,7 +1804,7 @@ class Editor:
         self.text_entry_field = None       # field id being text-edited
         self.text_entry_buf = ""
         self.text_entry_orig = None
-        self.inspector_split = 0.25        # fraction of inspector height for fields (palette gets the rest)
+        self.inspector_split = 0.40        # fraction of inspector height for fields (palette gets the rest)
         self.hovered_btn = None            # (field_id, "dec"|"inc"|"val") or None
         self.palette_armed_type = None     # object type armed for click-to-place
         self.ref_pick_field = None         # field id expecting a canvas pick
@@ -2958,6 +3070,12 @@ class Editor:
                     continue
                 if target == 0 and lv.objects[0]["type"] == 0x05:
                     problems.append(f"L{lv.level_num + 1} switch #{sw_idx}: targets pod (object 0)")
+                if action in SWITCH_PARAM_ACTIONS:
+                    arg_a = entry.get("arg_a", 0)
+                    if arg_a > 2:
+                        problems.append(
+                            f"L{lv.level_num + 1} switch #{sw_idx}: "
+                            f"slot {arg_a} out of range (must be 0..2)")
             for sw_idx in stale:
                 lv.wiring.pop(sw_idx, None)
                 lv.dirty = True

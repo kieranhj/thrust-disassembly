@@ -136,6 +136,7 @@ ENDIF
 OBJ_flag_drawn                      = $01       ; level_obj_flags bit 0: sprite was XOR-plotted (needs erase before redraw)
 OBJ_flag_alive                      = $02       ; level_obj_flags bit 1: object is active (update + draw + collide)
 OBJ_flag_laser_beam_drawn           = $04       ; level_obj_flags bit 2: laser_turret beam was XOR-plotted (needs erase before re-evaluation)
+OBJ_flag_laser_redraw_pending       = $08       ; level_obj_flags bit 3: laser geometry changed (set_param/xor_param) -- skip update_one_laser_beam fast path so the cached pixels get erased and redrawn at the new endpoint
 
 PARTICLE_flag                       = $80       ; particle can be replaced
 PARTICLE_lifetime_bullet            = $28       ; bullet lifetime in ticks
@@ -7444,6 +7445,43 @@ IF _SWITCHES
         STA     switch_action_addr_LO                    ; **MODIFIES CODE**
         LDA     level_switch_action_lookup_HI,X
         STA     switch_action_addr_HI                    ; **MODIFIES CODE**
+        LDA     level_switch_arg_a_lookup_LO,X
+        STA     switch_arg_a_addr_LO                     ; **MODIFIES CODE**
+        LDA     level_switch_arg_a_lookup_HI,X
+        STA     switch_arg_a_addr_HI                     ; **MODIFIES CODE**
+        LDA     level_switch_arg_b_lookup_LO,X
+        STA     switch_arg_b_addr_LO                     ; **MODIFIES CODE**
+        LDA     level_switch_arg_b_lookup_HI,X
+        STA     switch_arg_b_addr_HI                     ; **MODIFIES CODE**
+
+        \\ SMC patches: param actions write into target's obj_data slots.
+        \\ set_param uses 3 STA sites (slot 0/1/2). xor_param needs 3 LDA
+        \\ sites and 3 STA sites at different code locations. All six STAs
+        \\ + three LDAs share the same per-level base address per slot.
+        LDA     level_obj_data_0_lookup_LO,X
+        STA     act_set_store_0_addr_LO                  ; **MODIFIES CODE**
+        STA     act_xor_load_0_addr_LO                   ; **MODIFIES CODE**
+        STA     act_xor_store_0_addr_LO                  ; **MODIFIES CODE**
+        LDA     level_obj_data_0_lookup_HI,X
+        STA     act_set_store_0_addr_HI                  ; **MODIFIES CODE**
+        STA     act_xor_load_0_addr_HI                   ; **MODIFIES CODE**
+        STA     act_xor_store_0_addr_HI                  ; **MODIFIES CODE**
+        LDA     level_obj_data_1_lookup_LO,X
+        STA     act_set_store_1_addr_LO                  ; **MODIFIES CODE**
+        STA     act_xor_load_1_addr_LO                   ; **MODIFIES CODE**
+        STA     act_xor_store_1_addr_LO                  ; **MODIFIES CODE**
+        LDA     level_obj_data_1_lookup_HI,X
+        STA     act_set_store_1_addr_HI                  ; **MODIFIES CODE**
+        STA     act_xor_load_1_addr_HI                   ; **MODIFIES CODE**
+        STA     act_xor_store_1_addr_HI                  ; **MODIFIES CODE**
+        LDA     level_obj_data_2_lookup_LO,X
+        STA     act_set_store_2_addr_LO                  ; **MODIFIES CODE**
+        STA     act_xor_load_2_addr_LO                   ; **MODIFIES CODE**
+        STA     act_xor_store_2_addr_LO                  ; **MODIFIES CODE**
+        LDA     level_obj_data_2_lookup_HI,X
+        STA     act_set_store_2_addr_HI                  ; **MODIFIES CODE**
+        STA     act_xor_load_2_addr_HI                   ; **MODIFIES CODE**
+        STA     act_xor_store_2_addr_HI                  ; **MODIFIES CODE**
 
         \\ SMC patches: destroy action reads target's pos and type from
         \\ the existing per-level object tables.
@@ -10910,6 +10948,26 @@ IF _SWITCHES
         EQUB    LO(level_3_switch_action), HI(level_3_switch_action)
         EQUB    LO(level_4_switch_action), HI(level_4_switch_action)
         EQUB    LO(level_5_switch_action), HI(level_5_switch_action)
+
+.level_switch_arg_a_lookup_LO
+        EQUB    LO(level_0_switch_arg_a)
+.level_switch_arg_a_lookup_HI
+        EQUB    HI(level_0_switch_arg_a)
+        EQUB    LO(level_1_switch_arg_a), HI(level_1_switch_arg_a)
+        EQUB    LO(level_2_switch_arg_a), HI(level_2_switch_arg_a)
+        EQUB    LO(level_3_switch_arg_a), HI(level_3_switch_arg_a)
+        EQUB    LO(level_4_switch_arg_a), HI(level_4_switch_arg_a)
+        EQUB    LO(level_5_switch_arg_a), HI(level_5_switch_arg_a)
+
+.level_switch_arg_b_lookup_LO
+        EQUB    LO(level_0_switch_arg_b)
+.level_switch_arg_b_lookup_HI
+        EQUB    HI(level_0_switch_arg_b)
+        EQUB    LO(level_1_switch_arg_b), HI(level_1_switch_arg_b)
+        EQUB    LO(level_2_switch_arg_b), HI(level_2_switch_arg_b)
+        EQUB    LO(level_3_switch_arg_b), HI(level_3_switch_arg_b)
+        EQUB    LO(level_4_switch_arg_b), HI(level_4_switch_arg_b)
+        EQUB    LO(level_5_switch_arg_b), HI(level_5_switch_arg_b)
 ENDIF
 
 \ Per-object cached screen coords for the laser beam: when
@@ -10923,6 +10981,22 @@ ENDIF
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
 .obj_laser_prev_screen_y
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+
+\ Per-laser cached dx / dy from the frame the beam was XOR-drawn. Needed
+\ so set_param / xor_param can change a laser's dx/dy mid-game and the
+\ subsequent erase pass uses the OLD direction (matching the pixels still
+\ on screen) rather than the new direction (which would XOR a different
+\ line and leave the old pixels intact).
+.obj_laser_prev_dx
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+.obj_laser_prev_dy
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
@@ -11028,7 +11102,9 @@ ENDIF
         ADC     level_tick_counter
         AND     #$7F                                ; modulo period 128
         CMP     laser_clip_t_x_max                  ; A = phase_in_cycle, mem = duty
-        BCS     laser_should_be_off                 ; phase >= duty → off-phase: erase if drawn
+        BCC     laser_in_phase                      ; phase < duty: on-phase
+        JMP     laser_should_be_off                 ; phase >= duty: erase if drawn
+.laser_in_phase
 
         \\ -------- SHOULD BE ON --------
         \\ Fast path: XOR-drawn pixels stay valid through other sprites/particles
@@ -11041,13 +11117,18 @@ ENDIF
         ORA     window_scroll_y
         BNE     laser_must_redraw
         LDA     level_obj_flags,X
-        AND     #(OBJ_flag_alive OR OBJ_flag_laser_beam_drawn)
+        AND     #(OBJ_flag_alive OR OBJ_flag_laser_beam_drawn OR OBJ_flag_laser_redraw_pending)
         CMP     #(OBJ_flag_alive OR OBJ_flag_laser_beam_drawn)
-        BEQ     laser_one_done                      ; FAST PATH
+        BNE     laser_must_redraw                   ; not the fast-path bit pattern → slow path
+        JMP     laser_one_done                      ; FAST PATH (alive+drawn AND no redraw_pending)
 
     .laser_must_redraw
-        \\ Erase previous beam (if drawn last frame) using cached coords.
+        \\ Geometry-change flag is consumed here regardless of which branch
+        \\ runs below — slot 1/2 writes always force the slow path once.
         LDA     level_obj_flags,X
+        AND     #($FF EOR OBJ_flag_laser_redraw_pending)
+        STA     level_obj_flags,X
+        \\ Erase previous beam (if drawn last frame) using cached coords.
         AND     #OBJ_flag_laser_beam_drawn
         BEQ     laser_skip_erase
 
@@ -11055,7 +11136,23 @@ ENDIF
         STA     obj_screen_x
         LDA     obj_laser_prev_screen_y,X
         STA     obj_screen_y
-        JSR     draw_laser_beam_at_obj_screen       ; XOR-erases (deterministic swap → same pixels)
+        \\ Swap in cached prev dx/dy so the erase XORs the same pixels that
+        \\ were drawn last frame (matters when set_param/xor_param has just
+        \\ rewritten the live dx/dy; the live values are what the redraw
+        \\ below will use, so stash them on the stack first).
+        LDA     laser_dx_temp
+        PHA
+        LDA     laser_dy_temp
+        PHA
+        LDA     obj_laser_prev_dx,X
+        STA     laser_dx_temp
+        LDA     obj_laser_prev_dy,X
+        STA     laser_dy_temp
+        JSR     draw_laser_beam_at_obj_screen       ; XOR-erases at OLD direction
+        PLA
+        STA     laser_dy_temp
+        PLA
+        STA     laser_dx_temp
 
         LDX     current_object                      ; draw_line clobbers X
         LDA     level_obj_flags,X
@@ -11079,11 +11176,18 @@ ENDIF
 
         LDX     current_object
 
-        \\ Cache the freshly computed screen coords, draw, set flag.
+        \\ Cache the freshly computed screen coords AND dx/dy. The cached
+        \\ dx/dy let a later set_param / xor_param mid-frame mutation work
+        \\ correctly: next frame's erase uses the OLD direction (matching
+        \\ the pixels still on screen), then the redraw uses the NEW one.
         LDA     obj_screen_x
         STA     obj_laser_prev_screen_x,X
         LDA     obj_screen_y
         STA     obj_laser_prev_screen_y,X
+        LDA     laser_dx_temp
+        STA     obj_laser_prev_dx,X
+        LDA     laser_dy_temp
+        STA     obj_laser_prev_dy,X
 
         JSR     draw_laser_beam_at_obj_screen
         BCS     laser_one_done                      ; barrel off-screen → skip flag set
@@ -11095,8 +11199,12 @@ ENDIF
         JMP     laser_one_done
 
     .laser_should_be_off
-        \\ Off-phase: erase if drawn last frame, then return.
+        \\ Off-phase: erase if drawn last frame, then return. Also clear
+        \\ redraw-pending — geometry change while in off-phase need only
+        \\ ensure this single erase happens at the cached old direction.
         LDA     level_obj_flags,X
+        AND     #($FF EOR OBJ_flag_laser_redraw_pending)
+        STA     level_obj_flags,X
         AND     #OBJ_flag_laser_beam_drawn
         BEQ     laser_one_done
 
@@ -11104,6 +11212,13 @@ ENDIF
         STA     obj_screen_x
         LDA     obj_laser_prev_screen_y,X
         STA     obj_screen_y
+        \\ Use cached prev dx/dy so a mid-cycle dx/dy change still erases
+        \\ the line that was actually drawn (laser_dx/dy_temp may have
+        \\ been overwritten by a set_param/xor_param hit since then).
+        LDA     obj_laser_prev_dx,X
+        STA     laser_dx_temp
+        LDA     obj_laser_prev_dy,X
+        STA     laser_dy_temp
         JSR     draw_laser_beam_at_obj_screen
 
         LDX     current_object
@@ -12194,6 +12309,8 @@ IF _SWITCHES
 \ ******************************************************************************
 
 .action_target_idx EQUB $00
+.action_arg_a      EQUB $00            ; pre-loaded by dispatcher; param actions read this
+.action_arg_b      EQUB $00            ; pre-loaded by dispatcher; param actions read this
 
 .tick_switch_logic
         LDX     #$07
@@ -12250,14 +12367,32 @@ IF _SWITCHES
         switch_action_addr_LO = tdsa_load_action+1
         switch_action_addr_HI = tdsa_load_action+2
         BEQ     tdsa_consumed                            ; action $00 = none
+        PHA                                              ; stash action across arg loads
 
         \\ Set refractory before dispatch so action handlers don't have to.
-        PHA
-        LDA     #$08
+        \\ ~20 frames (~0.6s @ 33Hz, the centisecond-gated main-loop rate)
+        \\ — long enough that a stray rapid second shot during the player's
+        \\ bullet stream can't immediately undo a toggle / re-fire a destroy
+        \\ / flip a param back. Tick decrements once per frame in
+        \\ tick_switch_logic.
+        LDA     #$14
         STA     level_switch_state,Y
-        PLA
+
+        \\ Pre-load arg_a / arg_b so param actions can read them without
+        \\ needing to recover the switch slot Y after dispatch.
+.tdsa_load_arg_a
+        LDA     level_0_switch_arg_a,Y                   ; **SELF-MODIFIED CODE**
+        switch_arg_a_addr_LO = tdsa_load_arg_a+1
+        switch_arg_a_addr_HI = tdsa_load_arg_a+2
+        STA     action_arg_a
+.tdsa_load_arg_b
+        LDA     level_0_switch_arg_b,Y                   ; **SELF-MODIFIED CODE**
+        switch_arg_b_addr_LO = tdsa_load_arg_b+1
+        switch_arg_b_addr_HI = tdsa_load_arg_b+2
+        STA     action_arg_b
 
         \\ Vector through action_jump_table. action × 2 = byte offset.
+        PLA                                              ; recover action code
         ASL     A
         TAY
         LDA     action_jump_table,Y
@@ -12276,9 +12411,9 @@ IF _SWITCHES
 \\ }
 
 \\ Action jump table: interleaved (LO, HI) pairs indexed by action_code × 2.
-\\ Slots $05..$0F reserved for follow-up actions (set_param / cycle_param /
-\\ pulse_door); they currently point at action_none so future builds can
-\\ drop them in by replacing entries without touching the dispatcher.
+\\ Slots $05, $08..$0F reserved for follow-up actions (cycle_param / pulse_door);
+\\ they currently point at action_none so future builds can drop them in by
+\\ replacing entries without touching the dispatcher.
 .action_jump_table
         EQUB    LO(action_none),         HI(action_none)          ; $00 none
         EQUB    LO(action_set_alive),    HI(action_set_alive)     ; $01
@@ -12286,8 +12421,8 @@ IF _SWITCHES
         EQUB    LO(action_toggle_alive), HI(action_toggle_alive)  ; $03
         EQUB    LO(action_destroy),      HI(action_destroy)       ; $04
         EQUB    LO(action_none),         HI(action_none)          ; $05 reserved
-        EQUB    LO(action_none),         HI(action_none)          ; $06 reserved
-        EQUB    LO(action_none),         HI(action_none)          ; $07 reserved
+        EQUB    LO(action_set_param),    HI(action_set_param)     ; $06
+        EQUB    LO(action_xor_param),    HI(action_xor_param)     ; $07
         EQUB    LO(action_none),         HI(action_none)          ; $08 reserved
         EQUB    LO(action_none),         HI(action_none)          ; $09 reserved
         EQUB    LO(action_none),         HI(action_none)          ; $0A reserved
@@ -12369,6 +12504,99 @@ IF _SWITCHES
         STA     explosion_particle_type
         JSR     create_explosion
 .act_dest_already_dead
+        RTS
+
+\ ******************************************************************************
+\ * Param-write actions: set_param and xor_param.
+\ *
+\ * Each writes into target's obj_data_<slot>[X] where slot = action_arg_a (0..2).
+\ * set_param writes action_arg_b verbatim; xor_param EORs action_arg_b in place.
+\ * Slot >= 3 is silently ignored — the editor blocks it on export validation
+\ * but a runtime guard keeps a malformed level from corrupting other arrays.
+\ ******************************************************************************
+
+.action_set_param
+        \\ X = target_obj_index, action_arg_a = slot, action_arg_b = value.
+        \\ Set redraw-pending flag so update_one_laser_beam takes the slow
+        \\ path next frame and re-erases the cached beam at the OLD endpoint
+        \\ before redrawing at the new dx/dy. Inert on non-laser targets
+        \\ since only update_one_laser_beam reads this bit (and it only runs
+        \\ for type $09..$0C objects).
+        LDA     level_obj_flags,X
+        ORA     #OBJ_flag_laser_redraw_pending
+        STA     level_obj_flags,X
+        LDA     action_arg_a
+        BNE     act_set_not_slot0
+        LDA     action_arg_b
+.act_set_store_0
+        STA     level_0_obj_data_0,X                     ; **SELF-MODIFIED CODE**
+        act_set_store_0_addr_LO = act_set_store_0+1
+        act_set_store_0_addr_HI = act_set_store_0+2
+        RTS
+.act_set_not_slot0
+        CMP     #$01
+        BNE     act_set_not_slot1
+        LDA     action_arg_b
+.act_set_store_1
+        STA     level_0_obj_data_1,X                     ; **SELF-MODIFIED CODE**
+        act_set_store_1_addr_LO = act_set_store_1+1
+        act_set_store_1_addr_HI = act_set_store_1+2
+        RTS
+.act_set_not_slot1
+        CMP     #$02
+        BNE     act_set_oor                              ; out-of-range slot: ignore
+        LDA     action_arg_b
+.act_set_store_2
+        STA     level_0_obj_data_2,X                     ; **SELF-MODIFIED CODE**
+        act_set_store_2_addr_LO = act_set_store_2+1
+        act_set_store_2_addr_HI = act_set_store_2+2
+.act_set_oor
+        RTS
+
+.action_xor_param
+        \\ X = target_obj_index, action_arg_a = slot, action_arg_b = mask.
+        \\ Same redraw-pending flag as set_param — see comment there.
+        LDA     level_obj_flags,X
+        ORA     #OBJ_flag_laser_redraw_pending
+        STA     level_obj_flags,X
+        LDA     action_arg_a
+        BNE     act_xor_not_slot0
+.act_xor_load_0
+        LDA     level_0_obj_data_0,X                     ; **SELF-MODIFIED CODE**
+        act_xor_load_0_addr_LO = act_xor_load_0+1
+        act_xor_load_0_addr_HI = act_xor_load_0+2
+        EOR     action_arg_b
+.act_xor_store_0
+        STA     level_0_obj_data_0,X                     ; **SELF-MODIFIED CODE**
+        act_xor_store_0_addr_LO = act_xor_store_0+1
+        act_xor_store_0_addr_HI = act_xor_store_0+2
+        RTS
+.act_xor_not_slot0
+        CMP     #$01
+        BNE     act_xor_not_slot1
+.act_xor_load_1
+        LDA     level_0_obj_data_1,X                     ; **SELF-MODIFIED CODE**
+        act_xor_load_1_addr_LO = act_xor_load_1+1
+        act_xor_load_1_addr_HI = act_xor_load_1+2
+        EOR     action_arg_b
+.act_xor_store_1
+        STA     level_0_obj_data_1,X                     ; **SELF-MODIFIED CODE**
+        act_xor_store_1_addr_LO = act_xor_store_1+1
+        act_xor_store_1_addr_HI = act_xor_store_1+2
+        RTS
+.act_xor_not_slot1
+        CMP     #$02
+        BNE     act_xor_oor
+.act_xor_load_2
+        LDA     level_0_obj_data_2,X                     ; **SELF-MODIFIED CODE**
+        act_xor_load_2_addr_LO = act_xor_load_2+1
+        act_xor_load_2_addr_HI = act_xor_load_2+2
+        EOR     action_arg_b
+.act_xor_store_2
+        STA     level_0_obj_data_2,X                     ; **SELF-MODIFIED CODE**
+        act_xor_store_2_addr_LO = act_xor_store_2+1
+        act_xor_store_2_addr_HI = act_xor_store_2+2
+.act_xor_oor
         RTS
 ENDIF
 
