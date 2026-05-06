@@ -287,8 +287,8 @@ def format_bytes(data):
 
 def parse_equb_line(line):
     """Parse an EQUB line and return list of integer values."""
-    # Strip comment
-    line = line.split("\\")[0].strip()
+    # Strip comment — BeebAsm accepts both `\` (project convention) and `;`.
+    line = line.split("\\")[0].split(";")[0].strip()
     if "EQUB" not in line.upper():
         return []
     _, _, rest = line.partition("EQUB")
@@ -485,9 +485,23 @@ def import_beebasm(path):
                 "object_colour": None if oc == 0xFF else oc,
             })
 
+        # Switch wiring tables (may not be present in older exports).
+        # Three parallel arrays terminated by $FF in switch_obj_indices.
+        wiring = {}
+        sw_idx = labels.get(f"level_{n}_switch_obj_indices", [])
+        sw_tgt = labels.get(f"level_{n}_switch_target", [])
+        sw_act = labels.get(f"level_{n}_switch_action", [])
+        for i in range(min(len(sw_idx), len(sw_tgt), len(sw_act))):
+            if sw_idx[i] == 0xFF:
+                break
+            wiring[sw_idx[i]] = {
+                "target": sw_tgt[i],
+                "action": sw_act[i],
+            }
+
         lv = LevelData(n, list(left_wall), list(right_wall), objects,
                         terrain_rle, land_col, obj_col, checkpoints, grav,
-                        no_wrap_y, bands)
+                        no_wrap_y, bands, wiring)
         levels.append(lv)
 
     return levels
@@ -825,20 +839,30 @@ def export_beebasm(levels):
         lines.append(f"        EQUB    {format_bytes(oc)}")
         lines.append("")
 
-    # Switch wiring tables per level (Phase A: empty placeholders)
+    # Switch wiring tables per level
     lines.append("\\ ******************************************************************************")
     lines.append("\\ * Switch wiring tables per level")
-    lines.append("\\ * level_N_switch_obj_indices: object indices of switches, $FF terminator.")
-    lines.append("\\ * level_N_switch_wiring: 4 bytes per switch (target, action, arg_a, arg_b).")
-    lines.append("\\ * Phase A emits empty arrays for every level — wiring data lands in Phase B.")
+    lines.append("\\ * Three parallel arrays per level, indexed by switch slot:")
+    lines.append("\\ *   level_N_switch_obj_indices: object index of each switch ($FF terminator)")
+    lines.append("\\ *   level_N_switch_target:     target object index ($FF = no target / disabled)")
+    lines.append("\\ *   level_N_switch_action:     action code (see thrust.6502)")
+    lines.append("\\ * Editor wiring UX lands in Phase B — Phase A emits empty arrays.")
     lines.append("\\ ******************************************************************************")
     lines.append("")
     for lv in levels:
         n = lv.level_num
+        wiring = getattr(lv, "wiring", {}) or {}
+        # Sort by switch object index for deterministic export
+        switch_objs = sorted(wiring.keys()) if wiring else []
+        indices = [oi for oi in switch_objs] + [0xFF]
+        targets = [wiring[oi].get("target", 0xFF) & 0xFF for oi in switch_objs] + [0xFF]
+        actions = [wiring[oi].get("action", 0x00) & 0xFF for oi in switch_objs] + [0x00]
         lines.append(f".level_{n}_switch_obj_indices")
-        lines.append("        EQUB    $FF")
-        lines.append(f".level_{n}_switch_wiring")
-        lines.append("        EQUB    $FF,$00,$00,$00")
+        lines.append(f"        EQUB    {format_bytes(indices)}")
+        lines.append(f".level_{n}_switch_target")
+        lines.append(f"        EQUB    {format_bytes(targets)}")
+        lines.append(f".level_{n}_switch_action")
+        lines.append(f"        EQUB    {format_bytes(actions)}")
         lines.append("")
 
     # No-wrap Y threshold table
@@ -1212,7 +1236,8 @@ class LevelData:
 
     def __init__(self, level_num, left_wall, right_wall, objects,
                  terrain_rle=None, landscape_colour=None, object_colour=None,
-                 checkpoints=None, gravity=None, no_wrap_y=None, bands=None):
+                 checkpoints=None, gravity=None, no_wrap_y=None, bands=None,
+                 wiring=None):
         self.level_num = level_num
         self.left_wall = left_wall   # list[int] X per Y row
         self.right_wall = right_wall
@@ -1230,6 +1255,10 @@ class LevelData:
         # Y-banded gravity overrides. Each band: {"y": int (0..0xFFFE), "gravity": int (0..0xFF)}.
         # Sorted ascending by y; band is active when player_y >= band["y"].
         self.bands = bands if bands is not None else []
+        # Switch wiring: dict mapping switch object index -> {"target": int, "action": int}.
+        # Phase B will add editor UI; for now this preserves hand-authored wiring
+        # across import/export round-trips.
+        self.wiring = wiring if wiring is not None else {}
         self.dirty = False
         self.terrain_dirty = False    # True when walls have been edited
 

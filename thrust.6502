@@ -50,7 +50,7 @@ _SWITCHES            = (_SWRAM_BUILD AND TRUE)    ; Editor-driven switches & tri
 \ ******************************************************************************
 \ ******************************************************************************
 
-INITIAL_LEVEL                       = $01       ; staring level
+INITIAL_LEVEL                       = $04       ; staring level
 INITIAL_LIVES                       = $04       ; starting number of lives
 INITIAL_FUEL                        = $10       ; starting fuel value (BCD 1000)
 
@@ -1946,8 +1946,20 @@ ENDIF
         JMP     handle_generator                    ; everything else: test generator, else generic
 
     .handle_door_switch
+IF _SWITCHES
+        \\ Try wiring dispatch first. If the switch is in this level's
+        \\ wiring table, the dispatcher fires its action and returns
+        \\ carry CLEAR (suppress legacy). If unwired, returns carry SET
+        \\ and we fall through to the original counter latch — that
+        \\ keeps levels 3/4/5 doors working with zero migration.
+        JSR     try_dispatch_switch_action
+        BCC     handle_door_switch_consumed
+ENDIF
         LDA     #$FF                                ; latch door-switch state
         STA     door_switch_counter_A
+IF _SWITCHES
+    .handle_door_switch_consumed
+ENDIF
         JSR     spawn_hit_debris
 
     .handle_generator
@@ -3114,6 +3126,9 @@ ENDIF
 \ --- 2. Tick door-switch timers (decoupled from scroll but always advances) ---
     .after_y_scroll
         JSR     tick_door_logic
+IF _SWITCHES
+        JSR     tick_switch_logic                      ; per-switch refractory decrement
+ENDIF
 
 \ --- 3a. Y scroll speed: compute player_ydist_in_window (larger = lower on screen) ---
         SEC
@@ -7405,8 +7420,7 @@ IF _TELEPORTER
         STA     teleporter_overlap_this_frame
 ENDIF
 IF _SWITCHES
-        \\ Clear per-switch refractory state at level start. Lookup-pointer
-        \\ SMC patches land in Phase C alongside the dispatcher. 8 slots.
+        \\ Clear per-switch refractory state at level start. 8 slots.
         LDA     #$00
         STA     level_switch_state+0
         STA     level_switch_state+1
@@ -7416,6 +7430,39 @@ IF _SWITCHES
         STA     level_switch_state+5
         STA     level_switch_state+6
         STA     level_switch_state+7
+
+        \\ SMC patches: dispatcher reads per-level switch wiring tables.
+        LDA     level_switch_obj_indices_lookup_LO,X
+        STA     switch_indices_addr_LO                   ; **MODIFIES CODE**
+        LDA     level_switch_obj_indices_lookup_HI,X
+        STA     switch_indices_addr_HI                   ; **MODIFIES CODE**
+        LDA     level_switch_target_lookup_LO,X
+        STA     switch_target_addr_LO                    ; **MODIFIES CODE**
+        LDA     level_switch_target_lookup_HI,X
+        STA     switch_target_addr_HI                    ; **MODIFIES CODE**
+        LDA     level_switch_action_lookup_LO,X
+        STA     switch_action_addr_LO                    ; **MODIFIES CODE**
+        LDA     level_switch_action_lookup_HI,X
+        STA     switch_action_addr_HI                    ; **MODIFIES CODE**
+
+        \\ SMC patches: destroy action reads target's pos and type from
+        \\ the existing per-level object tables.
+        LDA     level_obj_pos_X_lookup_LO,X
+        STA     act_dest_pos_x_addr_LO                   ; **MODIFIES CODE**
+        LDA     level_obj_pos_X_lookup_HI,X
+        STA     act_dest_pos_x_addr_HI                   ; **MODIFIES CODE**
+        LDA     level_obj_pos_Y_lookup_LO,X
+        STA     act_dest_pos_y_addr_LO                   ; **MODIFIES CODE**
+        LDA     level_obj_pos_Y_lookup_HI,X
+        STA     act_dest_pos_y_addr_HI                   ; **MODIFIES CODE**
+        LDA     level_obj_pos_Y_EXT_lookup_LO,X
+        STA     act_dest_pos_y_ext_addr_LO               ; **MODIFIES CODE**
+        LDA     level_obj_pos_Y_EXT_lookup_HI,X
+        STA     act_dest_pos_y_ext_addr_HI               ; **MODIFIES CODE**
+        LDA     level_obj_type_lookup_LO,X
+        STA     act_dest_type_addr_LO                    ; **MODIFIES CODE**
+        LDA     level_obj_type_lookup_HI,X
+        STA     act_dest_type_addr_HI                    ; **MODIFIES CODE**
 ENDIF
 
         TXA
@@ -10829,12 +10876,11 @@ IF _Y_BANDS
 ENDIF
 
 IF _SWITCHES
-\\ Per-level switch wiring tables. One entry per switch object.
-\\ - level_N_switch_obj_indices: object indices of switches on the level,
-\\   $FF terminator. Empty list = single $FF byte.
-\\ - level_N_switch_wiring: parallel 4-byte entries (target_obj_index,
-\\   action_code, arg_a, arg_b). Action codes and the dispatcher land in
-\\   Phase C; Phase A only reserves the storage.
+\\ Per-level switch wiring tables. Three parallel arrays per level,
+\\ indexed by switch slot (0..7):
+\\   level_N_switch_obj_indices: object index of each switch ($FF terminator)
+\\   level_N_switch_target:      target object index ($FF = no target / disabled)
+\\   level_N_switch_action:      action code (see action jump table)
 .level_switch_obj_indices_lookup_LO
         EQUB    LO(level_0_switch_obj_indices)
 .level_switch_obj_indices_lookup_HI
@@ -10845,15 +10891,25 @@ IF _SWITCHES
         EQUB    LO(level_4_switch_obj_indices), HI(level_4_switch_obj_indices)
         EQUB    LO(level_5_switch_obj_indices), HI(level_5_switch_obj_indices)
 
-.level_switch_wiring_lookup_LO
-        EQUB    LO(level_0_switch_wiring)
-.level_switch_wiring_lookup_HI
-        EQUB    HI(level_0_switch_wiring)
-        EQUB    LO(level_1_switch_wiring), HI(level_1_switch_wiring)
-        EQUB    LO(level_2_switch_wiring), HI(level_2_switch_wiring)
-        EQUB    LO(level_3_switch_wiring), HI(level_3_switch_wiring)
-        EQUB    LO(level_4_switch_wiring), HI(level_4_switch_wiring)
-        EQUB    LO(level_5_switch_wiring), HI(level_5_switch_wiring)
+.level_switch_target_lookup_LO
+        EQUB    LO(level_0_switch_target)
+.level_switch_target_lookup_HI
+        EQUB    HI(level_0_switch_target)
+        EQUB    LO(level_1_switch_target), HI(level_1_switch_target)
+        EQUB    LO(level_2_switch_target), HI(level_2_switch_target)
+        EQUB    LO(level_3_switch_target), HI(level_3_switch_target)
+        EQUB    LO(level_4_switch_target), HI(level_4_switch_target)
+        EQUB    LO(level_5_switch_target), HI(level_5_switch_target)
+
+.level_switch_action_lookup_LO
+        EQUB    LO(level_0_switch_action)
+.level_switch_action_lookup_HI
+        EQUB    HI(level_0_switch_action)
+        EQUB    LO(level_1_switch_action), HI(level_1_switch_action)
+        EQUB    LO(level_2_switch_action), HI(level_2_switch_action)
+        EQUB    LO(level_3_switch_action), HI(level_3_switch_action)
+        EQUB    LO(level_4_switch_action), HI(level_4_switch_action)
+        EQUB    LO(level_5_switch_action), HI(level_5_switch_action)
 ENDIF
 
 \ Per-object cached screen coords for the laser beam: when
@@ -12117,6 +12173,194 @@ IF _Y_BANDS
         LDY     #$03
         JSR     palette_set_colour_Y_to_A
 .update_band_colours_done
+        RTS
+ENDIF
+
+IF _SWITCHES
+\ ******************************************************************************
+\ * Switches & triggers — wiring dispatcher and per-frame refractory tick.
+\ *
+\ * On a switch bullet-hit, handle_door_switch calls try_dispatch_switch_action.
+\ * If the switch's object index appears in the per-level switch_obj_indices
+\ * list, the dispatcher fires the wired action (set/clear/toggle alive, or
+\ * destroy) against the target object and returns carry CLEAR — the caller
+\ * suppresses the legacy door_switch_counter_A latch. Switches not in the
+\ * list return carry SET, falling through to the original counter path so
+\ * levels 3/4/5 doors keep working unchanged.
+\ *
+\ * Refractory: each switch has one byte in level_switch_state. Set to 8
+\ * frames on dispatch; tick_switch_logic decrements each frame. Subsequent
+\ * hits while non-zero are consumed (carry CLEAR) without re-firing.
+\ ******************************************************************************
+
+.action_target_idx EQUB $00
+
+.tick_switch_logic
+        LDX     #$07
+.tick_switch_loop
+        LDA     level_switch_state,X
+        BEQ     tick_switch_skip
+        DEC     level_switch_state,X
+.tick_switch_skip
+        DEX
+        BPL     tick_switch_loop
+        RTS
+
+.try_dispatch_switch_action
+\\ {
+        TXA
+        PHA                                              ; preserve bullet index
+
+        LDY     #$00
+.tdsa_search
+.tdsa_load_idx
+        LDA     level_0_switch_obj_indices,Y             ; **SELF-MODIFIED CODE**
+        switch_indices_addr_LO = tdsa_load_idx+1
+        switch_indices_addr_HI = tdsa_load_idx+2
+        CMP     #$FF
+        BEQ     tdsa_not_in_list
+        CMP     current_object
+        BEQ     tdsa_in_list
+        INY
+        CPY     #$08
+        BNE     tdsa_search
+
+.tdsa_not_in_list
+        PLA
+        TAX
+        SEC                                              ; not wired -> legacy fallback
+        RTS
+
+.tdsa_in_list
+        \\ Y = switch slot. Wired switches always consume the hit (carry CLEAR);
+        \\ the legacy counter path is reached only via the not-in-list branch.
+        LDA     level_switch_state,Y
+        BNE     tdsa_consumed                            ; refractory window active
+
+.tdsa_load_target
+        LDA     level_0_switch_target,Y                  ; **SELF-MODIFIED CODE**
+        switch_target_addr_LO = tdsa_load_target+1
+        switch_target_addr_HI = tdsa_load_target+2
+        CMP     #$FF
+        BEQ     tdsa_consumed                            ; no target set
+        STA     action_target_idx
+
+.tdsa_load_action
+        LDA     level_0_switch_action,Y                  ; **SELF-MODIFIED CODE**
+        switch_action_addr_LO = tdsa_load_action+1
+        switch_action_addr_HI = tdsa_load_action+2
+        BEQ     tdsa_consumed                            ; action $00 = none
+
+        \\ Set refractory before dispatch so action handlers don't have to.
+        PHA
+        LDA     #$08
+        STA     level_switch_state,Y
+        PLA
+
+        \\ Vector through action_jump_table. action × 2 = byte offset.
+        ASL     A
+        TAY
+        LDA     action_jump_table,Y
+        STA     tdsa_dispatch_jsr+1
+        LDA     action_jump_table+1,Y
+        STA     tdsa_dispatch_jsr+2
+        LDX     action_target_idx                        ; X = target_obj_index
+.tdsa_dispatch_jsr
+        JSR     $FFFF                                    ; **SELF-MODIFIED CODE**
+
+.tdsa_consumed
+        PLA
+        TAX                                              ; restore bullet index
+        CLC                                              ; consumed -> skip legacy
+        RTS
+\\ }
+
+\\ Action jump table: interleaved (LO, HI) pairs indexed by action_code × 2.
+\\ Slots $05..$0F reserved for follow-up actions (set_param / cycle_param /
+\\ pulse_door); they currently point at action_none so future builds can
+\\ drop them in by replacing entries without touching the dispatcher.
+.action_jump_table
+        EQUB    LO(action_none),         HI(action_none)          ; $00 none
+        EQUB    LO(action_set_alive),    HI(action_set_alive)     ; $01
+        EQUB    LO(action_clear_alive),  HI(action_clear_alive)   ; $02
+        EQUB    LO(action_toggle_alive), HI(action_toggle_alive)  ; $03
+        EQUB    LO(action_destroy),      HI(action_destroy)       ; $04
+        EQUB    LO(action_none),         HI(action_none)          ; $05 reserved
+        EQUB    LO(action_none),         HI(action_none)          ; $06 reserved
+        EQUB    LO(action_none),         HI(action_none)          ; $07 reserved
+        EQUB    LO(action_none),         HI(action_none)          ; $08 reserved
+        EQUB    LO(action_none),         HI(action_none)          ; $09 reserved
+        EQUB    LO(action_none),         HI(action_none)          ; $0A reserved
+        EQUB    LO(action_none),         HI(action_none)          ; $0B reserved
+        EQUB    LO(action_none),         HI(action_none)          ; $0C reserved
+        EQUB    LO(action_none),         HI(action_none)          ; $0D reserved
+        EQUB    LO(action_none),         HI(action_none)          ; $0E reserved
+        EQUB    LO(action_none),         HI(action_none)          ; $0F reserved
+
+.action_none
+        RTS
+
+.action_set_alive
+        \\ X = target_obj_index
+        LDA     level_obj_flags,X
+        ORA     #OBJ_flag_alive
+        STA     level_obj_flags,X
+        RTS
+
+.action_clear_alive
+        LDA     level_obj_flags,X
+        AND     #($FF EOR OBJ_flag_alive)
+        STA     level_obj_flags,X
+        RTS
+
+.action_toggle_alive
+        LDA     level_obj_flags,X
+        EOR     #OBJ_flag_alive
+        STA     level_obj_flags,X
+        RTS
+
+.action_destroy
+        \\ X = target_obj_index. Mirrors destroy_object's effects without
+        \\ clobbering current_object / current_obj_*pos (which the bullet
+        \\ loop still needs after we return). Reads target's pos and type
+        \\ via dedicated SMC slots patched in initialise_level_pointers.
+        LDA     level_obj_flags,X
+        AND     #($FF EOR OBJ_flag_alive)
+        STA     level_obj_flags,X
+
+.act_dest_load_x
+        LDA     level_0_obj_pos_X,X                      ; **SELF-MODIFIED CODE**
+        act_dest_pos_x_addr_LO = act_dest_load_x+1
+        act_dest_pos_x_addr_HI = act_dest_load_x+2
+        CLC
+        ADC     #$02
+        STA     explosion_xpos_INT
+
+.act_dest_load_y
+        LDA     level_0_obj_pos_Y,X                      ; **SELF-MODIFIED CODE**
+        act_dest_pos_y_addr_LO = act_dest_load_y+1
+        act_dest_pos_y_addr_HI = act_dest_load_y+2
+        CLC
+        ADC     #$04
+        STA     explosion_ypos_INT
+
+.act_dest_load_y_ext
+        LDA     level_0_obj_pos_Y_EXT,X                  ; **SELF-MODIFIED CODE**
+        act_dest_pos_y_ext_addr_LO = act_dest_load_y_ext+1
+        act_dest_pos_y_ext_addr_HI = act_dest_load_y_ext+2
+        ADC     #$00
+        STA     explosion_ypos_INT_HI
+
+.act_dest_load_type
+        LDA     level_0_obj_type,X                       ; **SELF-MODIFIED CODE**
+        act_dest_type_addr_LO = act_dest_load_type+1
+        act_dest_type_addr_HI = act_dest_load_type+2
+        TAY
+        LDA     obj_type_score_value,Y
+        JSR     accumulate_score_A
+        LDA     obj_type_explosion_particle,Y
+        STA     explosion_particle_type
+        JSR     create_explosion
         RTS
 ENDIF
 

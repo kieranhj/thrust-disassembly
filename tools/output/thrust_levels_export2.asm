@@ -238,40 +238,54 @@
 
 \ ******************************************************************************
 \ * Switch wiring tables per level
-\ * level_N_switch_obj_indices: object indices of switches, $FF terminator.
-\ * level_N_switch_wiring: 4 bytes per switch (target, action, arg_a, arg_b).
-\ * Phase A emits empty arrays for every level — wiring data lands in Phase B.
+\ * Three parallel arrays per level, indexed by switch slot:
+\ *   level_N_switch_obj_indices: object index of each switch ($FF terminator)
+\ *   level_N_switch_target:     target object index ($FF = no target / disabled)
+\ *   level_N_switch_action:     action code (see thrust.6502)
+\ * Editor wiring UX lands in Phase B ï¿½ Phase A emits empty arrays.
 \ ******************************************************************************
 
 .level_0_switch_obj_indices
         EQUB    $FF
-.level_0_switch_wiring
-        EQUB    $FF,$00,$00,$00
+.level_0_switch_target
+        EQUB    $FF
+.level_0_switch_action
+        EQUB    $00
 
 .level_1_switch_obj_indices
         EQUB    $FF
-.level_1_switch_wiring
-        EQUB    $FF,$00,$00,$00
+.level_1_switch_target
+        EQUB    $FF
+.level_1_switch_action
+        EQUB    $00
 
 .level_2_switch_obj_indices
         EQUB    $FF
-.level_2_switch_wiring
-        EQUB    $FF,$00,$00,$00
+.level_2_switch_target
+        EQUB    $FF
+.level_2_switch_action
+        EQUB    $00
 
 .level_3_switch_obj_indices
-        EQUB    $FF
-.level_3_switch_wiring
-        EQUB    $FF,$00,$00,$00
+        EQUB    $02,$FF                \ HAND-AUTHORED TEST: switch idx 2 wired
+.level_3_switch_target
+        EQUB    $05,$FF                \ ...to object idx 5 (gun_down_right)
+.level_3_switch_action
+        EQUB    $03,$00                \ ...with toggle_alive ($03)
 
 .level_4_switch_obj_indices
         EQUB    $FF
-.level_4_switch_wiring
-        EQUB    $FF,$00,$00,$00
+.level_4_switch_target
+        EQUB    $FF
+.level_4_switch_action
+        EQUB    $00
 
 .level_5_switch_obj_indices
         EQUB    $FF
-.level_5_switch_wiring
-        EQUB    $FF,$00,$00,$00
+.level_5_switch_target
+        EQUB    $FF
+.level_5_switch_action
+        EQUB    $00
 
 \ ******************************************************************************
 \ * No-wrap Y threshold per level
