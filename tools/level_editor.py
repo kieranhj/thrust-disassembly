@@ -198,6 +198,7 @@ OBJECT_TELEPORTER       = 0x10
 TELEPORTER_DEFAULT_DEST = 0
 COL_TELEPORTER          = (120, 220, 255)
 COL_TELEPORTER_WIRE     = (120, 220, 255, 180)  # selected->dest line
+COL_SWITCH_WIRE         = (255, 200, 100, 180)  # switch->target wiring line (orange)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1169,6 +1170,68 @@ SCHEMA_DOOR_SWITCH = [
           values=[("Left wall ($07)", 7), ("Right wall ($08)", 8)]),
 ]
 
+# Switch wiring action codes — must match thrust.6502 action_jump_table.
+SWITCH_ACTION_VALUES = [
+    ("none",          0),
+    ("set_alive",     1),
+    ("clear_alive",   2),
+    ("toggle_alive",  3),
+    ("destroy",       4),
+]
+
+
+def _switch_wiring_fields(lv, obj):
+    """Build per-instance Action and Target fields for a switch object.
+
+    Wiring lives on `lv.wiring[obj_idx]`, not on the object dict, so the
+    getters/setters resolve obj_idx fresh each call (objects move around as
+    types are added/removed). Empty entries (target=$FF AND action=$00)
+    are pruned so the wiring dict stays minimal on export.
+    """
+    def _idx():
+        try:
+            return lv.objects.index(obj)
+        except ValueError:
+            return None
+
+    def _maybe_prune(idx):
+        e = lv.wiring.get(idx)
+        if e is not None and e.get("target", 0xFF) == 0xFF and e.get("action", 0) == 0:
+            lv.wiring.pop(idx, None)
+
+    def _action_get(_t):
+        i = _idx()
+        return lv.wiring.get(i, {}).get("action", 0) if i is not None else 0
+
+    def _action_set(_t, v):
+        i = _idx()
+        if i is None: return
+        e = lv.wiring.setdefault(i, {"target": 0xFF, "action": 0})
+        e["action"] = int(v) & 0xFF
+        _maybe_prune(i)
+
+    def _target_get(_t):
+        i = _idx()
+        return lv.wiring.get(i, {}).get("target", 0xFF) if i is not None else 0xFF
+
+    def _target_set(_t, v):
+        i = _idx()
+        if i is None: return
+        e = lv.wiring.setdefault(i, {"target": 0xFF, "action": 0})
+        e["target"] = int(v) & 0xFF
+        _maybe_prune(i)
+
+    return [
+        Field("switch_action", "Action", "enum",
+              getter=_action_get, setter=_action_set,
+              min=0, max=4, step=1,
+              values=SWITCH_ACTION_VALUES,
+              hotkey=("[", "]")),
+        Field("switch_target", "Target", "ref",
+              getter=_target_get, setter=_target_set,
+              min=0, max=255, step=1, target_kind="object"),
+    ]
+
 SCHEMA_SIMPLE = [
     Field("x", "X", "byte", getter=_g("x"), setter=_s("x"),
           min=0, max=255, step=1, shift_step=8),
@@ -1226,7 +1289,7 @@ def schema_for_selection(editor):
             if t in OBJECT_FIRING_TYPES:
                 return prefix + SCHEMA_GUN, obj, lv
             if t in (0x07, 0x08):
-                return prefix + SCHEMA_DOOR_SWITCH, obj, lv
+                return prefix + SCHEMA_DOOR_SWITCH + _switch_wiring_fields(lv, obj), obj, lv
             return prefix + SCHEMA_SIMPLE, obj, lv
     return [_section_header(f"Level {ln}")] + SCHEMA_LEVEL[1:], lv, lv
 
@@ -2865,6 +2928,52 @@ class Editor:
             print(f"Auto-closed landscape bottom on level(s) {names}")
         return True
 
+    def _check_wiring(self):
+        """Validate every level's switch wiring before export.
+
+        Auto-prunes wiring entries whose switch object has been deleted or
+        is no longer a switch type. Blocks the export with a dialog if any
+        remaining entry has a dangling target_obj_index, or wires to the
+        pod (object 0, type $05) — the pod uses single-instance engine
+        state that isn't safe to alive-toggle or destroy.
+
+        Returns True to proceed, False to abort.
+        """
+        problems = []
+        for lv in self.levels:
+            if not lv.wiring:
+                continue
+            stale = []
+            for sw_idx, entry in lv.wiring.items():
+                # Switch must still exist and still be a switch type.
+                if not (0 <= sw_idx < len(lv.objects)) or lv.objects[sw_idx]["type"] not in (0x07, 0x08):
+                    stale.append(sw_idx)
+                    continue
+                action = entry.get("action", 0)
+                target = entry.get("target", 0xFF)
+                if action == 0 or target == 0xFF:
+                    continue  # unwired entry — exporter handles as no-op
+                if not (0 <= target < len(lv.objects)):
+                    problems.append(f"L{lv.level_num + 1} switch #{sw_idx}: target #{target} doesn't exist")
+                    continue
+                if target == 0 and lv.objects[0]["type"] == 0x05:
+                    problems.append(f"L{lv.level_num + 1} switch #{sw_idx}: targets pod (object 0)")
+            for sw_idx in stale:
+                lv.wiring.pop(sw_idx, None)
+                lv.dirty = True
+
+        if problems:
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror(
+                "Wiring validation failed",
+                "Cannot export — fix these wiring problems first:\n\n  " +
+                "\n  ".join(problems),
+            )
+            root.destroy(); self._drain_input_events()
+            return False
+        return True
+
     def _save_to_file(self, path):
         """Write level data to the given path. No dialog, no prompts."""
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -2913,6 +3022,8 @@ class Editor:
         """
         if not self._check_landscape_bottoms():
             return
+        if not self._check_wiring():
+            return
         if self.last_file_path:
             self._save_to_file(self.last_file_path)
         else:
@@ -2921,6 +3032,8 @@ class Editor:
     def _export(self):
         """Export via file dialog (OS will prompt on overwrite)."""
         if not self._check_landscape_bottoms():
+            return
+        if not self._check_wiring():
             return
 
         if self.last_file_path:
@@ -3249,6 +3362,8 @@ class Editor:
                     self._render_gun_aim(obj, sx, sy, draw_w, draw_h)
                 elif obj["type"] in BOBBING_MINE_TYPES:
                     self._render_bobbing_mine_amp_bar(obj, sx, sy, draw_w, draw_h)
+                elif obj["type"] in (0x07, 0x08) and i == self.selected_object:
+                    self._render_switch_wiring(obj, i, sx, sy, draw_w, draw_h)
 
         screen.set_clip(None)
 
@@ -3417,6 +3532,66 @@ class Editor:
                 # Highlight target spawn.
                 pygame.draw.circle(screen, COL_TELEPORTER,
                                    (int(tx), int(ty)), 5, 1)
+
+    def _render_switch_wiring(self, obj, i, sx, sy, draw_w, draw_h):
+        """When a wired switch is selected, draw a thin line from the switch
+        sprite's centre to its target object's centre, plus the action name
+        floating near the line midpoint.
+        """
+        wiring = self.level.wiring.get(i)
+        if not wiring:
+            return
+        action = wiring.get("action", 0)
+        if action == 0:
+            return
+        target_idx = wiring.get("target", 0xFF)
+        if target_idx == 0xFF or target_idx >= len(self.level.objects):
+            return
+
+        cam = self.camera
+        screen = self.screen
+        cx = sx + draw_w / 2
+        cy = sy + draw_h / 2
+        cxi, cyi = int(cx), int(cy)
+
+        target = self.level.objects[target_idx]
+        tx, ty = cam.world_to_screen(target["x"], target["y"])
+        # Aim at the target's sprite centre (best-effort — small offsets fine).
+        sprite = self.sprite_cache.get(target["type"], self.level)
+        if sprite is not None:
+            tx += sprite.get_width() / 8        # half of sw_world (sw_px / 4 / 2)
+            ty += sprite.get_height() / 4       # half of sh_world (sh_px / 2 / 2)
+        txi, tyi = int(tx), int(ty)
+
+        wire = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+        pygame.draw.line(wire, COL_SWITCH_WIRE, (cxi, cyi), (txi, tyi), 2)
+        # Arrowhead at target.
+        ang = math.atan2(ty - cy, tx - cx)
+        ah = 8
+        for da in (math.pi - 0.4, math.pi + 0.4):
+            ax = tx + math.cos(ang + da) * ah
+            ay = ty + math.sin(ang + da) * ah
+            pygame.draw.line(wire, COL_SWITCH_WIRE,
+                             (txi, tyi), (int(ax), int(ay)), 2)
+        screen.blit(wire, (0, 0))
+
+        # Highlight target.
+        pygame.draw.rect(screen, (255, 200, 100),
+                         (txi - 6, tyi - 6, 13, 13), 1)
+
+        # Action label near the line midpoint.
+        action_name = next((n for n, v in SWITCH_ACTION_VALUES if v == action),
+                           f"act${action:02X}")
+        label = self.font_small.render(action_name, True, (255, 220, 160))
+        mx = int((cx + tx) / 2) - label.get_width() // 2
+        my = int((cy + ty) / 2) - label.get_height() // 2
+        # Faint background plate so the text reads over varied scenery.
+        pad = 2
+        plate = pygame.Surface((label.get_width() + pad * 2,
+                                label.get_height() + pad * 2), pygame.SRCALPHA)
+        plate.fill((0, 0, 0, 140))
+        screen.blit(plate, (mx - pad, my - pad))
+        screen.blit(label, (mx, my))
 
     def _render_bobbing_mine_amp_bar(self, obj, sx, sy, draw_w, draw_h):
         """Overlay a bar showing the mine's bob-amplitude extent at the
@@ -4038,6 +4213,15 @@ class Editor:
                 dest = dest % n if n else 0
                 cp = level.checkpoints[dest]
                 val_text = f"CP{dest}: {cp['spawn_x']},{cp['spawn_y']}"
+            elif field.target_kind == "object":
+                if isinstance(val, int) and val == 0xFF:
+                    val_text = "(none)"
+                elif isinstance(val, int) and 0 <= val < len(level.objects):
+                    obj = level.objects[val]
+                    name = OBJECT_TYPE_NAMES.get(obj["type"], f"${obj['type']:02X}")
+                    val_text = f"#{val}: {name}"
+                else:
+                    val_text = f"#{val}"
             else:
                 val_text = str(val)
             screen.set_clip(val_rect)
@@ -4353,17 +4537,31 @@ class Editor:
                     self.ref_pick_target = target
                     self.ref_pick_level = level
             else:
-                # Cycle
+                # Cycle. Object refs include $FF as a "none" stop in the
+                # cycle so users can clear a wiring without text-entry.
+                direction = 1 if button == 1 else -1
                 if field.target_kind == "checkpoint":
                     n = len(level.checkpoints)
-                else:
+                    if n > 0:
+                        new_val = (cur + direction) % n
+                    else:
+                        new_val = cur
+                else:  # "object"
                     n = len(level.objects)
-                if n > 0:
-                    new_val = (cur + (1 if button == 1 else -1)) % n
-                    if new_val != cur:
-                        self.undo.save(level)
-                        field.set(target, new_val)
-                        level.dirty = True
+                    if n == 0:
+                        new_val = 0xFF
+                    elif cur == 0xFF:
+                        new_val = 0 if direction == 1 else n - 1
+                    else:
+                        nxt = cur + direction
+                        if nxt < 0 or nxt >= n:
+                            new_val = 0xFF
+                        else:
+                            new_val = nxt
+                if new_val != cur:
+                    self.undo.save(level)
+                    field.set(target, new_val)
+                    level.dirty = True
             return
 
     def _handle_palette_click(self, mx, my, button, insp_x, split_y):
@@ -4420,7 +4618,7 @@ class Editor:
         # Disarm after placing (keep armed for repeated placement)
 
     def _handle_ref_pick_click(self, mx, my):
-        """Canvas click during ref-pick mode: set the field to the nearest checkpoint."""
+        """Canvas click during ref-pick mode: set the field to the nearest target."""
         if self.ref_pick_field is None:
             return
         lv = self.level
@@ -4445,6 +4643,27 @@ class Editor:
                     self.undo.save(level)
                     field.set(target, best_i)
                     level.dirty = True
+            elif field.target_kind == "object" and lv.objects:
+                # Pick nearest object by screen distance. Excludes the
+                # selecting switch itself so a self-target isn't a one-click
+                # accident — the user can still set it to self by typing.
+                self_idx = None
+                if isinstance(target, dict) and target in lv.objects:
+                    self_idx = lv.objects.index(target)
+                best_i, best_d = None, float('inf')
+                for i, obj in enumerate(lv.objects):
+                    if i == self_idx:
+                        continue
+                    sx, sy = self.camera.world_to_screen(obj["x"], obj["y"])
+                    d = (sx - mx) ** 2 + (sy - my) ** 2
+                    if d < best_d:
+                        best_d, best_i = d, i
+                if best_i is not None:
+                    old_val = field.get(target)
+                    if best_i != old_val:
+                        self.undo.save(level)
+                        field.set(target, best_i)
+                        level.dirty = True
             break
         self.ref_pick_field = None
 

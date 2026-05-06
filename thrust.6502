@@ -50,7 +50,7 @@ _SWITCHES            = (_SWRAM_BUILD AND TRUE)    ; Editor-driven switches & tri
 \ ******************************************************************************
 \ ******************************************************************************
 
-INITIAL_LEVEL                       = $04       ; staring level
+INITIAL_LEVEL                       = $01       ; staring level
 INITIAL_LIVES                       = $04       ; starting number of lives
 INITIAL_FUEL                        = $10       ; starting fuel value (BCD 1000)
 
@@ -12324,6 +12324,13 @@ IF _SWITCHES
         \\ clobbering current_object / current_obj_*pos (which the bullet
         \\ loop still needs after we return). Reads target's pos and type
         \\ via dedicated SMC slots patched in initialise_level_pointers.
+        \\
+        \\ Bail if target's alive bit is already clear — re-firing would
+        \\ spawn a phantom explosion at the destroyed object's last position
+        \\ and double-award the score.
+        LDA     level_obj_flags,X
+        AND     #OBJ_flag_alive
+        BEQ     act_dest_already_dead
         LDA     level_obj_flags,X
         AND     #($FF EOR OBJ_flag_alive)
         STA     level_obj_flags,X
@@ -12361,6 +12368,7 @@ IF _SWITCHES
         LDA     obj_type_explosion_particle,Y
         STA     explosion_particle_type
         JSR     create_explosion
+.act_dest_already_dead
         RTS
 ENDIF
 
