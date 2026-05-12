@@ -489,6 +489,8 @@ def import_beebasm(path):
         # Switch wiring tables (may not be present in older exports).
         # Up to five parallel arrays terminated by $FF in switch_obj_indices;
         # arg_a/arg_b default to 0 when missing (older format compatibility).
+        # The same switch_obj_indices value may appear in multiple slots —
+        # each is one wiring entry on that switch (multi-trigger).
         wiring = {}
         sw_idx = labels.get(f"level_{n}_switch_obj_indices", [])
         sw_tgt = labels.get(f"level_{n}_switch_target", [])
@@ -498,12 +500,13 @@ def import_beebasm(path):
         for i in range(min(len(sw_idx), len(sw_tgt), len(sw_act))):
             if sw_idx[i] == 0xFF:
                 break
-            wiring[sw_idx[i]] = {
+            entry = {
                 "target": sw_tgt[i],
                 "action": sw_act[i],
                 "arg_a":  sw_aa[i] if i < len(sw_aa) else 0,
                 "arg_b":  sw_ab[i] if i < len(sw_ab) else 0,
             }
+            wiring.setdefault(sw_idx[i], []).append(entry)
 
         lv = LevelData(n, list(left_wall), list(right_wall), objects,
                         terrain_rle, land_col, obj_col, checkpoints, grav,
@@ -859,13 +862,28 @@ def export_beebasm(levels):
     for lv in levels:
         n = lv.level_num
         wiring = getattr(lv, "wiring", {}) or {}
-        # Sort by switch object index for deterministic export
-        switch_objs = sorted(wiring.keys()) if wiring else []
-        indices = [oi for oi in switch_objs] + [0xFF]
-        targets = [wiring[oi].get("target", 0xFF) & 0xFF for oi in switch_objs] + [0xFF]
-        actions = [wiring[oi].get("action", 0x00) & 0xFF for oi in switch_objs] + [0x00]
-        arg_as  = [wiring[oi].get("arg_a", 0x00) & 0xFF for oi in switch_objs] + [0x00]
-        arg_bs  = [wiring[oi].get("arg_b", 0x00) & 0xFF for oi in switch_objs] + [0x00]
+        # Flatten {sw_idx: [entry, ...]} to slot-indexed parallel arrays.
+        # Sort outer by switch index for deterministic export; preserve list
+        # order within each switch (designer chose firing order).
+        indices, targets, actions, arg_as, arg_bs = [], [], [], [], []
+        for sw_idx in sorted(wiring.keys()):
+            entries = wiring[sw_idx]
+            # Defensive: an older single-entry dict slipped through means
+            # exactly one entry on that switch.
+            if isinstance(entries, dict):
+                entries = [entries]
+            for e in entries:
+                indices.append(sw_idx & 0xFF)
+                targets.append(e.get("target", 0xFF) & 0xFF)
+                actions.append(e.get("action", 0x00) & 0xFF)
+                arg_as.append(e.get("arg_a", 0x00) & 0xFF)
+                arg_bs.append(e.get("arg_b", 0x00) & 0xFF)
+        # Parallel terminators.
+        indices.append(0xFF)
+        targets.append(0xFF)
+        actions.append(0x00)
+        arg_as.append(0x00)
+        arg_bs.append(0x00)
         lines.append(f".level_{n}_switch_obj_indices")
         lines.append(f"        EQUB    {format_bytes(indices)}")
         lines.append(f".level_{n}_switch_target")
@@ -1234,93 +1252,47 @@ def slot_labels_for_target(lv, wiring_entry):
     return SWITCH_SLOT_LABELS.get(obj_type, ("Slot 0", "Slot 1", "Slot 2"))
 
 
-def _switch_wiring_fields(lv, obj):
-    """Build per-instance fields for a switch object.
+SWITCH_SLOT_CAP = 8  # parallel arrays in thrust.6502 are 8 entries deep
 
-    Wiring lives on `lv.wiring[obj_idx]`, not on the object dict, so the
-    getters/setters resolve obj_idx fresh each call (objects move around as
-    types are added/removed). Empty entries (target=$FF AND action=$00 AND
-    arg_a=$00 AND arg_b=$00) are pruned so the wiring dict stays minimal
-    on export.
 
-    The Slot and Value fields are only included when the action is one of
-    the param-write codes (set_param/xor_param), and the Slot dropdown
-    labels are pulled from SWITCH_SLOT_LABELS based on the current target's
-    type so the designer sees what each slot means for the wired target.
+def _build_wiring_entry_fields(lv, sw_idx, entry_i):
+    """Build the field list for one wiring entry on switch sw_idx at slot entry_i.
+    Closures rebuild the path each call so deletions/insertions in the list
+    can't leave field setters pointing at the wrong entry.
     """
-    def _idx():
-        try:
-            return lv.objects.index(obj)
-        except ValueError:
-            return None
+    def _entry():
+        lst = lv.wiring.get(sw_idx, [])
+        if 0 <= entry_i < len(lst):
+            return lst[entry_i]
+        return {}
 
-    def _maybe_prune(idx):
-        e = lv.wiring.get(idx)
-        if e is None:
-            return
-        if (e.get("target", 0xFF) == 0xFF
-                and e.get("action", 0) == 0
-                and e.get("arg_a", 0) == 0
-                and e.get("arg_b", 0) == 0):
-            lv.wiring.pop(idx, None)
+    def _ensure_entry():
+        lst = lv.wiring.setdefault(sw_idx, [])
+        while len(lst) <= entry_i:
+            lst.append({"target": 0xFF, "action": 0, "arg_a": 0, "arg_b": 0})
+        return lst[entry_i]
 
-    def _entry_get_or_default():
-        i = _idx()
-        return lv.wiring.get(i, {}) if i is not None else {}
+    def _g(key, default):
+        return lambda _t: _entry().get(key, default)
 
-    def _action_get(_t):
-        return _entry_get_or_default().get("action", 0)
-
-    def _action_set(_t, v):
-        i = _idx()
-        if i is None: return
-        e = lv.wiring.setdefault(i, {"target": 0xFF, "action": 0, "arg_a": 0, "arg_b": 0})
-        e["action"] = int(v) & 0xFF
-        _maybe_prune(i)
-
-    def _target_get(_t):
-        return _entry_get_or_default().get("target", 0xFF)
-
-    def _target_set(_t, v):
-        i = _idx()
-        if i is None: return
-        e = lv.wiring.setdefault(i, {"target": 0xFF, "action": 0, "arg_a": 0, "arg_b": 0})
-        e["target"] = int(v) & 0xFF
-        _maybe_prune(i)
-
-    def _arg_a_get(_t):
-        return _entry_get_or_default().get("arg_a", 0)
-
-    def _arg_a_set(_t, v):
-        i = _idx()
-        if i is None: return
-        e = lv.wiring.setdefault(i, {"target": 0xFF, "action": 0, "arg_a": 0, "arg_b": 0})
-        e["arg_a"] = int(v) & 0xFF
-        _maybe_prune(i)
-
-    def _arg_b_get(_t):
-        return _entry_get_or_default().get("arg_b", 0)
-
-    def _arg_b_set(_t, v):
-        i = _idx()
-        if i is None: return
-        e = lv.wiring.setdefault(i, {"target": 0xFF, "action": 0, "arg_a": 0, "arg_b": 0})
-        e["arg_b"] = int(v) & 0xFF
-        _maybe_prune(i)
+    def _s(key):
+        def setter(_t, v):
+            e = _ensure_entry()
+            e[key] = int(v) & 0xFF
+        return setter
 
     fields = [
-        Field("switch_action", "Action", "enum",
-              getter=_action_get, setter=_action_set,
-              min=0, max=7, step=1,
-              values=SWITCH_ACTION_VALUES,
+        Field(f"sw_action_{entry_i}", "Action", "enum",
+              getter=_g("action", 0), setter=_s("action"),
+              min=0, max=7, step=1, values=SWITCH_ACTION_VALUES,
               hotkey=("[", "]")),
-        Field("switch_target", "Target", "ref",
-              getter=_target_get, setter=_target_set,
+        Field(f"sw_target_{entry_i}", "Target", "ref",
+              getter=_g("target", 0xFF), setter=_s("target"),
               min=0, max=255, step=1, target_kind="object"),
     ]
 
-    # Conditionally expose Slot + Value when the action is a param write.
-    entry = _entry_get_or_default()
+    # Slot + Value (or Mask) are only meaningful for the param-write actions.
+    entry = _entry()
     action = entry.get("action", 0)
     if action in SWITCH_PARAM_ACTIONS:
         slot0, slot1, slot2 = slot_labels_for_target(lv, entry)
@@ -1329,19 +1301,71 @@ def _switch_wiring_fields(lv, obj):
             (f"Slot 1: {slot1}", 1),
             (f"Slot 2: {slot2}", 2),
         ]
-        # set_param writes a value; xor_param's arg_b is a bit mask, so
-        # relabel to make that obvious in the inspector.
         value_label = "Mask" if action == 7 else "Value"
         fields.append(
-            Field("switch_slot", "Slot", "enum",
-                  getter=_arg_a_get, setter=_arg_a_set,
+            Field(f"sw_slot_{entry_i}", "Slot", "enum",
+                  getter=_g("arg_a", 0), setter=_s("arg_a"),
                   min=0, max=2, step=1, values=slot_values,
                   hotkey=(",", ".")))
         fields.append(
-            Field("switch_value", value_label, "byte",
-                  getter=_arg_b_get, setter=_arg_b_set,
+            Field(f"sw_value_{entry_i}", value_label, "byte",
+                  getter=_g("arg_b", 0), setter=_s("arg_b"),
                   min=0, max=255, step=1, shift_step=16))
 
+    return fields
+
+
+def _switch_wiring_fields(lv, obj):
+    """Build the wiring list editor for a switch object.
+
+    Each wiring entry renders as a numbered sub-section (header + fields +
+    Delete button). A "+ Add wiring" button at the end appends a new empty
+    entry, unless the per-level 8-slot table cap has been reached.
+    """
+    try:
+        sw_idx = lv.objects.index(obj)
+    except ValueError:
+        return []
+
+    entries = lv.wiring.get(sw_idx, [])
+
+    def _delete_entry(i):
+        def _click(_t, _v=None):
+            lst = lv.wiring.get(sw_idx)
+            if lst is None or not (0 <= i < len(lst)):
+                return
+            lst.pop(i)
+            if not lst:
+                lv.wiring.pop(sw_idx, None)
+        return _click
+
+    def _append_entry(_t, _v=None):
+        # Respect the per-level total cap so the export never exceeds 8 slots.
+        total = sum(len(v) for v in lv.wiring.values())
+        if total >= SWITCH_SLOT_CAP:
+            return
+        lv.wiring.setdefault(sw_idx, []).append(
+            {"target": 0xFF, "action": 0, "arg_a": 0, "arg_b": 0})
+
+    fields = []
+    if not entries:
+        fields.append(_section_header("Wiring (none)"))
+    for entry_i in range(len(entries)):
+        fields.append(_section_header(f"Wiring #{entry_i + 1}"))
+        fields.extend(_build_wiring_entry_fields(lv, sw_idx, entry_i))
+        fields.append(
+            Field(f"sw_delete_{entry_i}", "✕ Delete entry", "button",
+                  getter=lambda _t: 0,
+                  setter=_delete_entry(entry_i)))
+
+    # Total entries across all switches (cap shared by the export's parallel arrays).
+    total_entries = sum(len(v) for v in lv.wiring.values())
+    if total_entries < SWITCH_SLOT_CAP:
+        fields.append(
+            Field("sw_add", "+ Add wiring", "button",
+                  getter=lambda _t: 0, setter=_append_entry))
+    else:
+        fields.append(_readonly("(max 8 wiring entries per level)", ""))
     return fields
 
 SCHEMA_SIMPLE = [
@@ -1430,9 +1454,10 @@ class LevelData:
         # Y-banded gravity overrides. Each band: {"y": int (0..0xFFFE), "gravity": int (0..0xFF)}.
         # Sorted ascending by y; band is active when player_y >= band["y"].
         self.bands = bands if bands is not None else []
-        # Switch wiring: dict mapping switch object index -> {"target": int, "action": int}.
-        # Phase B will add editor UI; for now this preserves hand-authored wiring
-        # across import/export round-trips.
+        # Switch wiring: dict mapping switch object index -> list of entries.
+        # Each entry: {"target": int, "action": int, "arg_a": int, "arg_b": int}.
+        # A switch can have multiple entries (multi-trigger) — they all fire
+        # in list order on each switch hit, sharing one refractory window.
         self.wiring = wiring if wiring is not None else {}
         self.dirty = False
         self.terrain_dirty = False    # True when walls have been edited
@@ -3056,26 +3081,36 @@ class Editor:
             if not lv.wiring:
                 continue
             stale = []
-            for sw_idx, entry in lv.wiring.items():
+            total_entries = 0
+            for sw_idx, entries in lv.wiring.items():
                 # Switch must still exist and still be a switch type.
                 if not (0 <= sw_idx < len(lv.objects)) or lv.objects[sw_idx]["type"] not in (0x07, 0x08):
                     stale.append(sw_idx)
                     continue
-                action = entry.get("action", 0)
-                target = entry.get("target", 0xFF)
-                if action == 0 or target == 0xFF:
-                    continue  # unwired entry — exporter handles as no-op
-                if not (0 <= target < len(lv.objects)):
-                    problems.append(f"L{lv.level_num + 1} switch #{sw_idx}: target #{target} doesn't exist")
-                    continue
-                if target == 0 and lv.objects[0]["type"] == 0x05:
-                    problems.append(f"L{lv.level_num + 1} switch #{sw_idx}: targets pod (object 0)")
-                if action in SWITCH_PARAM_ACTIONS:
-                    arg_a = entry.get("arg_a", 0)
-                    if arg_a > 2:
-                        problems.append(
-                            f"L{lv.level_num + 1} switch #{sw_idx}: "
-                            f"slot {arg_a} out of range (must be 0..2)")
+                # Defensive: tolerate a stray single-entry dict.
+                if isinstance(entries, dict):
+                    entries = [entries]
+                    lv.wiring[sw_idx] = entries
+                for entry_i, entry in enumerate(entries):
+                    total_entries += 1
+                    action = entry.get("action", 0)
+                    target = entry.get("target", 0xFF)
+                    label = f"L{lv.level_num + 1} switch #{sw_idx} entry #{entry_i + 1}"
+                    if action == 0 or target == 0xFF:
+                        continue  # placeholder — exporter handles as no-op
+                    if not (0 <= target < len(lv.objects)):
+                        problems.append(f"{label}: target #{target} doesn't exist")
+                        continue
+                    if target == 0 and lv.objects[0]["type"] == 0x05:
+                        problems.append(f"{label}: targets pod (object 0)")
+                    if action in SWITCH_PARAM_ACTIONS:
+                        arg_a = entry.get("arg_a", 0)
+                        if arg_a > 2:
+                            problems.append(f"{label}: slot {arg_a} out of range (must be 0..2)")
+            if total_entries > 8:
+                problems.append(
+                    f"L{lv.level_num + 1}: {total_entries} wiring entries across all switches "
+                    f"exceeds the 8-slot table cap")
             for sw_idx in stale:
                 lv.wiring.pop(sw_idx, None)
                 lv.dirty = True
@@ -3652,18 +3687,11 @@ class Editor:
                                    (int(tx), int(ty)), 5, 1)
 
     def _render_switch_wiring(self, obj, i, sx, sy, draw_w, draw_h):
-        """When a wired switch is selected, draw a thin line from the switch
-        sprite's centre to its target object's centre, plus the action name
-        floating near the line midpoint.
+        """When a wired switch is selected, draw one line + arrow + action
+        label per wiring entry, fanning out to each target.
         """
-        wiring = self.level.wiring.get(i)
-        if not wiring:
-            return
-        action = wiring.get("action", 0)
-        if action == 0:
-            return
-        target_idx = wiring.get("target", 0xFF)
-        if target_idx == 0xFF or target_idx >= len(self.level.objects):
+        entries = self.level.wiring.get(i)
+        if not entries:
             return
 
         cam = self.camera
@@ -3672,44 +3700,49 @@ class Editor:
         cy = sy + draw_h / 2
         cxi, cyi = int(cx), int(cy)
 
-        target = self.level.objects[target_idx]
-        tx, ty = cam.world_to_screen(target["x"], target["y"])
-        # Aim at the target's sprite centre (best-effort — small offsets fine).
-        sprite = self.sprite_cache.get(target["type"], self.level)
-        if sprite is not None:
-            tx += sprite.get_width() / 8        # half of sw_world (sw_px / 4 / 2)
-            ty += sprite.get_height() / 4       # half of sh_world (sh_px / 2 / 2)
-        txi, tyi = int(tx), int(ty)
-
         wire = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
-        pygame.draw.line(wire, COL_SWITCH_WIRE, (cxi, cyi), (txi, tyi), 2)
-        # Arrowhead at target.
-        ang = math.atan2(ty - cy, tx - cx)
-        ah = 8
-        for da in (math.pi - 0.4, math.pi + 0.4):
-            ax = tx + math.cos(ang + da) * ah
-            ay = ty + math.sin(ang + da) * ah
-            pygame.draw.line(wire, COL_SWITCH_WIRE,
-                             (txi, tyi), (int(ax), int(ay)), 2)
+
+        for entry in entries:
+            action = entry.get("action", 0)
+            if action == 0:
+                continue
+            target_idx = entry.get("target", 0xFF)
+            if target_idx == 0xFF or target_idx >= len(self.level.objects):
+                continue
+
+            target = self.level.objects[target_idx]
+            tx, ty = cam.world_to_screen(target["x"], target["y"])
+            sprite = self.sprite_cache.get(target["type"], self.level)
+            if sprite is not None:
+                tx += sprite.get_width() / 8
+                ty += sprite.get_height() / 4
+            txi, tyi = int(tx), int(ty)
+
+            pygame.draw.line(wire, COL_SWITCH_WIRE, (cxi, cyi), (txi, tyi), 2)
+            ang = math.atan2(ty - cy, tx - cx)
+            ah = 8
+            for da in (math.pi - 0.4, math.pi + 0.4):
+                ax = tx + math.cos(ang + da) * ah
+                ay = ty + math.sin(ang + da) * ah
+                pygame.draw.line(wire, COL_SWITCH_WIRE,
+                                 (txi, tyi), (int(ax), int(ay)), 2)
+
+            pygame.draw.rect(screen, (255, 200, 100),
+                             (txi - 6, tyi - 6, 13, 13), 1)
+
+            action_name = next((n for n, v in SWITCH_ACTION_VALUES if v == action),
+                               f"act${action:02X}")
+            label = self.font_small.render(action_name, True, (255, 220, 160))
+            mx = int((cx + tx) / 2) - label.get_width() // 2
+            my = int((cy + ty) / 2) - label.get_height() // 2
+            pad = 2
+            plate = pygame.Surface((label.get_width() + pad * 2,
+                                    label.get_height() + pad * 2), pygame.SRCALPHA)
+            plate.fill((0, 0, 0, 140))
+            screen.blit(plate, (mx - pad, my - pad))
+            screen.blit(label, (mx, my))
+
         screen.blit(wire, (0, 0))
-
-        # Highlight target.
-        pygame.draw.rect(screen, (255, 200, 100),
-                         (txi - 6, tyi - 6, 13, 13), 1)
-
-        # Action label near the line midpoint.
-        action_name = next((n for n, v in SWITCH_ACTION_VALUES if v == action),
-                           f"act${action:02X}")
-        label = self.font_small.render(action_name, True, (255, 220, 160))
-        mx = int((cx + tx) / 2) - label.get_width() // 2
-        my = int((cy + ty) / 2) - label.get_height() // 2
-        # Faint background plate so the text reads over varied scenery.
-        pad = 2
-        plate = pygame.Surface((label.get_width() + pad * 2,
-                                label.get_height() + pad * 2), pygame.SRCALPHA)
-        plate.fill((0, 0, 0, 140))
-        screen.blit(plate, (mx - pad, my - pad))
-        screen.blit(label, (mx, my))
 
     def _render_bobbing_mine_amp_bar(self, obj, sx, sy, draw_w, draw_h):
         """Overlay a bar showing the mine's bob-amplitude extent at the
@@ -4107,7 +4140,13 @@ class Editor:
         if self.input_focus:
             hint = "typing — Enter to commit, Esc to cancel"
         elif self.ref_pick_field is not None:
-            hint = "click a checkpoint on canvas to pick"
+            kind = "object"  # default; refine from the armed field's target_kind if available
+            schema, _, _ = schema_for_selection(self)
+            for f in schema:
+                if f.id == self.ref_pick_field and f.target_kind:
+                    kind = f.target_kind
+                    break
+            hint = f"click a {kind} on canvas to pick"
         elif self.palette_armed_type is not None:
             name = OBJECT_TYPE_NAMES.get(self.palette_armed_type,
                                          f"${self.palette_armed_type:02X}")
@@ -4227,6 +4266,17 @@ class Editor:
             t = self.font.render(field.label, True, (210, 215, 235))
             screen.blit(t, (rect.x + (rect.width - t.get_width()) // 2,
                             rect.y + (rect.height - t.get_height()) // 2))
+            return
+
+        # Button — full-width clickable rect, no value widget. Setter is
+        # invoked as a side-effect on click (see _handle_field_click).
+        if field.kind == "button":
+            inset = pygame.Rect(rect.x + 6, rect.y + 2, rect.width - 12, rect.height - 4)
+            pygame.draw.rect(screen, COL_BTN, inset, border_radius=3)
+            pygame.draw.rect(screen, COL_INSP_BORDER, inset, 1, border_radius=3)
+            t = self.font_small.render(field.label, True, COL_FIELD_VALUE)
+            screen.blit(t, (inset.x + (inset.width - t.get_width()) // 2,
+                            inset.y + (inset.height - t.get_height()) // 2))
             return
 
         bg = COL_FIELD_ACTIVE if is_active else COL_FIELD_BG
@@ -4570,6 +4620,15 @@ class Editor:
         if field.kind in ("readonly", "header"):
             return
 
+        # Button: invoke setter as side-effect on left-click. Undo + dirty
+        # are handled here so individual button setters stay simple.
+        if field.kind == "button":
+            if button == 1:
+                self.undo.save(level)
+                field.set(target, None)
+                level.dirty = True
+            return
+
         wx = rect.x + FIELD_LABEL_W
         ww = rect.right - wx - 4
         w_rect = pygame.Rect(wx, rect.y + 2, ww, FIELD_H - 4)
@@ -4762,16 +4821,12 @@ class Editor:
                     field.set(target, best_i)
                     level.dirty = True
             elif field.target_kind == "object" and lv.objects:
-                # Pick nearest object by screen distance. Excludes the
-                # selecting switch itself so a self-target isn't a one-click
-                # accident — the user can still set it to self by typing.
-                self_idx = None
-                if isinstance(target, dict) and target in lv.objects:
-                    self_idx = lv.objects.index(target)
+                # Pick nearest object by screen distance. Self-targeting
+                # is allowed — a switch can validly wire to itself (e.g.
+                # destroy-self, or any future "consume on activation"
+                # semantics).
                 best_i, best_d = None, float('inf')
                 for i, obj in enumerate(lv.objects):
-                    if i == self_idx:
-                        continue
                     sx, sy = self.camera.world_to_screen(obj["x"], obj["y"])
                     d = (sx - mx) ** 2 + (sy - my) ** 2
                     if d < best_d:

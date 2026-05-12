@@ -247,15 +247,15 @@
 \ ******************************************************************************
 
 .level_0_switch_obj_indices
-        EQUB    $09,$FF
+        EQUB    $09,$09,$09,$FF
 .level_0_switch_target
-        EQUB    $03,$FF
+        EQUB    $03,$03,$02,$FF
 .level_0_switch_action
-        EQUB    $07,$00
+        EQUB    $07,$07,$04,$00
 .level_0_switch_arg_a
-        EQUB    $02,$00
+        EQUB    $02,$01,$00,$00
 .level_0_switch_arg_b
-        EQUB    $80,$00
+        EQUB    $80,$80,$00,$00
 
 .level_1_switch_obj_indices
         EQUB    $FF

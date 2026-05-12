@@ -12311,6 +12311,8 @@ IF _SWITCHES
 .action_target_idx EQUB $00
 .action_arg_a      EQUB $00            ; pre-loaded by dispatcher; param actions read this
 .action_arg_b      EQUB $00            ; pre-loaded by dispatcher; param actions read this
+.tdsa_match_found  EQUB $00            ; multi-trigger: 0 = no match yet, 1 = found at least one matching wiring entry
+.tdsa_save_y       EQUB $00            ; multi-trigger: switch slot iterator, saved across each action JSR (action_destroy clobbers Y)
 
 .tick_switch_logic
         LDX     #$07
@@ -12325,8 +12327,17 @@ IF _SWITCHES
 
 .try_dispatch_switch_action
 \\ {
+        \\ Multi-trigger: a switch can have any number of wiring entries (up
+        \\ to the 8-slot table cap). Walk the indices list; for each slot
+        \\ matching current_object, fire its action. Refractory is checked
+        \\ ONCE on the first match — if active, skip the whole batch (so
+        \\ rapid double-shots can't half-fire some entries while others sit
+        \\ behind the cool-down). Otherwise fire all matches in slot order
+        \\ and set refractory on each as we go.
         TXA
         PHA                                              ; preserve bullet index
+        LDA     #$00
+        STA     tdsa_match_found
 
         LDY     #$00
 .tdsa_search
@@ -12335,48 +12346,38 @@ IF _SWITCHES
         switch_indices_addr_LO = tdsa_load_idx+1
         switch_indices_addr_HI = tdsa_load_idx+2
         CMP     #$FF
-        BEQ     tdsa_not_in_list
+        BEQ     tdsa_done
         CMP     current_object
-        BEQ     tdsa_in_list
-        INY
-        CPY     #$08
-        BNE     tdsa_search
+        BNE     tdsa_next_slot
 
-.tdsa_not_in_list
-        PLA
-        TAX
-        SEC                                              ; not wired -> legacy fallback
-        RTS
-
-.tdsa_in_list
-        \\ Y = switch slot. Wired switches always consume the hit (carry CLEAR);
-        \\ the legacy counter path is reached only via the not-in-list branch.
+        \\ Slot Y matches our switch. First match drives refractory.
+        LDA     tdsa_match_found
+        BNE     tdsa_fire_entry                          ; not first match: just fire
+        INC     tdsa_match_found
         LDA     level_switch_state,Y
-        BNE     tdsa_consumed                            ; refractory window active
+        BNE     tdsa_done                                ; first match in refractory: skip whole batch
+
+.tdsa_fire_entry
+        \\ Set refractory on this slot before dispatch.
+        \\ ~20 frames (~0.6s @ 33Hz, the centisecond-gated main-loop rate).
+        STY     tdsa_save_y
+        LDA     #$14
+        STA     level_switch_state,Y
 
 .tdsa_load_target
         LDA     level_0_switch_target,Y                  ; **SELF-MODIFIED CODE**
         switch_target_addr_LO = tdsa_load_target+1
         switch_target_addr_HI = tdsa_load_target+2
         CMP     #$FF
-        BEQ     tdsa_consumed                            ; no target set
+        BEQ     tdsa_skip_entry                          ; no target: skip this entry, continue search
         STA     action_target_idx
 
 .tdsa_load_action
         LDA     level_0_switch_action,Y                  ; **SELF-MODIFIED CODE**
         switch_action_addr_LO = tdsa_load_action+1
         switch_action_addr_HI = tdsa_load_action+2
-        BEQ     tdsa_consumed                            ; action $00 = none
+        BEQ     tdsa_skip_entry                          ; action $00 = none: skip
         PHA                                              ; stash action across arg loads
-
-        \\ Set refractory before dispatch so action handlers don't have to.
-        \\ ~20 frames (~0.6s @ 33Hz, the centisecond-gated main-loop rate)
-        \\ — long enough that a stray rapid second shot during the player's
-        \\ bullet stream can't immediately undo a toggle / re-fire a destroy
-        \\ / flip a param back. Tick decrements once per frame in
-        \\ tick_switch_logic.
-        LDA     #$14
-        STA     level_switch_state,Y
 
         \\ Pre-load arg_a / arg_b so param actions can read them without
         \\ needing to recover the switch slot Y after dispatch.
@@ -12392,6 +12393,7 @@ IF _SWITCHES
         STA     action_arg_b
 
         \\ Vector through action_jump_table. action × 2 = byte offset.
+        \\ This clobbers Y (used as table index); save_y holds the slot for us.
         PLA                                              ; recover action code
         ASL     A
         TAY
@@ -12403,10 +12405,22 @@ IF _SWITCHES
 .tdsa_dispatch_jsr
         JSR     $FFFF                                    ; **SELF-MODIFIED CODE**
 
-.tdsa_consumed
+.tdsa_skip_entry
+        LDY     tdsa_save_y                              ; restore loop index
+.tdsa_next_slot
+        INY
+        CPY     #$08
+        BNE     tdsa_search
+
+.tdsa_done
         PLA
         TAX                                              ; restore bullet index
-        CLC                                              ; consumed -> skip legacy
+        LDA     tdsa_match_found
+        BEQ     tdsa_no_match
+        CLC                                              ; matched at least one entry: consumed
+        RTS
+.tdsa_no_match
+        SEC                                              ; not wired: fall through to legacy
         RTS
 \\ }
 
