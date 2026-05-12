@@ -1201,14 +1201,19 @@ SCHEMA_DOOR_SWITCH = [
 ]
 
 # Switch wiring action codes — must match thrust.6502 action_jump_table.
+# The set/clear/toggle_alive actions ($01..$03) are present in the engine
+# for backward compatibility with any in-flight wiring but intentionally
+# hidden from the editor: their "vanish" semantics overlap with destroy
+# (for permanent removal) and the disabled trio (for visible-but-inert
+# state), without a real puzzle use case of their own.
 SWITCH_ACTION_VALUES = [
-    ("none",          0),
-    ("set_alive",     1),
-    ("clear_alive",   2),
-    ("toggle_alive",  3),
-    ("destroy",       4),
-    ("set_param",     6),
-    ("xor_param",     7),
+    ("none",             0),
+    ("destroy",          4),
+    ("set_param",        6),
+    ("xor_param",        7),
+    ("set_disabled",     8),
+    ("clear_disabled",   9),
+    ("toggle_disabled", 10),
 ]
 
 # Action codes that need the Slot + Value (Mask) inspector fields.

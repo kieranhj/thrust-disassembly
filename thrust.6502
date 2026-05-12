@@ -137,6 +137,7 @@ OBJ_flag_drawn                      = $01       ; level_obj_flags bit 0: sprite 
 OBJ_flag_alive                      = $02       ; level_obj_flags bit 1: object is active (update + draw + collide)
 OBJ_flag_laser_beam_drawn           = $04       ; level_obj_flags bit 2: laser_turret beam was XOR-plotted (needs erase before re-evaluation)
 OBJ_flag_laser_redraw_pending       = $08       ; level_obj_flags bit 3: laser geometry changed (set_param/xor_param) -- skip update_one_laser_beam fast path so the cached pixels get erased and redrawn at the new endpoint
+OBJ_flag_disabled                   = $10       ; level_obj_flags bit 4: per-type behaviour suspended (gun fire / laser beam / mine motion+contact / well force / teleporter warp). Sprite still plots; bullet collision still works -- the object is visually present but inert.
 
 PARTICLE_flag                       = $80       ; particle can be replaced
 PARTICLE_lifetime_bullet            = $28       ; bullet lifetime in ticks
@@ -1832,6 +1833,13 @@ IF _BOBBING_MINES
         CMP     #OBJECT_bobbing_mine_horizontal
         BNE     not_mine_ship_contact
     .do_mine_ship_contact_test
+IF _SWITCHES
+        \\ Disabled mines are inert — fly past them. The destruction path
+        \\ via bullets still works (destroy_object doesn't read this bit).
+        LDA     level_obj_flags,X
+        AND     #OBJ_flag_disabled
+        BNE     not_mine_ship_contact
+ENDIF
 
         SEC                                          ; 16-bit dy = mine_y - player_y
         LDA     current_obj_ypos_INT
@@ -2119,6 +2127,13 @@ ENDIF
         LDA     object_type
         CMP     #OBJECT_fuel
         BCS     generator_debris_tick
+IF _SWITCHES
+        \\ Disabled guns stay drawn but stop firing.
+        LDX     current_object
+        LDA     level_obj_flags,X
+        AND     #OBJ_flag_disabled
+        BNE     generator_debris_tick
+ENDIF
 
         LDA     generator_recharge_counter          ; guns are silenced while generator
         BNE     generator_debris_tick               ; is recharging (or already destroyed)
@@ -7327,6 +7342,18 @@ IF _Y_BANDS
         STA     band_current_active_index
 ENDIF
 IF _BOBBING_MINES
+        \\ Reset every per-mine local tick to 0 so re-entry into the level
+        \\ (or first play) starts each mine at the position the designer
+        \\ authored via the phase slot. 32 slots = LEVEL_MAX_OBJECTS + 1.
+        \\ Cheap enough to unroll for a tight loop's cost rather than a
+        \\ JSR; 32 zeroes is the worst case per level start.
+        LDA     #$00
+        LDY     #$1F
+.init_bm_local_tick_loop
+        STA     bobbing_mine_local_tick,Y
+        DEY
+        BPL     init_bm_local_tick_loop
+
         LDA     level_obj_data_0_lookup_LO,X
         STA     bm_phase_addr_LO                          ; **MODIFIES CODE** (slot 0 = phase)
         LDA     level_obj_data_0_lookup_HI,X
@@ -11062,6 +11089,15 @@ ENDIF
 
 .update_one_laser_beam
 \\ {
+        \\ Disabled lasers route through the off-phase erase path so any
+        \\ currently-drawn beam gets XOR-erased cleanly and no redraw fires
+        \\ this frame. Sprite plot is unaffected — turret stays visible.
+        LDA     level_obj_flags,X
+        AND     #OBJ_flag_disabled
+        BEQ     laser_not_disabled
+        JMP     laser_should_be_off
+    .laser_not_disabled
+
         \\ Load per-instance beam direction (dx, dy) into scratch. Needed for
         \\ any erase or draw call into draw_laser_beam_at_obj_screen. (Wasted
         \\ ~8 cycles on the fast path that returns without drawing — cheap
@@ -11529,6 +11565,15 @@ WELL_DEBRIS_SPAWN_MASK    = $01          ; emit one particle every 8 ticks per w
         BEQ     well_is_well
         JMP     well_loop_next
     .well_is_well
+        \\ OBJ_flag_disabled suspends the well's pull AND debris emission.
+        \\ Sprite path (debris ring as visual cue) is what would normally
+        \\ draw the well — turning it off makes the field look genuinely
+        \\ inert in-game.
+        LDA     level_obj_flags,X
+        AND     #OBJ_flag_disabled
+        BEQ     well_not_disabled
+        JMP     well_loop_next
+    .well_not_disabled
 
         \\ Radius == 0 means well is disabled (default for non-well slots too).
     .well_load_radius
@@ -11983,6 +12028,12 @@ TELEPORTER_CENTRE_Y_OFFSET  = $04          ; pixel rows
 \ ******************************************************************************
 .teleporter_check_ship_contact
 {
+        \\ Disabled pads don't trigger the warp. Sprite path (debris ring)
+        \\ still ran above; we just suppress the latch here so the player
+        \\ can stand on a dormant pad without warping.
+        LDA     level_obj_flags,X
+        AND     #OBJ_flag_disabled
+        BNE     no_contact
         LDA     pod_tethered_flag
         BNE     no_contact
         LDA     pod_lifted_flag
@@ -12425,26 +12476,26 @@ IF _SWITCHES
 \\ }
 
 \\ Action jump table: interleaved (LO, HI) pairs indexed by action_code × 2.
-\\ Slots $05, $08..$0F reserved for follow-up actions (cycle_param / pulse_door);
+\\ Slots $05, $0B..$0F reserved for follow-up actions (pulse_door / cycle_param);
 \\ they currently point at action_none so future builds can drop them in by
 \\ replacing entries without touching the dispatcher.
 .action_jump_table
-        EQUB    LO(action_none),         HI(action_none)          ; $00 none
-        EQUB    LO(action_set_alive),    HI(action_set_alive)     ; $01
-        EQUB    LO(action_clear_alive),  HI(action_clear_alive)   ; $02
-        EQUB    LO(action_toggle_alive), HI(action_toggle_alive)  ; $03
-        EQUB    LO(action_destroy),      HI(action_destroy)       ; $04
-        EQUB    LO(action_none),         HI(action_none)          ; $05 reserved
-        EQUB    LO(action_set_param),    HI(action_set_param)     ; $06
-        EQUB    LO(action_xor_param),    HI(action_xor_param)     ; $07
-        EQUB    LO(action_none),         HI(action_none)          ; $08 reserved
-        EQUB    LO(action_none),         HI(action_none)          ; $09 reserved
-        EQUB    LO(action_none),         HI(action_none)          ; $0A reserved
-        EQUB    LO(action_none),         HI(action_none)          ; $0B reserved
-        EQUB    LO(action_none),         HI(action_none)          ; $0C reserved
-        EQUB    LO(action_none),         HI(action_none)          ; $0D reserved
-        EQUB    LO(action_none),         HI(action_none)          ; $0E reserved
-        EQUB    LO(action_none),         HI(action_none)          ; $0F reserved
+        EQUB    LO(action_none),            HI(action_none)             ; $00 none
+        EQUB    LO(action_set_alive),       HI(action_set_alive)        ; $01
+        EQUB    LO(action_clear_alive),     HI(action_clear_alive)      ; $02
+        EQUB    LO(action_toggle_alive),    HI(action_toggle_alive)     ; $03
+        EQUB    LO(action_destroy),         HI(action_destroy)          ; $04
+        EQUB    LO(action_none),            HI(action_none)             ; $05 reserved (pulse_door)
+        EQUB    LO(action_set_param),       HI(action_set_param)        ; $06
+        EQUB    LO(action_xor_param),       HI(action_xor_param)        ; $07
+        EQUB    LO(action_set_disabled),    HI(action_set_disabled)     ; $08
+        EQUB    LO(action_clear_disabled),  HI(action_clear_disabled)   ; $09
+        EQUB    LO(action_toggle_disabled), HI(action_toggle_disabled)  ; $0A
+        EQUB    LO(action_none),            HI(action_none)             ; $0B reserved
+        EQUB    LO(action_none),            HI(action_none)             ; $0C reserved
+        EQUB    LO(action_none),            HI(action_none)             ; $0D reserved
+        EQUB    LO(action_none),            HI(action_none)             ; $0E reserved
+        EQUB    LO(action_none),            HI(action_none)             ; $0F reserved
 
 .action_none
         RTS
@@ -12465,6 +12516,27 @@ IF _SWITCHES
 .action_toggle_alive
         LDA     level_obj_flags,X
         EOR     #OBJ_flag_alive
+        STA     level_obj_flags,X
+        RTS
+
+.action_set_disabled
+        \\ X = target_obj_index. Suspends per-type behaviour (gun fire,
+        \\ laser beam, mine motion+contact, well force, teleporter warp)
+        \\ while leaving the sprite plot path untouched.
+        LDA     level_obj_flags,X
+        ORA     #OBJ_flag_disabled
+        STA     level_obj_flags,X
+        RTS
+
+.action_clear_disabled
+        LDA     level_obj_flags,X
+        AND     #($FF EOR OBJ_flag_disabled)
+        STA     level_obj_flags,X
+        RTS
+
+.action_toggle_disabled
+        LDA     level_obj_flags,X
+        EOR     #OBJ_flag_disabled
         STA     level_obj_flags,X
         RTS
 
@@ -12761,8 +12833,26 @@ IF _BOBBING_MINES
 .bobbing_mine_new_offset    EQUB $00
 .bobbing_mine_delta_hi      EQUB $00
 
+\ Per-mine local tick counter, indexed by current_object. Advanced once
+\ per call to update_bobbing_mine[_horizontal]. Driving the sin lookup
+\ from this (instead of the global level_tick_counter) means a mine that
+\ stops updating — e.g. while OBJ_flag_disabled is set — has its phase
+\ frozen, so toggling disabled back off resumes the bob at the position
+\ it left, not where it "would have been" had it kept running.
+.bobbing_mine_local_tick
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+
 .update_bobbing_mine
 \\ {
+        \\ Disabled: freeze at current position. Skip the motion update.
+        LDA     level_obj_flags,X
+        AND     #OBJ_flag_disabled
+        BEQ     bm_not_disabled
+        RTS
+.bm_not_disabled
         STX     bobbing_mine_save_x
 
         \\ amp byte (slot 1) -> multiply_operand_a (signed)
@@ -12772,18 +12862,18 @@ IF _BOBBING_MINES
         bm_amp_addr_HI = bm_load_amp+2
         STA     multiply_operand_a
 
-        \\ angle index = (phase + level_tick_counter) AND $FF. The 256-entry
-        \\ sin table gives smooth motion with one cycle every 256 frames and
-        \\ full 256-step phase resolution. level_tick_counter (rather than
-        \\ vsync_count) only advances during the main tick loop, so the mine
-        \\ doesn't drift through phase during the player teleport animation
-        \\ between level start and the first tick.
+        \\ angle index = (phase + local_tick) AND $FF. The 256-entry
+        \\ sin table gives smooth motion with one cycle every 256 frames
+        \\ and full 256-step phase resolution. bobbing_mine_local_tick is
+        \\ per-mine and only advances when this routine runs — so a mine
+        \\ that's been frozen via OBJ_flag_disabled resumes from where it
+        \\ left off, rather than jumping to the global-tick position.
 .bm_load_phase
         LDA     level_0_obj_data_0,X                    ; **SELF-MODIFIED CODE** (slot 0 = phase)
         bm_phase_addr_LO = bm_load_phase+1
         bm_phase_addr_HI = bm_load_phase+2
         CLC
-        ADC     level_tick_counter
+        ADC     bobbing_mine_local_tick,X
         TAY
         LDA     bobbing_mine_sin_table,Y                ; A = signed Q.7 sin
         JSR     multiply_signed_8x8
@@ -12841,6 +12931,7 @@ IF _BOBBING_MINES
         bm_prev_store_addr_LO = bm_prev_store+1
         bm_prev_store_addr_HI = bm_prev_store+2
 
+        INC     bobbing_mine_local_tick,X
         RTS
 \\ }
 
@@ -12852,6 +12943,12 @@ IF _BOBBING_MINES
 \ ******************************************************************************
 .update_bobbing_mine_horizontal
 \\ {
+        \\ Disabled: freeze at current position. Skip the motion update.
+        LDA     level_obj_flags,X
+        AND     #OBJ_flag_disabled
+        BEQ     bm_h_not_disabled
+        RTS
+.bm_h_not_disabled
         STX     bobbing_mine_save_x
 
         \\ amp byte (slot 1) -> multiply_operand_a (signed)
@@ -12861,13 +12958,14 @@ IF _BOBBING_MINES
         bm_h_amp_addr_HI = bm_h_load_amp+2
         STA     multiply_operand_a
 
-        \\ angle = (phase + level_tick_counter) AND $FF
+        \\ angle = (phase + local_tick) AND $FF -- per-mine counter, see
+        \\ comment in update_bobbing_mine.
 .bm_h_load_phase
         LDA     level_0_obj_data_0,X                    ; **SELF-MODIFIED CODE** (slot 0 = phase)
         bm_h_phase_addr_LO = bm_h_load_phase+1
         bm_h_phase_addr_HI = bm_h_load_phase+2
         CLC
-        ADC     level_tick_counter
+        ADC     bobbing_mine_local_tick,X
         TAY
         LDA     bobbing_mine_sin_table,Y
         JSR     multiply_signed_8x8
@@ -12905,6 +13003,7 @@ IF _BOBBING_MINES
         bm_h_prev_store_addr_LO = bm_h_prev_store+1
         bm_h_prev_store_addr_HI = bm_h_prev_store+2
 
+        INC     bobbing_mine_local_tick,X
         RTS
 \\ }
 ENDIF
