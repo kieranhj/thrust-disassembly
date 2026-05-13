@@ -200,6 +200,19 @@ COL_TELEPORTER          = (120, 220, 255)
 COL_TELEPORTER_WIRE     = (120, 220, 255, 180)  # selected->dest line
 COL_SWITCH_WIRE         = (255, 200, 100, 180)  # switch->target wiring line (orange)
 
+# Doors ($11, SWRAM-only). Carve a region of terrain when pulsed by a wired
+# switch. Slot 0: bit 7 = side (0=left wall, 1=right wall), low bits = shape.
+# Slot 1: width in rows. Slot 2: max carve depth.
+OBJECT_DOOR             = 0x11
+DOOR_SHAPE_VALUES = [
+    ("slot",        0),
+    ("notch_v",     1),     # D2: not yet rendered in-game
+    ("flat_window", 2),     # D3: not yet rendered in-game
+]
+DOOR_SIDE_VALUES = [("Left wall",  0), ("Right wall", 1)]
+COL_DOOR        = (200, 160, 100)
+COL_DOOR_RANGE  = (200, 160, 100, 90)
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -384,6 +397,7 @@ def import_beebasm(path):
                 # lasers -> dx/dy bytes; wells -> radius/strength; others 0.
                 slot_1 = data_1[i] if i < len(data_1) else 0
                 slot_2 = data_2[i] if i < len(data_2) else 0
+                door_shape = door_side = door_width = door_max_carve = 0
                 if t in LASER_BEAM_DX_PIXELS:
                     dx_byte, dy_byte = slot_1, slot_2
                     wr, ws = 0, 0
@@ -402,6 +416,14 @@ def import_beebasm(path):
                     dx_byte, dy_byte = default_dx & 0xFF, default_dy & 0xFF
                     wr, ws = 0, 0
                     mine_phase, mine_amp = 0, 0
+                elif t == OBJECT_DOOR:
+                    dx_byte, dy_byte = default_dx & 0xFF, default_dy & 0xFF
+                    wr, ws = 0, 0
+                    mine_phase, mine_amp = 0, 0
+                    door_side = (gp >> 7) & 0x01
+                    door_shape = gp & 0x7F
+                    door_width = slot_1
+                    door_max_carve = slot_2
                 else:
                     dx_byte, dy_byte = default_dx & 0xFF, default_dy & 0xFF
                     wr, ws = 0, 0
@@ -412,6 +434,7 @@ def import_beebasm(path):
                 wr = legacy_well_radius[i] if i < len(legacy_well_radius) else 0
                 ws = legacy_well_strength[i] if i < len(legacy_well_strength) else 0
                 mine_phase, mine_amp = 0, 0
+                door_shape = door_side = door_width = door_max_carve = 0
             # Convert from unsigned byte to signed int (-128..127).
             dx_s = dx_byte - 256 if dx_byte >= 128 else dx_byte
             dy_s = dy_byte - 256 if dy_byte >= 128 else dy_byte
@@ -429,6 +452,10 @@ def import_beebasm(path):
                 "mine_phase": mine_phase & 0xFF,
                 "mine_amp": mine_amp_s,
                 "teleport_dest": (gp & 0xFF) if t == OBJECT_TELEPORTER else 0,
+                "door_shape": door_shape,
+                "door_side": door_side,
+                "door_width": door_width,
+                "door_max_carve": door_max_carve,
             })
 
         # Colours (may not be present in older exports)
@@ -794,6 +821,14 @@ def export_beebasm(levels):
                     data_0.append(remap_teleport_dest(n, o.get('teleport_dest', 0)) & 0xFF)
                     data_1.append(0)
                     data_2.append(0)
+                elif t == OBJECT_DOOR:
+                    # Slot 0 packs (side << 7) | shape; slot 1 = width;
+                    # slot 2 = max carve depth.
+                    side = o.get('door_side', 0) & 0x01
+                    shape = o.get('door_shape', 0) & 0x7F
+                    data_0.append(((side << 7) | shape) & 0xFF)
+                    data_1.append(o.get('door_width', 1) & 0xFF)
+                    data_2.append(o.get('door_max_carve', 1) & 0xFF)
                 else:
                     data_0.append(o.get('gun_aim', 0x00) & 0xFF)
                     data_1.append(
@@ -1189,6 +1224,26 @@ SCHEMA_TELEPORTER = [
           hotkey=("[", "]")),
 ]
 
+SCHEMA_DOOR = [
+    Field("x", "X", "byte", getter=_g("x"), setter=_s("x"),
+          min=0, max=255, step=1, shift_step=8),
+    Field("y", "Y", "word", getter=_g("y"), setter=_s("y"),
+          min=0, max=0xFFFF, step=1, shift_step=32),
+    Field("door_shape", "Shape", "enum",
+          getter=_g("door_shape"), setter=_s("door_shape"),
+          min=0, max=2, step=1, values=DOOR_SHAPE_VALUES,
+          hotkey=("[", "]")),
+    Field("door_side", "Side", "enum",
+          getter=_g("door_side"), setter=_s("door_side"),
+          min=0, max=1, step=1, values=DOOR_SIDE_VALUES),
+    Field("door_width", "Width (rows)", "byte",
+          getter=_g("door_width"), setter=_s("door_width"),
+          min=1, max=32, step=1, shift_step=4),
+    Field("door_max_carve", "Max carve", "byte",
+          getter=_g("door_max_carve"), setter=_s("door_max_carve"),
+          min=1, max=127, step=1, shift_step=8),
+]
+
 SCHEMA_DOOR_SWITCH = [
     Field("x", "X", "byte", getter=_g("x"), setter=_s("x"),
           min=0, max=255, step=1, shift_step=8),
@@ -1209,6 +1264,7 @@ SCHEMA_DOOR_SWITCH = [
 SWITCH_ACTION_VALUES = [
     ("none",             0),
     ("destroy",          4),
+    ("pulse_door",       5),
     ("set_param",        6),
     ("xor_param",        7),
     ("set_disabled",     8),
@@ -1218,6 +1274,13 @@ SWITCH_ACTION_VALUES = [
 
 # Action codes that need the Slot + Value (Mask) inspector fields.
 SWITCH_PARAM_ACTIONS = {6, 7}
+
+# Action codes whose arg_a / arg_b have action-specific meaning (not
+# slot/value). Each maps to a (label_a, label_b) pair shown in the
+# inspector instead of the generic Slot + Value pair.
+SWITCH_ACTION_ARG_LABELS = {
+    5: ("Hold frames", "Close rate"),    # pulse_door
+}
 
 # Per-target-type meaning of the three obj_data slots, for the editor's
 # Slot dropdown. Indexed by object type. Slots that the engine doesn't
@@ -1296,7 +1359,9 @@ def _build_wiring_entry_fields(lv, sw_idx, entry_i):
               min=0, max=255, step=1, target_kind="object"),
     ]
 
-    # Slot + Value (or Mask) are only meaningful for the param-write actions.
+    # Action-specific arg widgets. Param actions show Slot+Value/Mask with
+    # type-aware slot labels; pulse_door shows two plain bytes labelled
+    # "Hold frames" / "Close rate"; alive actions take no args.
     entry = _entry()
     action = entry.get("action", 0)
     if action in SWITCH_PARAM_ACTIONS:
@@ -1314,6 +1379,17 @@ def _build_wiring_entry_fields(lv, sw_idx, entry_i):
                   hotkey=(",", ".")))
         fields.append(
             Field(f"sw_value_{entry_i}", value_label, "byte",
+                  getter=_g("arg_b", 0), setter=_s("arg_b"),
+                  min=0, max=255, step=1, shift_step=16))
+    elif action in SWITCH_ACTION_ARG_LABELS:
+        label_a, label_b = SWITCH_ACTION_ARG_LABELS[action]
+        fields.append(
+            Field(f"sw_arg_a_{entry_i}", label_a, "byte",
+                  getter=_g("arg_a", 0), setter=_s("arg_a"),
+                  min=0, max=255, step=1, shift_step=16,
+                  hotkey=(",", ".")))
+        fields.append(
+            Field(f"sw_arg_b_{entry_i}", label_b, "byte",
                   getter=_g("arg_b", 0), setter=_s("arg_b"),
                   min=0, max=255, step=1, shift_step=16))
 
@@ -1427,6 +1503,8 @@ def schema_for_selection(editor):
                 return prefix + SCHEMA_BOBBING_MINE, obj, lv
             if t == OBJECT_TELEPORTER:
                 return prefix + SCHEMA_TELEPORTER, obj, lv
+            if t == OBJECT_DOOR:
+                return prefix + SCHEMA_DOOR, obj, lv
             if t in OBJECT_FIRING_TYPES:
                 return prefix + SCHEMA_GUN, obj, lv
             if t in (0x07, 0x08):
@@ -1488,7 +1566,9 @@ class LevelData:
                             "laser_dy": LASER_BEAM_DY_ROWS.get(t, 0),
                             "well_radius": 0, "well_strength": 0,
                             "mine_phase": 0, "mine_amp": 0,
-                            "teleport_dest": 0})
+                            "teleport_dest": 0,
+                            "door_shape": 0, "door_side": 0,
+                            "door_width": 1, "door_max_carve": 1})
         return cls(level_num, list(left), list(right), objects, terrain_rle)
 
     @property
@@ -3015,6 +3095,7 @@ class Editor:
             is_well = obj_type == OBJECT_GRAVITY_WELL
             is_mine = obj_type in BOBBING_MINE_TYPES
             is_teleporter = obj_type == OBJECT_TELEPORTER
+            is_door = obj_type == OBJECT_DOOR
             self.level.objects.append({"x": wx, "y": wy, "type": obj_type,
                                         "gun_aim": 0x00,
                                         "laser_dx": LASER_BEAM_DX_PIXELS.get(obj_type, 0),
@@ -3023,7 +3104,10 @@ class Editor:
                                         "well_strength": GRAVITY_WELL_DEFAULT_STRENGTH if is_well else 0,
                                         "mine_phase": BOBBING_MINE_DEFAULT_PHASE if is_mine else 0,
                                         "mine_amp": BOBBING_MINE_DEFAULT_AMP if is_mine else 0,
-                                        "teleport_dest": TELEPORTER_DEFAULT_DEST if is_teleporter else 0})
+                                        "teleport_dest": TELEPORTER_DEFAULT_DEST if is_teleporter else 0,
+                                        "door_shape": 0, "door_side": 0,
+                                        "door_width": 8 if is_door else 1,
+                                        "door_max_carve": 8 if is_door else 1})
             self.level.dirty = True
             self.selected_object = len(self.level.objects) - 1
         self.show_obj_menu = False
@@ -3112,6 +3196,9 @@ class Editor:
                         arg_a = entry.get("arg_a", 0)
                         if arg_a > 2:
                             problems.append(f"{label}: slot {arg_a} out of range (must be 0..2)")
+                    if action == 5 and lv.objects[target]["type"] != OBJECT_DOOR:
+                        problems.append(
+                            f"{label}: pulse_door target #{target} is not a door object")
             if total_entries > 8:
                 problems.append(
                     f"L{lv.level_num + 1}: {total_entries} wiring entries across all switches "
@@ -3479,6 +3566,9 @@ class Editor:
             if obj["type"] == OBJECT_TELEPORTER:
                 self._render_teleporter(obj, i)
                 continue
+            if obj["type"] == OBJECT_DOOR:
+                self._render_door(obj, i)
+                continue
             if band_mode:
                 lc_obj, oc_obj = self._resolve_band_colours(obj["y"])
                 sprite = self.sprite_cache.get(obj["type"], lv,
@@ -3690,6 +3780,57 @@ class Editor:
                 # Highlight target spawn.
                 pygame.draw.circle(screen, COL_TELEPORTER,
                                    (int(tx), int(ty)), 5, 1)
+
+    def _render_door(self, obj, i):
+        """Doors have no in-game sprite — visualise them in the editor as a
+        bracket marking the anchor row + a translucent rectangle showing
+        the rows the door owns and the max carve depth into the wall.
+        Selected / hover bordering matches the standard pattern.
+        """
+        cam = self.camera
+        screen = self.screen
+        width  = max(1, obj.get("door_width", 1))
+        depth  = max(1, obj.get("door_max_carve", 1))
+        side   = obj.get("door_side", 0)            # 0 = left, 1 = right
+
+        ax = obj["x"]
+        ay = obj["y"]
+        # Carved rectangle in world coords: from anchor X carved inward by
+        # `depth` units, spanning `width` rows.
+        if side == 0:
+            x0_world = ax - depth
+            x1_world = ax
+        else:
+            x0_world = ax
+            x1_world = ax + depth
+        y0_world = ay
+        y1_world = ay + width
+
+        sx0, sy0 = cam.world_to_screen(x0_world, y0_world)
+        sx1, sy1 = cam.world_to_screen(x1_world, y1_world)
+        rx = int(min(sx0, sx1))
+        ry = int(min(sy0, sy1))
+        rw = max(1, int(abs(sx1 - sx0)))
+        rh = max(1, int(abs(sy1 - sy0)))
+
+        # Translucent fill showing the carve span.
+        overlay = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+        pygame.draw.rect(overlay, COL_DOOR_RANGE, (rx, ry, rw, rh))
+        screen.blit(overlay, (0, 0))
+        pygame.draw.rect(screen, COL_DOOR, (rx, ry, rw, rh), 1)
+
+        # Anchor tick at (ax, ay) — small notch on the wall edge.
+        asx, asy = cam.world_to_screen(ax, ay)
+        asxi, asyi = int(asx), int(asy)
+        pygame.draw.line(screen, COL_DOOR, (asxi - 3, asyi), (asxi + 3, asyi))
+        pygame.draw.line(screen, COL_DOOR, (asxi, asyi - 3), (asxi, asyi + 3))
+
+        if i == self.selected_object:
+            pygame.draw.rect(screen, COL_SELECT,
+                             (rx - 2, ry - 2, rw + 4, rh + 4), 2)
+        elif i == self.hovered_object and self.mode == "object":
+            pygame.draw.rect(screen, (200, 200, 200),
+                             (rx - 1, ry - 1, rw + 2, rh + 2), 1)
 
     def _render_switch_wiring(self, obj, i, sx, sy, draw_w, draw_h):
         """When a wired switch is selected, draw one line + arrow + action
@@ -4783,6 +4924,7 @@ class Editor:
         is_well = obj_type == OBJECT_GRAVITY_WELL
         is_mine = obj_type in BOBBING_MINE_TYPES
         is_tp = obj_type == OBJECT_TELEPORTER
+        is_door = obj_type == OBJECT_DOOR
         self.undo.save(self.level)
         self.level.objects.append({
             "x": max(0, min(255, wx)), "y": max(0, wy), "type": obj_type,
@@ -4794,6 +4936,10 @@ class Editor:
             "mine_phase": BOBBING_MINE_DEFAULT_PHASE if is_mine else 0,
             "mine_amp": BOBBING_MINE_DEFAULT_AMP if is_mine else 0,
             "teleport_dest": TELEPORTER_DEFAULT_DEST if is_tp else 0,
+            "door_shape": 0,
+            "door_side": 0,
+            "door_width": 8 if is_door else 1,
+            "door_max_carve": 8 if is_door else 1,
         })
         self.level.dirty = True
         self.selected_object = len(self.level.objects) - 1

@@ -50,7 +50,7 @@ _SWITCHES            = (_SWRAM_BUILD AND TRUE)    ; Editor-driven switches & tri
 \ ******************************************************************************
 \ ******************************************************************************
 
-INITIAL_LEVEL                       = $01       ; staring level
+INITIAL_LEVEL                       = $04       ; staring level
 INITIAL_LIVES                       = $04       ; starting number of lives
 INITIAL_FUEL                        = $10       ; starting fuel value (BCD 1000)
 
@@ -131,6 +131,9 @@ OBJECT_bobbing_mine_horizontal      = $F        ; bobbing mine: horizontal sine-
 ENDIF
 IF _TELEPORTER
 OBJECT_teleporter                   = $10       ; teleporter pad: warps player to a checkpoint (SWRAM only)
+ENDIF
+IF _SWITCHES
+OBJECT_door                         = $11       ; door: carves a hole into terrain when pulsed by a wired switch (SWRAM only)
 ENDIF
 
 OBJ_flag_drawn                      = $01       ; level_obj_flags bit 0: sprite was XOR-plotted (needs erase before redraw)
@@ -1703,6 +1706,16 @@ IF _TELEPORTER
         JSR     teleporter_check_ship_contact
         JMP     next_object
     .not_teleporter
+ENDIF
+IF _SWITCHES
+        \\ Doors carve terrain in their own per-frame tick (tick_doors).
+        \\ Skip the main update body so the door isn't sprite-plotted (no
+        \\ visible sprite) and isn't bullet-collidable (can't be shot).
+        LDY     object_type
+        CPY     #OBJECT_door
+        BNE     not_door
+        JMP     next_object
+    .not_door
 ENDIF
         PHA
         AND     #$1C
@@ -3468,6 +3481,24 @@ ENDIF
 
 .tick_door_logic
 {
+IF _SWITCHES
+        \\ Wiring system replaces the legacy level_3/4/5 door dispatch.
+        \\ tick_doors walks all OBJECT_door instances and runs their per-
+        \\ door state machine + wall carve. Hardcoded routines below stay
+        \\ assembled but go unreachable here (they remain reachable under
+        \\ _SWITCHES = FALSE, anchoring the non-SWRAM CRC).
+        \\
+        \\ Counter A is still drained for any wired switch that fell through
+        \\ to the legacy latch (none, in practice — switches with no wiring
+        \\ entry write $FF here and then the legacy routines used to fire
+        \\ off it). Keeps state from accumulating if mixed wiring lands
+        \\ later.
+        LDA     door_switch_counter_A
+        BEQ     tick_doors_dispatch
+        DEC     door_switch_counter_A
+.tick_doors_dispatch
+        JMP     tick_doors
+ELSE
         LDA     door_switch_counter_A
         BEQ     door_switch_zero
 
@@ -3485,6 +3516,7 @@ ENDIF
         BEQ     level_4_door_logic
 
         RTS
+ENDIF
 }
 
 .level_5_door_logic
@@ -7459,6 +7491,19 @@ IF _SWITCHES
         STA     level_switch_state+6
         STA     level_switch_state+7
 
+        \\ Clear per-door runtime state (cursor, phase, hold/close phases,
+        \\ close rate). 32 slots × 5 arrays — unroll the inner so the loop
+        \\ is one DEY+BPL per object.
+        LDY     #$1F
+.init_door_state_loop
+        STA     door_cursor,Y
+        STA     door_phase,Y
+        STA     door_hold_phase,Y
+        STA     door_close_phase,Y
+        STA     door_close_rate,Y
+        DEY
+        BPL     init_door_state_loop
+
         \\ SMC patches: dispatcher reads per-level switch wiring tables.
         LDA     level_switch_obj_indices_lookup_LO,X
         STA     switch_indices_addr_LO                   ; **MODIFIES CODE**
@@ -7528,6 +7573,41 @@ IF _SWITCHES
         STA     act_dest_type_addr_LO                    ; **MODIFIES CODE**
         LDA     level_obj_type_lookup_HI,X
         STA     act_dest_type_addr_HI                    ; **MODIFIES CODE**
+
+        \\ SMC patches: door_update_one reads door's pos and shape data.
+        LDA     level_obj_pos_X_lookup_LO,X
+        STA     door_load_pos_x_addr_LO                  ; **MODIFIES CODE**
+        LDA     level_obj_pos_X_lookup_HI,X
+        STA     door_load_pos_x_addr_HI                  ; **MODIFIES CODE**
+        LDA     level_obj_pos_Y_lookup_LO,X
+        STA     door_load_pos_y_addr_LO                  ; **MODIFIES CODE**
+        LDA     level_obj_pos_Y_lookup_HI,X
+        STA     door_load_pos_y_addr_HI                  ; **MODIFIES CODE**
+        LDA     level_obj_pos_Y_EXT_lookup_LO,X
+        STA     door_load_pos_y_ext_addr_LO              ; **MODIFIES CODE**
+        LDA     level_obj_pos_Y_EXT_lookup_HI,X
+        STA     door_load_pos_y_ext_addr_HI              ; **MODIFIES CODE**
+        LDA     level_obj_data_0_lookup_LO,X
+        STA     door_load_shape_addr_LO                  ; **MODIFIES CODE**
+        LDA     level_obj_data_0_lookup_HI,X
+        STA     door_load_shape_addr_HI                  ; **MODIFIES CODE**
+        LDA     level_obj_data_1_lookup_LO,X
+        STA     door_load_width_addr_LO                  ; **MODIFIES CODE**
+        LDA     level_obj_data_1_lookup_HI,X
+        STA     door_load_width_addr_HI                  ; **MODIFIES CODE**
+        LDA     level_obj_data_2_lookup_LO,X
+        STA     door_load_max_carve_addr_LO              ; **MODIFIES CODE**
+        LDA     level_obj_data_2_lookup_HI,X
+        STA     door_load_max_carve_addr_HI              ; **MODIFIES CODE**
+
+        LDA     level_obj_type_lookup_LO,X
+        STA     tick_doors_type_addr_LO                  ; **MODIFIES CODE**
+        LDA     level_obj_type_lookup_HI,X
+        STA     tick_doors_type_addr_HI                  ; **MODIFIES CODE**
+        LDA     level_obj_type_lookup_LO,X
+        STA     init_door_type_addr_LO                   ; **MODIFIES CODE**
+        LDA     level_obj_type_lookup_HI,X
+        STA     init_door_type_addr_HI                   ; **MODIFIES CODE**
 ENDIF
 
         TXA
@@ -7535,12 +7615,33 @@ ENDIF
         TAX
 
         LDX     #LEVEL_MAX_OBJECTS                                    ; max objects per level
-        
+
     .initialise_sprite_table_A
         LDA     #OBJ_flag_alive
         STA     level_obj_flags,X
         DEX
         BPL     initialise_sprite_table_A
+IF _SWITCHES
+        \\ Door objects re-purpose OBJ_flag_alive as "currently animating".
+        \\ The blanket init above set every slot alive — that would put each
+        \\ door in mid-cycle with cursor=0 and hold_phase=0, causing it to
+        \\ flicker open/closed and ignore the first pulse. Clear alive on
+        \\ every door slot so doors start idle.
+        LDX     #LEVEL_MAX_OBJECTS
+    .init_door_clear_alive_loop
+.init_door_load_type
+        LDA     level_0_obj_type,X                       ; **SELF-MODIFIED CODE**
+        init_door_type_addr_LO = init_door_load_type+1
+        init_door_type_addr_HI = init_door_load_type+2
+        CMP     #OBJECT_door
+        BNE     init_door_skip
+        LDA     level_obj_flags,X
+        AND     #($FF EOR OBJ_flag_alive)
+        STA     level_obj_flags,X
+    .init_door_skip
+        DEX
+        BPL     init_door_clear_alive_loop
+ENDIF
 
         LDX     #$0B
         
@@ -12485,7 +12586,7 @@ IF _SWITCHES
         EQUB    LO(action_clear_alive),     HI(action_clear_alive)      ; $02
         EQUB    LO(action_toggle_alive),    HI(action_toggle_alive)     ; $03
         EQUB    LO(action_destroy),         HI(action_destroy)          ; $04
-        EQUB    LO(action_none),            HI(action_none)             ; $05 reserved (pulse_door)
+        EQUB    LO(action_pulse_door),      HI(action_pulse_door)       ; $05
         EQUB    LO(action_set_param),       HI(action_set_param)        ; $06
         EQUB    LO(action_xor_param),       HI(action_xor_param)        ; $07
         EQUB    LO(action_set_disabled),    HI(action_set_disabled)     ; $08
@@ -12684,6 +12785,245 @@ IF _SWITCHES
         act_xor_store_2_addr_HI = act_xor_store_2+2
 .act_xor_oor
         RTS
+
+\ ******************************************************************************
+\ * pulse_door action ($05)
+\ *
+\ * X = target_obj_index (a door). If the door is already alive (mid-
+\ * animation), no-op so a re-pulse can't restart from cursor=0 and
+\ * snap the wall back. Else seed the door's animation state from the
+\ * wiring entry's args: arg_a = hold-frames, arg_b = close-rate.
+\ ******************************************************************************
+.action_pulse_door
+        LDA     level_obj_flags,X
+        AND     #OBJ_flag_alive
+        BNE     pulse_door_already_open                  ; already animating: ignore
+        LDA     level_obj_flags,X
+        ORA     #OBJ_flag_alive
+        STA     level_obj_flags,X
+        LDA     #$00
+        STA     door_cursor,X
+        STA     door_close_phase,X
+        STA     door_phase,X                             ; phase = opening
+        LDA     action_arg_a
+        STA     door_hold_phase,X
+        LDA     action_arg_b
+        STA     door_close_rate,X
+.pulse_door_already_open
+        RTS
+
+\ ******************************************************************************
+\ * door_update_one
+\ *
+\ * Called from update_objects_loop with X = current_object and object_type
+\ * already confirmed = OBJECT_door. Two phases:
+\ *
+\ *   1. Advance the animation state machine if alive: opening (cursor++)
+\ *      → holding (hold_phase--) → closing (cursor--, paced by close_rate)
+\ *      → close-finish (clear alive bit).
+\ *   2. Render the carved wall into terrain_left/right_wall for the visible
+\ *      rows. Runs every frame regardless of alive, so a closed door
+\ *      continuously imposes its anchor_x on the affected rows — matching
+\ *      the original level_3_door_logic's "always-owns-the-wall" model.
+\ *
+\ * Shape codes (low 7 bits of obj_data_0):
+\ *   0 = slot          (every row carves to the same depth — implemented)
+\ *   1 = notch_v       (D2)
+\ *   2 = flat_window   (D3)
+\ *
+\ * Side: obj_data_0 bit 7. 0 = left wall, 1 = right wall.
+\ ******************************************************************************
+.door_update_one
+\\ {
+        STX     door_save_x
+
+        \\ Phase 1: state-machine tick.
+        LDA     level_obj_flags,X
+        AND     #OBJ_flag_alive
+        BEQ     render_door
+        JSR     door_advance_anim
+        LDX     door_save_x
+
+.render_door
+        \\ Phase 2: paint the wall. Need on-screen Y first.
+.door_load_pos_y
+        LDA     level_0_obj_pos_Y,X                      ; **SELF-MODIFIED CODE**
+        door_load_pos_y_addr_LO = door_load_pos_y+1
+        door_load_pos_y_addr_HI = door_load_pos_y+2
+        SEC
+        SBC     window_ypos_INT
+        STA     door_screen_y_temp
+.door_load_pos_y_ext
+        LDA     level_0_obj_pos_Y_EXT,X                  ; **SELF-MODIFIED CODE**
+        door_load_pos_y_ext_addr_LO = door_load_pos_y_ext+1
+        door_load_pos_y_ext_addr_HI = door_load_pos_y_ext+2
+        SBC     window_ypos_EXT
+        BNE     door_off_screen                          ; different page: off-window
+        LDA     door_screen_y_temp
+        CMP     #$F1                                     ; same threshold as level_3 routine
+        BCS     door_off_screen
+
+        \\ On-screen. Wall array index = screen_y + terrain_window_y_index.
+        CLC
+        ADC     terrain_window_y_index
+        STA     door_row_temp
+
+        \\ Read shape descriptor (bit 7 = side, low bits = shape code).
+.door_load_shape
+        LDA     level_0_obj_data_0,X                     ; **SELF-MODIFIED CODE**
+        door_load_shape_addr_LO = door_load_shape+1
+        door_load_shape_addr_HI = door_load_shape+2
+        STA     door_shape_temp
+        AND     #$7F
+        BNE     door_off_screen                          ; D1 only renders shape 0 (slot)
+
+        \\ Anchor X — wall position when closed (cursor = 0).
+.door_load_anchor_x
+        LDA     level_0_obj_pos_X,X                      ; **SELF-MODIFIED CODE**
+        door_load_pos_x_addr_LO = door_load_anchor_x+1
+        door_load_pos_x_addr_HI = door_load_anchor_x+2
+        STA     door_anchor_x_temp
+
+.door_load_width
+        LDA     level_0_obj_data_1,X                     ; **SELF-MODIFIED CODE**
+        door_load_width_addr_LO = door_load_width+1
+        door_load_width_addr_HI = door_load_width+2
+        STA     door_width_temp
+
+        \\ Compute carved X: left wall pulls back (anchor - cursor),
+        \\ right wall pulls back (anchor + cursor) into the empty side.
+        LDA     door_shape_temp
+        BMI     door_render_right_wall
+
+        \\ Left wall: carve_x = anchor_x - cursor.
+        LDA     door_anchor_x_temp
+        SEC
+        SBC     door_cursor,X
+        STA     door_carve_x_temp
+        LDY     door_row_temp
+        LDX     door_width_temp
+        LDA     door_carve_x_temp
+.door_write_left_loop
+        STA     terrain_left_wall,Y
+        INY
+        DEX
+        BNE     door_write_left_loop
+        JMP     door_off_screen
+
+.door_render_right_wall
+        LDA     door_anchor_x_temp
+        CLC
+        ADC     door_cursor,X
+        STA     door_carve_x_temp
+        LDY     door_row_temp
+        LDX     door_width_temp
+        LDA     door_carve_x_temp
+.door_write_right_loop
+        STA     terrain_right_wall,Y
+        INY
+        DEX
+        BNE     door_write_right_loop
+
+.door_off_screen
+        LDX     door_save_x
+        RTS
+\\ }
+
+\ ******************************************************************************
+\ * door_advance_anim
+\ *
+\ * X = current_object. alive bit confirmed set. Drives the open/hold/close
+\ * state machine via the per-door auxiliary arrays. Cursor reaches 0 at
+\ * close-end → clear alive bit (door goes idle until next pulse_door).
+\ ******************************************************************************
+.door_advance_anim
+\\ {
+        \\ Branch on phase. Each phase decides whether to tick its counter
+        \\ or transition to the next phase. Transitions consume the frame
+        \\ (no double-step) so the open/hold/close edge is one frame wide.
+        LDA     door_phase,X
+        BEQ     phase_opening
+        CMP     #$01
+        BEQ     phase_holding
+        JMP     phase_closing
+
+    .phase_opening
+.door_load_max_carve
+        LDA     level_0_obj_data_2,X                     ; **SELF-MODIFIED CODE**
+        door_load_max_carve_addr_LO = door_load_max_carve+1
+        door_load_max_carve_addr_HI = door_load_max_carve+2
+        CMP     door_cursor,X
+        BNE     open_inc
+        \\ Cursor at max — start holding next frame.
+        LDA     #$01
+        STA     door_phase,X
+        RTS
+    .open_inc
+        INC     door_cursor,X
+        RTS
+
+    .phase_holding
+        LDA     door_hold_phase,X
+        BEQ     hold_done
+        DEC     door_hold_phase,X
+        RTS
+    .hold_done
+        \\ Hold expired — start closing next frame.
+        LDA     #$02
+        STA     door_phase,X
+        RTS
+
+    .phase_closing
+        LDA     door_close_phase,X
+        BEQ     do_close_step
+        DEC     door_close_phase,X
+        RTS
+    .do_close_step
+        LDA     door_close_rate,X
+        STA     door_close_phase,X
+        LDA     door_cursor,X
+        BEQ     close_finished                           ; safety: already 0
+        DEC     door_cursor,X
+        BNE     close_running
+
+    .close_finished
+        \\ Cursor just hit 0: door is fully shut. Clear alive — next pulse
+        \\ resets the state machine via action_pulse_door.
+        LDA     level_obj_flags,X
+        AND     #($FF EOR OBJ_flag_alive)
+        STA     level_obj_flags,X
+    .close_running
+        RTS
+\\ }
+
+\ ******************************************************************************
+\ * tick_doors
+\ *
+\ * Per-frame walker over all level objects looking for OBJECT_door.
+\ * Replaces tick_door_logic's legacy per-level dispatch under _SWITCHES —
+\ * each door object now drives its own animation. Hardcoded routines
+\ * (level_3/4/5_door_logic) stay assembled but go unreachable.
+\ ******************************************************************************
+.tick_doors
+        LDX     #$00
+.tick_doors_loop
+        STX     current_object
+.tick_doors_load_type
+        LDA     level_0_obj_type,X                       ; **SELF-MODIFIED CODE** (mirror of laser pass)
+        tick_doors_type_addr_LO = tick_doors_load_type+1
+        tick_doors_type_addr_HI = tick_doors_load_type+2
+        CMP     #$FF
+        BEQ     tick_doors_done
+        CMP     #OBJECT_door
+        BNE     tick_doors_next
+        STA     object_type                              ; door_update_one doesn't read this but be safe
+        JSR     door_update_one
+.tick_doors_next
+        LDX     current_object
+        INX
+        JMP     tick_doors_loop
+.tick_doors_done
+        RTS
 ENDIF
 
 IF _LAST_USED_CHECKPOINT
@@ -12844,6 +13184,59 @@ IF _BOBBING_MINES
         EQUB $00,$00,$00,$00,$00,$00,$00,$00
         EQUB $00,$00,$00,$00,$00,$00,$00,$00
         EQUB $00,$00,$00,$00,$00,$00,$00,$00
+
+\ Per-door animation state, indexed by current_object. Only meaningful
+\ for OBJECT_door slots; harmless on other types (tick_doors ignores
+\ non-door objects). All zero at level start = closed and idle.
+\   door_cursor:      current carve depth (0..max_carve_depth)
+\   door_hold_phase:  frames remaining at full open
+\   door_close_phase: frames-until-next-close-step countdown
+\   door_close_rate:  constant from pulse_door's arg_b; reloads close_phase
+IF _SWITCHES
+.door_cursor
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+.door_hold_phase
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+.door_close_phase
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+.door_close_rate
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+
+\ Explicit phase byte for the door's open/hold/close state machine.
+\ 0 = opening (cursor advancing toward max_carve)
+\ 1 = holding (hold_phase counting down)
+\ 2 = closing (cursor retreating toward 0)
+\ Without this the state was ambiguous mid-close (cursor < max_carve) and
+\ door_advance_anim would treat it as "still opening" — bouncing the
+\ cursor right back up.
+.door_phase
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB $00,$00,$00,$00,$00,$00,$00,$00
+
+\ Scratch used by door_update_one each frame. Single-instance — the
+\ update runs serially per object, so reusing these is safe.
+.door_save_x          EQUB $00
+.door_screen_y_temp   EQUB $00
+.door_row_temp        EQUB $00
+.door_shape_temp      EQUB $00
+.door_anchor_x_temp   EQUB $00
+.door_width_temp      EQUB $00
+.door_carve_x_temp    EQUB $00
+ENDIF
 
 .update_bobbing_mine
 \\ {

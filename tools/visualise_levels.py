@@ -88,6 +88,7 @@ OBJECT_TYPE_NAMES = {
     0x0E: "Bobbing mine",
     0x0F: "Bobbing mine (H)",
     0x10: "Teleporter",
+    0x11: "Door",
 }
 
 OBJECT_TYPE_MARKERS = {
