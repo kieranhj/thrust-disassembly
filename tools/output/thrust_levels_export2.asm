@@ -37,9 +37,9 @@
         EQUB    $00,$00,$00,$B4,$00,$E9,$00,$18,$00,$FF,$EC,$00,$E2,$00,$EC,$FF,$00
 
 .terrain_left_wall_count_3
-        EQUB    $FF,$FF,$A0,$01,$13,$01,$15,$26,$14,$0A,$06,$14,$22,$01,$14,$01,$26,$1C,$24,$0A,$FF
+        EQUB    $FF,$FF,$A0,$01,$13,$01,$15,$26,$14,$0A,$06,$14,$22,$01,$14,$01,$07,$01,$18,$01,$05,$1C,$24,$0A,$FF
 .terrain_left_wall_inc_3
-        EQUB    $00,$00,$00,$5A,$01,$11,$00,$FF,$00,$01,$00,$FF,$00,$19,$01,$21,$00,$FF,$00,$01,$00
+        EQUB    $00,$00,$00,$5A,$01,$11,$00,$FF,$00,$01,$00,$FF,$00,$19,$01,$21,$00,$EC,$00,$14,$00,$FF,$00,$01,$00
 .terrain_right_wall_count_3
         EQUB    $FF,$FF,$A0,$01,$67,$01,$12,$18,$01,$84,$18,$14,$01,$FF
 .terrain_right_wall_inc_3
@@ -113,19 +113,19 @@
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00,$1E,$E2,$1E,$E2,$1E
 
 .level_3_obj_pos_X
-        EQUB    $8E,$5B,$AC,$AC,$92,$72,$5A,$5A,$78,$6D,$8A,$A2,$4E,$8A,$AE
+        EQUB    $8E,$5B,$AC,$AC,$92,$72,$5A,$5A,$78,$6D,$8A,$A2,$4E,$8A,$9C,$89
 .level_3_obj_pos_Y
-        EQUB    $D9,$40,$51,$87,$57,$D0,$01,$16,$24,$4C,$92,$BA,$32,$EB,$69
+        EQUB    $D9,$40,$51,$87,$57,$D0,$01,$16,$24,$4C,$92,$BA,$32,$EB,$66,$77
 .level_3_obj_pos_Y_EXT
-        EQUB    $02,$02,$02,$02,$02,$01,$02,$02,$02,$02,$02,$02,$02,$01,$02
+        EQUB    $02,$02,$02,$02,$02,$01,$02,$02,$02,$02,$02,$02,$02,$01,$02,$02
 .level_3_obj_type
-        EQUB    $05,$06,$08,$08,$04,$01,$00,$01,$03,$00,$01,$02,$07,$08,$11,$FF
+        EQUB    $05,$06,$08,$08,$04,$01,$00,$01,$03,$00,$01,$02,$07,$08,$11,$04,$FF
 .level_3_obj_data_0
-        EQUB    $00,$00,$00,$00,$00,$06,$06,$06,$12,$1F,$06,$1E,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$06,$06,$06,$12,$1F,$06,$1E,$00,$00,$81,$00
 .level_3_obj_data_1
-        EQUB    $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0D
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$19,$00
 .level_3_obj_data_2
-        EQUB    $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$10
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$12,$00
 
 .level_4_obj_pos_X
         EQUB    $A2,$8F,$A4,$98,$7C,$9A,$A0,$68,$69,$6F,$89,$8F,$72,$A2,$86,$5D,$8E,$7B,$AC
@@ -337,7 +337,7 @@
 \ ******************************************************************************
 
 .level_reset_data_sizes
-        EQUB    $01,$03,$03,$03,$04,$02
+        EQUB    $01,$03,$03,$01,$04,$02
 
 .level_0_reset_data
         EQUB    $01
@@ -364,12 +364,12 @@
         EQUB    $6C,$86,$48
 
 .level_3_reset_data
-        EQUB    $01,$01,$02
-        EQUB    $91,$E6,$4A
-        EQUB    $56,$57,$76
-        EQUB    $01,$01,$01
-        EQUB    $24,$60,$D8
-        EQUB    $6C,$7B,$A1
+        EQUB    $02
+        EQUB    $4A
+        EQUB    $76
+        EQUB    $01
+        EQUB    $D8
+        EQUB    $A1
 
 .level_4_reset_data
         EQUB    $01,$02,$02,$03
@@ -406,13 +406,13 @@
         EQUB    LO(level_0_reset_data + 1)
         EQUB    LO(level_1_reset_data + 3)
         EQUB    LO(level_2_reset_data + 3)
-        EQUB    LO(level_3_reset_data + 3)
+        EQUB    LO(level_3_reset_data + 1)
         EQUB    LO(level_4_reset_data + 4)
         EQUB    LO(level_5_reset_data + 2)
 .level_reset_ptr2_table_HI
         EQUB    HI(level_0_reset_data + 1)
         EQUB    HI(level_1_reset_data + 3)
         EQUB    HI(level_2_reset_data + 3)
-        EQUB    HI(level_3_reset_data + 3)
+        EQUB    HI(level_3_reset_data + 1)
         EQUB    HI(level_4_reset_data + 4)
         EQUB    HI(level_5_reset_data + 2)

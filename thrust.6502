@@ -50,7 +50,7 @@ _SWITCHES            = (_SWRAM_BUILD AND TRUE)    ; Editor-driven switches & tri
 \ ******************************************************************************
 \ ******************************************************************************
 
-INITIAL_LEVEL                       = $06       ; staring level
+INITIAL_LEVEL                       = $01       ; staring level
 INITIAL_LIVES                       = $04       ; starting number of lives
 INITIAL_FUEL                        = $10       ; starting fuel value (BCD 1000)
 
