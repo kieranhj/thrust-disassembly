@@ -2895,6 +2895,24 @@ class Editor:
                 if (mx - cx) ** 2 + (my - cy) ** 2 <= r * r:
                     return i
                 continue
+            if obj["type"] == OBJECT_DOOR:
+                # Doors have no sprite — hit-test the same carved-region
+                # rectangle that _render_door draws.
+                width = max(1, obj.get("door_width", 1))
+                depth = max(1, obj.get("door_max_carve", 1))
+                side  = obj.get("door_side", 0)
+                ax, ay = obj["x"], obj["y"]
+                if side == 0:
+                    x0_world, x1_world = ax - depth, ax
+                else:
+                    x0_world, x1_world = ax, ax + depth
+                sx0, sy0 = self.camera.world_to_screen(x0_world, ay)
+                sx1, sy1 = self.camera.world_to_screen(x1_world, ay + width)
+                lo_x, hi_x = sorted((sx0, sx1))
+                lo_y, hi_y = sorted((sy0, sy1))
+                if lo_x <= mx <= hi_x and lo_y <= my <= hi_y:
+                    return i
+                continue
             sprite = self.sprite_cache.get(obj["type"], lv)
             if sprite is None:
                 continue
