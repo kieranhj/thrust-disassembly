@@ -50,7 +50,7 @@ _SWITCHES            = (_SWRAM_BUILD AND TRUE)    ; Editor-driven switches & tri
 \ ******************************************************************************
 \ ******************************************************************************
 
-INITIAL_LEVEL                       = $04       ; staring level
+INITIAL_LEVEL                       = $06       ; staring level
 INITIAL_LIVES                       = $04       ; starting number of lives
 INITIAL_FUEL                        = $10       ; starting fuel value (BCD 1000)
 
@@ -12790,14 +12790,23 @@ IF _SWITCHES
 \ * pulse_door action ($05)
 \ *
 \ * X = target_obj_index (a door). If the door is already alive (mid-
-\ * animation), no-op so a re-pulse can't restart from cursor=0 and
-\ * snap the wall back. Else seed the door's animation state from the
-\ * wiring entry's args: arg_a = hold-frames, arg_b = close-rate.
+\ * animation), the hold timer is re-seeded — matching the original
+\ * game's counter_A=$FF latch on every switch hit. If the door is
+\ * currently closing, it flips back to opening from its current cursor
+\ * position. arg_a = hold frames, arg_b = close rate.
 \ ******************************************************************************
 .action_pulse_door
+        \\ Always re-seed timing args from the wiring entry.
+        LDA     action_arg_a
+        STA     door_hold_phase,X
+        LDA     action_arg_b
+        STA     door_close_rate,X
+
         LDA     level_obj_flags,X
         AND     #OBJ_flag_alive
-        BNE     pulse_door_already_open                  ; already animating: ignore
+        BNE     pulse_door_already_alive
+
+        \\ Door was idle: kick off a fresh open / hold / close cycle.
         LDA     level_obj_flags,X
         ORA     #OBJ_flag_alive
         STA     level_obj_flags,X
@@ -12805,11 +12814,20 @@ IF _SWITCHES
         STA     door_cursor,X
         STA     door_close_phase,X
         STA     door_phase,X                             ; phase = opening
-        LDA     action_arg_a
-        STA     door_hold_phase,X
-        LDA     action_arg_b
-        STA     door_close_rate,X
-.pulse_door_already_open
+        RTS
+
+.pulse_door_already_alive
+        \\ Already animating. If in the closing phase, flip back to opening
+        \\ (cursor will INC from wherever the close left it). Otherwise the
+        \\ re-seeded hold_phase above is the only effect: a re-pulse during
+        \\ opening / holding extends the open window.
+        LDA     door_phase,X
+        CMP     #$02
+        BNE     pulse_door_done
+        LDA     #$00
+        STA     door_phase,X
+        STA     door_close_phase,X
+.pulse_door_done
         RTS
 
 \ ******************************************************************************
@@ -12858,10 +12876,14 @@ IF _SWITCHES
         door_load_pos_y_ext_addr_LO = door_load_pos_y_ext+1
         door_load_pos_y_ext_addr_HI = door_load_pos_y_ext+2
         SBC     window_ypos_EXT
-        BNE     door_off_screen                          ; different page: off-window
+        BEQ     door_y_same_page                         ; different page: off-window
+        JMP     door_off_screen
+.door_y_same_page
         LDA     door_screen_y_temp
         CMP     #$F1                                     ; same threshold as level_3 routine
-        BCS     door_off_screen
+        BCC     door_y_on_screen
+        JMP     door_off_screen
+.door_y_on_screen
 
         \\ On-screen. Wall array index = screen_y + terrain_window_y_index.
         CLC
@@ -12874,8 +12896,6 @@ IF _SWITCHES
         door_load_shape_addr_LO = door_load_shape+1
         door_load_shape_addr_HI = door_load_shape+2
         STA     door_shape_temp
-        AND     #$7F
-        BNE     door_off_screen                          ; D1 only renders shape 0 (slot)
 
         \\ Anchor X — wall position when closed (cursor = 0).
 .door_load_anchor_x
@@ -12890,39 +12910,122 @@ IF _SWITCHES
         door_load_width_addr_HI = door_load_width+2
         STA     door_width_temp
 
-        \\ Compute carved X: left wall pulls back (anchor - cursor),
-        \\ right wall pulls back (anchor + cursor) into the empty side.
+        \\ Pre-compute carve_x = anchor_x - cursor (for left wall) or
+        \\ anchor_x + cursor (for right wall). Slot uses this directly;
+        \\ notch_v offsets it per row.
         LDA     door_shape_temp
-        BMI     door_render_right_wall
+        BMI     door_carve_right
 
-        \\ Left wall: carve_x = anchor_x - cursor.
         LDA     door_anchor_x_temp
         SEC
         SBC     door_cursor,X
         STA     door_carve_x_temp
-        LDY     door_row_temp
-        LDX     door_width_temp
-        LDA     door_carve_x_temp
-.door_write_left_loop
-        STA     terrain_left_wall,Y
-        INY
-        DEX
-        BNE     door_write_left_loop
-        JMP     door_off_screen
-
-.door_render_right_wall
+        JMP     door_carve_done
+.door_carve_right
         LDA     door_anchor_x_temp
         CLC
         ADC     door_cursor,X
         STA     door_carve_x_temp
+.door_carve_done
+
+        \\ Dispatch on shape code (low 7 bits of door_shape_temp).
+        \\ Side bit (bit 7) is handled inside each shape's renderer.
+        LDA     door_shape_temp
+        AND     #$7F
+        BEQ     render_slot
+        CMP     #$01
+        BEQ     render_notch_v
+        JMP     door_off_screen                          ; unknown shape: no render
+
+\ --- Slot ------------------------------------------------------------
+\ Every row carves to the same depth. Pulled-back X = carve_x_temp.
+.render_slot
         LDY     door_row_temp
         LDX     door_width_temp
         LDA     door_carve_x_temp
-.door_write_right_loop
+        BIT     door_shape_temp
+        BMI     render_slot_right
+.render_slot_left_loop
+        STA     terrain_left_wall,Y
+        INY
+        DEX
+        BNE     render_slot_left_loop
+        JMP     door_off_screen
+.render_slot_right
+.render_slot_right_loop
         STA     terrain_right_wall,Y
         INY
         DEX
-        BNE     door_write_right_loop
+        BNE     render_slot_right_loop
+        JMP     door_off_screen
+
+\ --- Notch_v (triangular) --------------------------------------------
+\ Per-row anchor: base + min(row, width-1-row). Splits the run into a
+\ rising half (rise_count = width / 2 iters, +1 per row) then a
+\ descending half (descend_count = width - rise_count iters, peak then
+\ -1 per row). For left wall, base means smaller X is "pulled back"
+\ so the peak protrudes INTO the cavern with +rise_count from carve_x.
+\ Right wall mirrors: base + cursor, peak protrudes via -rise_count.
+.render_notch_v
+        LDA     door_width_temp
+        LSR     A                                        ; rise_count = width / 2
+        STA     door_rise_count_temp
+        LDA     door_width_temp
+        SEC
+        SBC     door_rise_count_temp
+        STA     door_descend_count_temp
+
+        BIT     door_shape_temp
+        BMI     render_notch_v_right
+
+\ Left wall: rise loop ADC, descend loop SBC. carve_x is edge value.
+        LDY     door_row_temp
+        LDA     door_carve_x_temp
+        LDX     door_rise_count_temp
+        BEQ     nvl_skip_rise
+.nvl_rise_loop
+        STA     terrain_left_wall,Y
+        CLC
+        ADC     #$01
+        INY
+        DEX
+        BNE     nvl_rise_loop
+.nvl_skip_rise
+        LDX     door_descend_count_temp
+        BEQ     door_off_screen
+.nvl_descend_loop
+        STA     terrain_left_wall,Y
+        SEC
+        SBC     #$01
+        INY
+        DEX
+        BNE     nvl_descend_loop
+        JMP     door_off_screen
+
+\ Right wall: rise loop SBC (peak protrudes into cavern = smaller X),
+\ descend loop ADC.
+.render_notch_v_right
+        LDY     door_row_temp
+        LDA     door_carve_x_temp
+        LDX     door_rise_count_temp
+        BEQ     nvr_skip_rise
+.nvr_rise_loop
+        STA     terrain_right_wall,Y
+        SEC
+        SBC     #$01
+        INY
+        DEX
+        BNE     nvr_rise_loop
+.nvr_skip_rise
+        LDX     door_descend_count_temp
+        BEQ     door_off_screen
+.nvr_descend_loop
+        STA     terrain_right_wall,Y
+        CLC
+        ADC     #$01
+        INY
+        DEX
+        BNE     nvr_descend_loop
 
 .door_off_screen
         LDX     door_save_x
@@ -13229,13 +13332,15 @@ IF _SWITCHES
 
 \ Scratch used by door_update_one each frame. Single-instance — the
 \ update runs serially per object, so reusing these is safe.
-.door_save_x          EQUB $00
-.door_screen_y_temp   EQUB $00
-.door_row_temp        EQUB $00
-.door_shape_temp      EQUB $00
-.door_anchor_x_temp   EQUB $00
-.door_width_temp      EQUB $00
-.door_carve_x_temp    EQUB $00
+.door_save_x             EQUB $00
+.door_screen_y_temp      EQUB $00
+.door_row_temp           EQUB $00
+.door_shape_temp         EQUB $00
+.door_anchor_x_temp      EQUB $00
+.door_width_temp         EQUB $00
+.door_carve_x_temp       EQUB $00
+.door_rise_count_temp    EQUB $00
+.door_descend_count_temp EQUB $00
 ENDIF
 
 .update_bobbing_mine

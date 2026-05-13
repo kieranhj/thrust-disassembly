@@ -143,19 +143,19 @@
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
 
 .level_5_obj_pos_X
-        EQUB    $9A,$A9,$A1,$BE,$9A,$C1,$AF,$9B,$A2,$9B,$7B,$AC,$AC,$AC,$CA,$99,$99
+        EQUB    $9A,$A9,$A1,$BE,$9A,$C1,$AF,$9B,$A2,$9B,$7B,$AC,$AC,$AC,$CA,$99,$99,$C0
 .level_5_obj_pos_Y
-        EQUB    $E4,$04,$98,$5D,$F8,$57,$BF,$AC,$86,$2E,$1F,$C1,$A8,$67,$3E,$39,$CC
+        EQUB    $E4,$04,$98,$5D,$F8,$57,$BF,$AC,$86,$2E,$1F,$C1,$A8,$67,$3E,$39,$CC,$70
 .level_5_obj_pos_Y_EXT
-        EQUB    $03,$04,$03,$03,$02,$02,$03,$03,$03,$03,$03,$02,$02,$02,$02,$02,$01
+        EQUB    $03,$04,$03,$03,$02,$02,$03,$03,$03,$03,$03,$02,$02,$02,$02,$02,$01,$03
 .level_5_obj_type
-        EQUB    $05,$06,$07,$08,$04,$04,$02,$01,$01,$03,$01,$02,$03,$02,$03,$01,$03,$FF
+        EQUB    $05,$06,$07,$08,$04,$04,$02,$01,$01,$03,$01,$02,$03,$02,$03,$01,$03,$11,$FF
 .level_5_obj_data_0
-        EQUB    $00,$00,$00,$00,$00,$00,$1A,$06,$09,$12,$06,$16,$12,$1B,$12,$05,$0E
+        EQUB    $00,$00,$00,$00,$00,$00,$1A,$06,$09,$12,$06,$16,$12,$1B,$12,$05,$0E,$01
 .level_5_obj_data_1
-        EQUB    $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$0F
 .level_5_obj_data_2
-        EQUB    $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$12
 
 \ ******************************************************************************
 \ * Gravity values per level
@@ -302,15 +302,15 @@
         EQUB    $00
 
 .level_5_switch_obj_indices
-        EQUB    $FF
+        EQUB    $02,$03,$FF
 .level_5_switch_target
-        EQUB    $FF
+        EQUB    $11,$11,$FF
 .level_5_switch_action
-        EQUB    $00
+        EQUB    $05,$05,$00
 .level_5_switch_arg_a
-        EQUB    $00
+        EQUB    $DC,$DC,$00
 .level_5_switch_arg_b
-        EQUB    $00
+        EQUB    $00,$00,$00
 
 \ ******************************************************************************
 \ * No-wrap Y threshold per level
@@ -337,7 +337,7 @@
 \ ******************************************************************************
 
 .level_reset_data_sizes
-        EQUB    $01,$03,$03,$03,$04,$05
+        EQUB    $01,$03,$03,$03,$04,$02
 
 .level_0_reset_data
         EQUB    $01
@@ -380,12 +380,12 @@
         EQUB    $6C,$7B,$6B,$81
 
 .level_5_reset_data
-        EQUB    $01,$02,$02,$03,$03
-        EQUB    $91,$4B,$D4,$2A,$98
-        EQUB    $56,$8C,$82,$6E,$87
-        EQUB    $01,$01,$02,$02,$03
-        EQUB    $24,$D8,$5A,$B4,$1B
-        EQUB    $6C,$A2,$9A,$87,$AE
+        EQUB    $03,$03
+        EQUB    $2A,$98
+        EQUB    $6E,$87
+        EQUB    $02,$03
+        EQUB    $B4,$1B
+        EQUB    $87,$AE
 
 .level_reset_ptr_table_LO
         EQUB    LO(level_0_reset_data)
@@ -408,11 +408,11 @@
         EQUB    LO(level_2_reset_data + 3)
         EQUB    LO(level_3_reset_data + 3)
         EQUB    LO(level_4_reset_data + 4)
-        EQUB    LO(level_5_reset_data + 5)
+        EQUB    LO(level_5_reset_data + 2)
 .level_reset_ptr2_table_HI
         EQUB    HI(level_0_reset_data + 1)
         EQUB    HI(level_1_reset_data + 3)
         EQUB    HI(level_2_reset_data + 3)
         EQUB    HI(level_3_reset_data + 3)
         EQUB    HI(level_4_reset_data + 4)
-        EQUB    HI(level_5_reset_data + 5)
+        EQUB    HI(level_5_reset_data + 2)

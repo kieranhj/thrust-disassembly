@@ -313,6 +313,18 @@ Concretely, a small registry: given `(target_type, slot)`, return either a list 
 
 Cheap once the registry exists; the bulk of the work is enumerating which (type, slot) pairs benefit. Likely worth it before authoring any non-trivial puzzles, since "shoot the switch and the laser changes" only reads well if the designer can predict *how* it changes from the inspector.
 
+### 10.10 Door toggle trigger
+
+`pulse_door` runs a fixed open-hold-close cycle: the second shot during the hold window is ignored (the dispatcher's refractory + pulse_door's already-alive check both bail). That's the right shape for the original game's level-3/4/5 doors but limiting for puzzle authoring — a designer can't say "shoot once to open, shoot again to close on demand". Add a sibling action:
+
+- **`toggle_door`** ($0B or whichever next free slot). If the target door is closed (`alive == 0`): same as pulse_door — set alive, reset cursor/phase, seed timing args.
+- If alive and `phase < closing`: jump straight to closing phase (skip remaining hold, run the close path from current cursor).
+- If alive and already closing: no-op.
+
+A door wired with `toggle_door` then ignores `arg_a` (hold frames) — there's no hold phase; the door waits at full open until a second shot arrives. `arg_b` still controls close rate. Designers who want the auto-close back use `pulse_door`; designers who want player-controlled close use `toggle_door`.
+
+Engine cost is small: one more case in the action jump table, plus a check on `door_phase` inside the action handler to either start opening or fast-forward to closing. Editor-side it's a one-line addition to `SWITCH_ACTION_VALUES` plus a slot-label entry (`arg_a` becomes "(unused)", `arg_b` stays "Close rate").
+
 ## 11. Testing
 
 - **MVP smoke test:** new sandbox level with one switch wired to one turret via `toggle_alive`. Each shot toggles the turret on/off; refractory window prevents double-fire while the bullet is still inside the AABB.
