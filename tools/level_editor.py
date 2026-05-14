@@ -747,36 +747,25 @@ def export_beebasm(levels):
     # Terrain data for all levels first, then object data
     for lv in levels:
         n = lv.level_num
-        if lv.terrain_dirty:
-            # Clamp walls for EOR rendering compatibility. The game's EOR
-            # renderer double-toggles pixels when left and right wall edges
-            # overlap during scrolling. To prevent artifacts:
-            # 1. Left must never exceed right
-            # 2. Once walls meet, freeze both at a fixed position so there
-            #    is no wall edge movement in the solid rock area
-            left = list(lv.left_wall)
-            right = list(lv.right_wall)
-            freeze_row = _clamp_converging_walls(left, right)
-            # Encode only up to the freeze point — the encoder's $FF
-            # terminator keeps walls frozen for all rows beyond it
-            end = freeze_row + 1 if freeze_row is not None else len(left)
-            lc, li = encode_wall_rle(left[:end], 0x00)
-            rc, ri = encode_wall_rle(right[:end], 0xFF)
-        else:
-            # Use original RLE data, but verify no wall crossings exist
-            # (could happen if imported from a previous buggy export)
-            lc = lv.terrain_rle["left_count"]
-            li = lv.terrain_rle["left_inc"]
-            rc = lv.terrain_rle["right_count"]
-            ri = lv.terrain_rle["right_inc"]
-            # Decode and check for crossings
-            left_check = decode_wall(lc, li, start_xpos=0x00, start_segment=1)
-            right_check = decode_wall(rc, ri, start_xpos=0xFF, start_segment=1)
-            if _has_wall_issues(left_check, right_check):
-                freeze_row = _clamp_converging_walls(left_check, right_check)
-                end = freeze_row + 1 if freeze_row is not None else len(left_check)
-                lc, li = encode_wall_rle(left_check[:end], 0x00)
-                rc, ri = encode_wall_rle(right_check[:end], 0xFF)
+        # Always re-encode from the live wall lists. The earlier dirty-flag
+        # short-circuit (use cached terrain_rle when not dirty) lost wall
+        # edits on the second save: _save_to_file clears terrain_dirty
+        # without refreshing terrain_rle, so a subsequent non-wall edit +
+        # save wrote the original imported RLE back to disk.
+        # Clamp walls for EOR rendering compatibility. The game's EOR
+        # renderer double-toggles pixels when left and right wall edges
+        # overlap during scrolling. To prevent artifacts:
+        # 1. Left must never exceed right
+        # 2. Once walls meet, freeze both at a fixed position so there
+        #    is no wall edge movement in the solid rock area
+        left = list(lv.left_wall)
+        right = list(lv.right_wall)
+        freeze_row = _clamp_converging_walls(left, right)
+        # Encode only up to the freeze point — the encoder's $FF
+        # terminator keeps walls frozen for all rows beyond it
+        end = freeze_row + 1 if freeze_row is not None else len(left)
+        lc, li = encode_wall_rle(left[:end], 0x00)
+        rc, ri = encode_wall_rle(right[:end], 0xFF)
 
         lines.append(f".terrain_left_wall_count_{n}")
         lines.append(f"        EQUB    {format_bytes(lc)}")
@@ -3958,32 +3947,50 @@ class Editor:
         else:             # slot: full carve every row
             per_row = [depth] * width
 
-        # CLOSED-state fill: per row, fill from the level's natural wall
-        # (terrain RLE position at that row) across to the door's anchor.
-        # This is the door's BODY — the chunk of material that protrudes
-        # into the cavern when shut. If the anchor sits on top of the
-        # natural wall (flush), the body has zero thickness — that's a
-        # cue to the designer to inset the anchor so the door has visible
-        # extent in-game.
+        # Closed-state door wall position per row. Slot / flat_window
+        # rest flush with the anchor; notch_v's wall has a V-protrusion
+        # peaking at rise_count. The engine renders the matching V-recess
+        # on the OPPOSITE wall too, so the editor fills both sides for
+        # notch_v — the designer doesn't need to hand-carve anything.
+        if shape == 1:
+            rise = width // 2
+            closed_off = []
+            for r in range(width):
+                if r < rise:
+                    closed_off.append(r)
+                else:
+                    closed_off.append(max(0, 2 * rise - r))
+        else:
+            closed_off = [0] * width
+
+        # CLOSED-state fill: door body + (notch_v) matching opposite recess.
         lv = self.level
         overlay = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+
+        def _draw_row_rect(x0, x1, row):
+            if x1 > x0:
+                sx0, sy0 = cam.world_to_screen(x0, row)
+                sx1, sy1 = cam.world_to_screen(x1, row + 1)
+                rx0 = int(min(sx0, sx1))
+                ry0 = int(min(sy0, sy1))
+                rw0 = max(1, int(abs(sx1 - sx0)))
+                rh0 = max(1, int(abs(sy1 - sy0)))
+                pygame.draw.rect(overlay, COL_DOOR_RANGE, (rx0, ry0, rw0, rh0))
+
         for r in range(width):
             row = ay + r
             if 0 <= row < len(lv.left_wall) and 0 <= row < len(lv.right_wall):
+                # Closed door wall position. For left-wall door the V-peak
+                # protrudes RIGHTWARD (toward larger X), opposite of sx.
+                door_closed_x = ax - sx * closed_off[r]
                 if side == 0:
-                    x_wall = lv.left_wall[row]
-                    x0, x1 = x_wall, ax
+                    _draw_row_rect(lv.left_wall[row], door_closed_x, row)
+                    if shape == 1:
+                        _draw_row_rect(door_closed_x, lv.right_wall[row], row)
                 else:
-                    x_wall = lv.right_wall[row]
-                    x0, x1 = ax, x_wall
-                if x1 > x0:
-                    sx0, sy0 = cam.world_to_screen(x0, row)
-                    sx1, sy1 = cam.world_to_screen(x1, row + 1)
-                    rx0 = int(min(sx0, sx1))
-                    ry0 = int(min(sy0, sy1))
-                    rw0 = max(1, int(abs(sx1 - sx0)))
-                    rh0 = max(1, int(abs(sy1 - sy0)))
-                    pygame.draw.rect(overlay, COL_DOOR_RANGE, (rx0, ry0, rw0, rh0))
+                    _draw_row_rect(door_closed_x, lv.right_wall[row], row)
+                    if shape == 1:
+                        _draw_row_rect(lv.left_wall[row], door_closed_x, row)
         screen.blit(overlay, (0, 0))
 
         # OPEN-state outline: polygon showing the carved cavity when fully

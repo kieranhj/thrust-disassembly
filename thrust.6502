@@ -12981,6 +12981,14 @@ IF _SWITCHES
 \ -1 per row). For left wall, base means smaller X is "pulled back"
 \ so the peak protrudes INTO the cavern with +rise_count from carve_x.
 \ Right wall mirrors: base + cursor, peak protrudes via -rise_count.
+\
+\ Second pass writes the MATCHING V-recess into the OPPOSITE wall using
+\ anchor_x as the base (= closed-state door wall). When the door is
+\ closed (cursor = 0) the two passes produce identical X per row, so
+\ the walls meet and the cavern seals. When open, the opposite wall
+\ stays at its closed-state V-shape and the door wall pulls back,
+\ leaving a constant-width V-channel between them. Designer no longer
+\ has to hand-carve the opposite wall.
 .render_notch_v
         LDA     door_width_temp
         LSR     A                                        ; rise_count = width / 2
@@ -13007,8 +13015,7 @@ IF _SWITCHES
         BNE     nvl_rise_loop
 .nvl_skip_rise
         LDX     door_descend_count_temp
-        BNE     nvl_descend_loop
-        JMP     door_off_screen
+        BEQ     nvl_opp_start
 .nvl_descend_loop
         STA     terrain_left_wall,Y
         SEC
@@ -13016,6 +13023,31 @@ IF _SWITCHES
         INY
         DEX
         BNE     nvl_descend_loop
+
+\ Opposite (right) wall V-recess for a left-wall door.
+.nvl_opp_start
+        LDY     door_row_temp
+        LDA     door_anchor_x_temp
+        LDX     door_rise_count_temp
+        BEQ     nvl_opp_skip_rise
+.nvl_opp_rise_loop
+        STA     terrain_right_wall,Y
+        CLC
+        ADC     #$01
+        INY
+        DEX
+        BNE     nvl_opp_rise_loop
+.nvl_opp_skip_rise
+        LDX     door_descend_count_temp
+        BNE     nvl_opp_descend_loop
+        JMP     door_off_screen
+.nvl_opp_descend_loop
+        STA     terrain_right_wall,Y
+        SEC
+        SBC     #$01
+        INY
+        DEX
+        BNE     nvl_opp_descend_loop
         JMP     door_off_screen
 
 \ Right wall: rise loop SBC (peak protrudes into cavern = smaller X),
@@ -13034,8 +13066,7 @@ IF _SWITCHES
         BNE     nvr_rise_loop
 .nvr_skip_rise
         LDX     door_descend_count_temp
-        BNE     nvr_descend_loop
-        JMP     door_off_screen
+        BEQ     nvr_opp_start
 .nvr_descend_loop
         STA     terrain_right_wall,Y
         CLC
@@ -13043,6 +13074,31 @@ IF _SWITCHES
         INY
         DEX
         BNE     nvr_descend_loop
+
+\ Opposite (left) wall V-recess for a right-wall door.
+.nvr_opp_start
+        LDY     door_row_temp
+        LDA     door_anchor_x_temp
+        LDX     door_rise_count_temp
+        BEQ     nvr_opp_skip_rise
+.nvr_opp_rise_loop
+        STA     terrain_left_wall,Y
+        SEC
+        SBC     #$01
+        INY
+        DEX
+        BNE     nvr_opp_rise_loop
+.nvr_opp_skip_rise
+        LDX     door_descend_count_temp
+        BNE     nvr_opp_descend_loop
+        JMP     door_off_screen
+.nvr_opp_descend_loop
+        STA     terrain_left_wall,Y
+        CLC
+        ADC     #$01
+        INY
+        DEX
+        BNE     nvr_opp_descend_loop
         JMP     door_off_screen
 
 \ --- Flat_window -----------------------------------------------------
