@@ -206,10 +206,11 @@ COL_SWITCH_WIRE         = (255, 200, 100, 180)  # switch->target wiring line (or
 OBJECT_DOOR             = 0x11
 DOOR_SHAPE_VALUES = [
     ("slot",        0),
-    ("notch_v",     1),     # D2: not yet rendered in-game
-    ("flat_window", 2),     # D3: not yet rendered in-game
+    ("notch_v",     1),
+    ("flat_window", 2),
 ]
 DOOR_SIDE_VALUES = [("Left wall",  0), ("Right wall", 1)]
+DOOR_OPEN_DIR_VALUES = [("Top-down", 0), ("Bottom-up", 1)]    # flat_window only
 COL_DOOR        = (200, 160, 100)
 COL_DOOR_RANGE  = (200, 160, 100, 90)
 
@@ -398,6 +399,7 @@ def import_beebasm(path):
                 slot_1 = data_1[i] if i < len(data_1) else 0
                 slot_2 = data_2[i] if i < len(data_2) else 0
                 door_shape = door_side = door_width = door_max_carve = 0
+                door_open_dir = 0
                 if t in LASER_BEAM_DX_PIXELS:
                     dx_byte, dy_byte = slot_1, slot_2
                     wr, ws = 0, 0
@@ -421,7 +423,8 @@ def import_beebasm(path):
                     wr, ws = 0, 0
                     mine_phase, mine_amp = 0, 0
                     door_side = (gp >> 7) & 0x01
-                    door_shape = gp & 0x7F
+                    door_open_dir = (gp >> 6) & 0x01    # flat_window only
+                    door_shape = gp & 0x3F
                     door_width = slot_1
                     door_max_carve = slot_2
                 else:
@@ -435,6 +438,7 @@ def import_beebasm(path):
                 ws = legacy_well_strength[i] if i < len(legacy_well_strength) else 0
                 mine_phase, mine_amp = 0, 0
                 door_shape = door_side = door_width = door_max_carve = 0
+                door_open_dir = 0
             # Convert from unsigned byte to signed int (-128..127).
             dx_s = dx_byte - 256 if dx_byte >= 128 else dx_byte
             dy_s = dy_byte - 256 if dy_byte >= 128 else dy_byte
@@ -454,6 +458,7 @@ def import_beebasm(path):
                 "teleport_dest": (gp & 0xFF) if t == OBJECT_TELEPORTER else 0,
                 "door_shape": door_shape,
                 "door_side": door_side,
+                "door_open_dir": door_open_dir,
                 "door_width": door_width,
                 "door_max_carve": door_max_carve,
             })
@@ -822,11 +827,13 @@ def export_beebasm(levels):
                     data_1.append(0)
                     data_2.append(0)
                 elif t == OBJECT_DOOR:
-                    # Slot 0 packs (side << 7) | shape; slot 1 = width;
-                    # slot 2 = max carve depth.
+                    # Slot 0 packs (side << 7) | (open_dir << 6) | shape;
+                    # slot 1 = width; slot 2 = max carve depth.
+                    # open_dir only meaningful for flat_window (shape $02).
                     side = o.get('door_side', 0) & 0x01
-                    shape = o.get('door_shape', 0) & 0x7F
-                    data_0.append(((side << 7) | shape) & 0xFF)
+                    open_dir = o.get('door_open_dir', 0) & 0x01
+                    shape = o.get('door_shape', 0) & 0x3F
+                    data_0.append(((side << 7) | (open_dir << 6) | shape) & 0xFF)
                     data_1.append(o.get('door_width', 1) & 0xFF)
                     data_2.append(o.get('door_max_carve', 1) & 0xFF)
                 else:
@@ -1236,7 +1243,10 @@ SCHEMA_DOOR = [
     Field("door_side", "Side", "enum",
           getter=_g("door_side"), setter=_s("door_side"),
           min=0, max=1, step=1, values=DOOR_SIDE_VALUES),
-    Field("door_width", "Width (rows)", "byte",
+    Field("door_open_dir", "Opens", "enum",
+          getter=_g("door_open_dir"), setter=_s("door_open_dir"),
+          min=0, max=1, step=1, values=DOOR_OPEN_DIR_VALUES),
+    Field("door_width", "Height (rows)", "byte",
           getter=_g("door_width"), setter=_s("door_width"),
           min=1, max=32, step=1, shift_step=4),
     Field("door_max_carve", "Max carve", "byte",
@@ -1567,7 +1577,7 @@ class LevelData:
                             "well_radius": 0, "well_strength": 0,
                             "mine_phase": 0, "mine_amp": 0,
                             "teleport_dest": 0,
-                            "door_shape": 0, "door_side": 0,
+                            "door_shape": 0, "door_side": 0, "door_open_dir": 0,
                             "door_width": 1, "door_max_carve": 1})
         return cls(level_num, list(left), list(right), objects, terrain_rle)
 
@@ -3123,7 +3133,7 @@ class Editor:
                                         "mine_phase": BOBBING_MINE_DEFAULT_PHASE if is_mine else 0,
                                         "mine_amp": BOBBING_MINE_DEFAULT_AMP if is_mine else 0,
                                         "teleport_dest": TELEPORTER_DEFAULT_DEST if is_teleporter else 0,
-                                        "door_shape": 0, "door_side": 0,
+                                        "door_shape": 0, "door_side": 0, "door_open_dir": 0,
                                         "door_width": 8 if is_door else 1,
                                         "door_max_carve": 8 if is_door else 1})
             self.level.dirty = True
@@ -4956,6 +4966,7 @@ class Editor:
             "teleport_dest": TELEPORTER_DEFAULT_DEST if is_tp else 0,
             "door_shape": 0,
             "door_side": 0,
+            "door_open_dir": 0,
             "door_width": 8 if is_door else 1,
             "door_max_carve": 8 if is_door else 1,
         })

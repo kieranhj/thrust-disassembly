@@ -51,6 +51,7 @@ _SWITCHES            = (_SWRAM_BUILD AND TRUE)    ; Editor-driven switches & tri
 \ ******************************************************************************
 
 INITIAL_LEVEL                       = $01       ; staring level
+INITIAL_CHECKPOINT                  = $00       ; testing: spawn at this checkpoint on level start (0 = top)
 INITIAL_LIVES                       = $04       ; starting number of lives
 INITIAL_FUEL                        = $10       ; starting fuel value (BCD 1000)
 
@@ -7188,6 +7189,8 @@ IF _LAST_USED_CHECKPOINT
         \\ editor exports checkpoints sorted by ascending Y, so index 0 is
         \\ always the topmost spawn point. Both bytes sit outside the ZP-clear
         \\ range so they persist across death-respawn cycles.
+        \\ INITIAL_CHECKPOINT lets test builds spawn deeper.
+        LDA     #INITIAL_CHECKPOINT
         STA     active_checkpoint_index
         STA     deepest_checkpoint_visited
 ENDIF
@@ -12855,6 +12858,26 @@ IF _SWITCHES
 \\ {
         STX     door_save_x
 
+        \\ Pre-load shape / width / max_carve so the state machine can
+        \\ dispatch on shape (flat_window uses width as cursor_max, not
+        \\ max_carve). Renderer reads the same temps — no duplicate SMC
+        \\ fetches downstream.
+.door_load_shape
+        LDA     level_0_obj_data_0,X                     ; **SELF-MODIFIED CODE**
+        door_load_shape_addr_LO = door_load_shape+1
+        door_load_shape_addr_HI = door_load_shape+2
+        STA     door_shape_temp
+.door_load_width
+        LDA     level_0_obj_data_1,X                     ; **SELF-MODIFIED CODE**
+        door_load_width_addr_LO = door_load_width+1
+        door_load_width_addr_HI = door_load_width+2
+        STA     door_width_temp
+.door_load_max_carve
+        LDA     level_0_obj_data_2,X                     ; **SELF-MODIFIED CODE**
+        door_load_max_carve_addr_LO = door_load_max_carve+1
+        door_load_max_carve_addr_HI = door_load_max_carve+2
+        STA     door_max_carve_temp
+
         \\ Phase 1: state-machine tick.
         LDA     level_obj_flags,X
         AND     #OBJ_flag_alive
@@ -12890,13 +12913,6 @@ IF _SWITCHES
         ADC     terrain_window_y_index
         STA     door_row_temp
 
-        \\ Read shape descriptor (bit 7 = side, low bits = shape code).
-.door_load_shape
-        LDA     level_0_obj_data_0,X                     ; **SELF-MODIFIED CODE**
-        door_load_shape_addr_LO = door_load_shape+1
-        door_load_shape_addr_HI = door_load_shape+2
-        STA     door_shape_temp
-
         \\ Anchor X — wall position when closed (cursor = 0).
 .door_load_anchor_x
         LDA     level_0_obj_pos_X,X                      ; **SELF-MODIFIED CODE**
@@ -12904,15 +12920,9 @@ IF _SWITCHES
         door_load_pos_x_addr_HI = door_load_anchor_x+2
         STA     door_anchor_x_temp
 
-.door_load_width
-        LDA     level_0_obj_data_1,X                     ; **SELF-MODIFIED CODE**
-        door_load_width_addr_LO = door_load_width+1
-        door_load_width_addr_HI = door_load_width+2
-        STA     door_width_temp
-
         \\ Pre-compute carve_x = anchor_x - cursor (for left wall) or
         \\ anchor_x + cursor (for right wall). Slot uses this directly;
-        \\ notch_v offsets it per row.
+        \\ notch_v offsets it per row. flat_window ignores it.
         LDA     door_shape_temp
         BMI     door_carve_right
 
@@ -12928,13 +12938,18 @@ IF _SWITCHES
         STA     door_carve_x_temp
 .door_carve_done
 
-        \\ Dispatch on shape code (low 7 bits of door_shape_temp).
-        \\ Side bit (bit 7) is handled inside each shape's renderer.
+        \\ Dispatch on shape code (low 6 bits of door_shape_temp).
+        \\ Bit 7 = side, bit 6 = flat_window direction; renderers
+        \\ pick those out themselves.
         LDA     door_shape_temp
-        AND     #$7F
+        AND     #$3F
         BEQ     render_slot
         CMP     #$01
         BEQ     render_notch_v
+        CMP     #$02
+        BNE     door_shape_unknown
+        JMP     render_flat_window
+.door_shape_unknown
         JMP     door_off_screen                          ; unknown shape: no render
 
 \ --- Slot ------------------------------------------------------------
@@ -12992,7 +13007,8 @@ IF _SWITCHES
         BNE     nvl_rise_loop
 .nvl_skip_rise
         LDX     door_descend_count_temp
-        BEQ     door_off_screen
+        BNE     nvl_descend_loop
+        JMP     door_off_screen
 .nvl_descend_loop
         STA     terrain_left_wall,Y
         SEC
@@ -13018,7 +13034,8 @@ IF _SWITCHES
         BNE     nvr_rise_loop
 .nvr_skip_rise
         LDX     door_descend_count_temp
-        BEQ     door_off_screen
+        BNE     nvr_descend_loop
+        JMP     door_off_screen
 .nvr_descend_loop
         STA     terrain_right_wall,Y
         CLC
@@ -13026,6 +13043,83 @@ IF _SWITCHES
         INY
         DEX
         BNE     nvr_descend_loop
+        JMP     door_off_screen
+
+\ --- Flat_window -----------------------------------------------------
+\ Slot whose rows open progressively. cursor counts opened rows in
+\ [0..width]. Opened rows sit at anchor_x ± max_carve; the rest stay
+\ at anchor_x. Cursor_max = width (set in door_advance_anim).
+\ Bit 6 of shape selects direction: 0 = opens top-down (open rows at
+\ the slot's top), 1 = opens bottom-up.
+.render_flat_window
+        \\ Stage open / closed fill values once.
+        LDA     door_anchor_x_temp
+        STA     door_closed_fill_temp
+        BIT     door_shape_temp
+        BMI     fw_open_right
+        LDA     door_anchor_x_temp
+        SEC
+        SBC     door_max_carve_temp
+        JMP     fw_open_stored
+.fw_open_right
+        LDA     door_anchor_x_temp
+        CLC
+        ADC     door_max_carve_temp
+.fw_open_stored
+        STA     door_open_fill_temp
+
+        \\ Row counts: open_rows = cursor; closed_rows = width - cursor.
+        LDA     door_cursor,X
+        STA     door_open_rows_temp
+        LDA     door_width_temp
+        SEC
+        SBC     door_open_rows_temp
+        STA     door_closed_rows_temp
+
+        LDY     door_row_temp
+
+        \\ Direction: bit 6 of shape. 0 = top-down (open first),
+        \\ 1 = bottom-up (closed first).
+        LDA     door_shape_temp
+        AND     #$40
+        BNE     fw_bottom_up
+        LDA     door_open_fill_temp
+        LDX     door_open_rows_temp
+        JSR     fw_paint_segment
+        LDA     door_closed_fill_temp
+        LDX     door_closed_rows_temp
+        JSR     fw_paint_segment
+        JMP     door_off_screen
+.fw_bottom_up
+        LDA     door_closed_fill_temp
+        LDX     door_closed_rows_temp
+        JSR     fw_paint_segment
+        LDA     door_open_fill_temp
+        LDX     door_open_rows_temp
+        JSR     fw_paint_segment
+        JMP     door_off_screen
+
+\ A = fill, X = row count, Y = wall index (advanced).
+\ Side from door_shape_temp bit 7.
+.fw_paint_segment
+        CPX     #$00
+        BEQ     fw_paint_done
+        BIT     door_shape_temp
+        BMI     fw_paint_right
+.fw_paint_left_loop
+        STA     terrain_left_wall,Y
+        INY
+        DEX
+        BNE     fw_paint_left_loop
+        RTS
+.fw_paint_right
+.fw_paint_right_loop
+        STA     terrain_right_wall,Y
+        INY
+        DEX
+        BNE     fw_paint_right_loop
+.fw_paint_done
+        RTS
 
 .door_off_screen
         LDX     door_save_x
@@ -13051,10 +13145,18 @@ IF _SWITCHES
         JMP     phase_closing
 
     .phase_opening
-.door_load_max_carve
-        LDA     level_0_obj_data_2,X                     ; **SELF-MODIFIED CODE**
-        door_load_max_carve_addr_LO = door_load_max_carve+1
-        door_load_max_carve_addr_HI = door_load_max_carve+2
+        \\ cursor_max is shape-dependent: flat_window walks 0..width
+        \\ (row sweep); slot / notch_v walk 0..max_carve (X depth). Read
+        \\ from prelude-cached temps — no extra SMC fetches here.
+        LDA     door_shape_temp
+        AND     #$3F
+        CMP     #$02
+        BNE     open_use_max_carve
+        LDA     door_width_temp
+        JMP     open_compare
+    .open_use_max_carve
+        LDA     door_max_carve_temp
+    .open_compare
         CMP     door_cursor,X
         BNE     open_inc
         \\ Cursor at max — start holding next frame.
@@ -13338,9 +13440,14 @@ IF _SWITCHES
 .door_shape_temp         EQUB $00
 .door_anchor_x_temp      EQUB $00
 .door_width_temp         EQUB $00
+.door_max_carve_temp     EQUB $00
 .door_carve_x_temp       EQUB $00
 .door_rise_count_temp    EQUB $00
 .door_descend_count_temp EQUB $00
+.door_open_rows_temp     EQUB $00
+.door_closed_rows_temp   EQUB $00
+.door_open_fill_temp     EQUB $00
+.door_closed_fill_temp   EQUB $00
 ENDIF
 
 .update_bobbing_mine
