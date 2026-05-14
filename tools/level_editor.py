@@ -209,8 +209,9 @@ DOOR_SHAPE_VALUES = [
     ("notch_v",     1),
     ("flat_window", 2),
 ]
-DOOR_SIDE_VALUES = [("Left wall",  0), ("Right wall", 1)]
-DOOR_OPEN_DIR_VALUES = [("Top-down", 0), ("Bottom-up", 1)]    # flat_window only
+DOOR_SIDE_VALUES = [("Opens leftward",  0), ("Opens rightward", 1)]   # slot / notch_v
+DOOR_SIDE_VALUES_WALL = [("Left wall", 0), ("Right wall", 1)]         # flat_window
+DOOR_OPEN_DIR_VALUES = [("Top-down", 0), ("Bottom-up", 1)]            # flat_window only
 COL_DOOR        = (200, 160, 100)
 COL_DOOR_RANGE  = (200, 160, 100, 90)
 
@@ -1240,16 +1241,16 @@ SCHEMA_DOOR = [
           getter=_g("door_shape"), setter=_s("door_shape"),
           min=0, max=2, step=1, values=DOOR_SHAPE_VALUES,
           hotkey=("[", "]")),
-    Field("door_side", "Side", "enum",
+    Field("door_side", "Direction", "enum",
           getter=_g("door_side"), setter=_s("door_side"),
           min=0, max=1, step=1, values=DOOR_SIDE_VALUES),
     Field("door_open_dir", "Opens", "enum",
           getter=_g("door_open_dir"), setter=_s("door_open_dir"),
           min=0, max=1, step=1, values=DOOR_OPEN_DIR_VALUES),
-    Field("door_width", "Height (rows)", "byte",
+    Field("door_width", "Height", "byte",
           getter=_g("door_width"), setter=_s("door_width"),
           min=1, max=32, step=1, shift_step=4),
-    Field("door_max_carve", "Max carve", "byte",
+    Field("door_max_carve", "Open depth", "byte",
           getter=_g("door_max_carve"), setter=_s("door_max_carve"),
           min=1, max=127, step=1, shift_step=8),
 ]
@@ -1514,7 +1515,26 @@ def schema_for_selection(editor):
             if t == OBJECT_TELEPORTER:
                 return prefix + SCHEMA_TELEPORTER, obj, lv
             if t == OBJECT_DOOR:
-                return prefix + SCHEMA_DOOR, obj, lv
+                # Per-shape field swaps:
+                #  - 'Opens' (up/down) only applies to flat_window;
+                #  - 'Direction' label depends on shape: slot/notch_v carve
+                #    horizontally (Opens left/rightward), flat_window
+                #    carves vertically and the side bit just picks which
+                #    wall the slot lives in (Left/Right wall).
+                shape_now = obj.get("door_shape", 0)
+                schema = []
+                for f in SCHEMA_DOOR:
+                    if f.id == "door_open_dir" and shape_now != 2:
+                        continue
+                    if f.id == "door_side" and shape_now == 2:
+                        schema.append(Field(
+                            "door_side", "Wall", "enum",
+                            getter=_g("door_side"), setter=_s("door_side"),
+                            min=0, max=1, step=1,
+                            values=DOOR_SIDE_VALUES_WALL))
+                        continue
+                    schema.append(f)
+                return prefix + schema, obj, lv
             if t in OBJECT_FIRING_TYPES:
                 return prefix + SCHEMA_GUN, obj, lv
             if t in (0x07, 0x08):
@@ -3810,49 +3830,139 @@ class Editor:
                                    (int(tx), int(ty)), 5, 1)
 
     def _render_door(self, obj, i):
-        """Doors have no in-game sprite — visualise them in the editor as a
-        bracket marking the anchor row + a translucent rectangle showing
-        the rows the door owns and the max carve depth into the wall.
-        Selected / hover bordering matches the standard pattern.
+        """Doors have no in-game sprite — visualise them as the carved
+        cavity silhouette per shape, plus an anchor tick at the closed-
+        wall position so the designer can tell what (X, Y, width, depth)
+        map to on screen.
+
+          slot         → rectangle the full width.
+          notch_v      → triangle / diamond: V-cut with peak in middle.
+          flat_window  → partial rectangle on the opening side, plus an
+                         arrow showing which way it opens.
         """
         cam = self.camera
         screen = self.screen
-        width  = max(1, obj.get("door_width", 1))
-        depth  = max(1, obj.get("door_max_carve", 1))
-        side   = obj.get("door_side", 0)            # 0 = left, 1 = right
-
+        width    = max(1, obj.get("door_width", 1))
+        depth    = max(1, obj.get("door_max_carve", 1))
+        side     = obj.get("door_side", 0)            # 0 = left, 1 = right
+        shape    = obj.get("door_shape", 0)
+        open_dir = obj.get("door_open_dir", 0)        # flat_window only
         ax = obj["x"]
         ay = obj["y"]
-        # Carved rectangle in world coords: from anchor X carved inward by
-        # `depth` units, spanning `width` rows.
-        if side == 0:
-            x0_world = ax - depth
-            x1_world = ax
-        else:
-            x0_world = ax
-            x1_world = ax + depth
-        y0_world = ay
-        y1_world = ay + width
 
-        sx0, sy0 = cam.world_to_screen(x0_world, y0_world)
-        sx1, sy1 = cam.world_to_screen(x1_world, y1_world)
-        rx = int(min(sx0, sx1))
-        ry = int(min(sy0, sy1))
-        rw = max(1, int(abs(sx1 - sx0)))
-        rh = max(1, int(abs(sy1 - sy0)))
+        # Sign for carve direction: -1 for left wall (carve toward smaller
+        # X), +1 for right wall (toward larger X). Lets the polygon-trace
+        # below stay side-agnostic.
+        sx = -1 if side == 0 else +1
 
-        # Translucent fill showing the carve span.
+        # Per-row carve depth (in world units, depth from the anchor wall).
+        # Mirrors the engine's row-by-row write so the preview matches what
+        # the player sees when the door is fully open.
+        if shape == 1:    # notch_v: V-cut, peak in the middle
+            rise = width // 2
+            per_row = []
+            for r in range(width):
+                if r < rise:
+                    per_row.append(depth - r)
+                else:
+                    per_row.append(max(0, depth - (2 * rise - r)))
+        elif shape == 2:  # flat_window: outline the FULL slot so the
+            # designer sees the whole footprint; the open/closed split
+            # gets a separator line + the arrow below.
+            per_row = [depth] * width
+        else:             # slot: full carve every row
+            per_row = [depth] * width
+
+        # CLOSED-state fill: per row, fill from the level's natural wall
+        # (terrain RLE position at that row) across to the door's anchor.
+        # This is the door's BODY — the chunk of material that protrudes
+        # into the cavern when shut. If the anchor sits on top of the
+        # natural wall (flush), the body has zero thickness — that's a
+        # cue to the designer to inset the anchor so the door has visible
+        # extent in-game.
+        lv = self.level
         overlay = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
-        pygame.draw.rect(overlay, COL_DOOR_RANGE, (rx, ry, rw, rh))
+        for r in range(width):
+            row = ay + r
+            if 0 <= row < len(lv.left_wall) and 0 <= row < len(lv.right_wall):
+                if side == 0:
+                    x_wall = lv.left_wall[row]
+                    x0, x1 = x_wall, ax
+                else:
+                    x_wall = lv.right_wall[row]
+                    x0, x1 = ax, x_wall
+                if x1 > x0:
+                    sx0, sy0 = cam.world_to_screen(x0, row)
+                    sx1, sy1 = cam.world_to_screen(x1, row + 1)
+                    rx0 = int(min(sx0, sx1))
+                    ry0 = int(min(sy0, sy1))
+                    rw0 = max(1, int(abs(sx1 - sx0)))
+                    rh0 = max(1, int(abs(sy1 - sy0)))
+                    pygame.draw.rect(overlay, COL_DOOR_RANGE, (rx0, ry0, rw0, rh0))
         screen.blit(overlay, (0, 0))
-        pygame.draw.rect(screen, COL_DOOR, (rx, ry, rw, rh), 1)
 
-        # Anchor tick at (ax, ay) — small notch on the wall edge.
-        asx, asy = cam.world_to_screen(ax, ay)
-        asxi, asyi = int(asx), int(asy)
-        pygame.draw.line(screen, COL_DOOR, (asxi - 3, asyi), (asxi + 3, asyi))
-        pygame.draw.line(screen, COL_DOOR, (asxi, asyi - 3), (asxi, asyi + 3))
+        # OPEN-state outline: polygon showing the carved cavity when fully
+        # open. Outline only — the fill above conveys the closed/blocked
+        # area, the outline conveys the space that opens up.
+        pts = []
+        for r in range(width):
+            pts.append(cam.world_to_screen(ax + sx * per_row[r], ay + r))
+            pts.append(cam.world_to_screen(ax + sx * per_row[r], ay + r + 1))
+        pts.append(cam.world_to_screen(ax, ay + width))
+        pts.append(cam.world_to_screen(ax, ay))
+        pts_i = [(int(x), int(y)) for x, y in pts]
+        if len(pts_i) >= 3:
+            pygame.draw.polygon(screen, COL_DOOR, pts_i, 1)
 
+        # Direction arrow inside the carved cavity. Slot / notch_v point
+        # along the wall-pullback axis (sx). flat_window points along Y
+        # in the row-sweep direction. Placed at the slot's centre.
+        mx, my = cam.world_to_screen(ax + sx * depth / 2.0, ay + width / 2.0)
+        mxi, myi = int(mx), int(my)
+        ar_len = 6
+        if shape == 2:
+            ar_dx, ar_dy = 0, (ar_len if open_dir == 0 else -ar_len)
+        else:
+            ar_dx, ar_dy = sx * ar_len, 0
+        pygame.draw.line(screen, COL_DOOR,
+                         (mxi - ar_dx, myi - ar_dy),
+                         (mxi + ar_dx, myi + ar_dy), 2)
+        tip_x = mxi + ar_dx
+        tip_y = myi + ar_dy
+        if ar_dx != 0:
+            sign = 1 if ar_dx > 0 else -1
+            head_pts = [(tip_x + sign * 3, tip_y),
+                        (tip_x, tip_y - 3),
+                        (tip_x, tip_y + 3)]
+        else:
+            sign = 1 if ar_dy > 0 else -1
+            head_pts = [(tip_x, tip_y + sign * 3),
+                        (tip_x - 3, tip_y),
+                        (tip_x + 3, tip_y)]
+        pygame.draw.polygon(screen, COL_DOOR, head_pts)
+
+        # Bounding rect for selection / hover highlight — derive from
+        # world-space extents so the box wraps both the closed-state fill
+        # (terrain wall → anchor) AND the open polygon (anchor → carve),
+        # full slot height. Done in world coords to avoid per-row
+        # rounding losses at low zoom.
+        body_x_min = ax
+        body_x_max = ax
+        for r in range(width):
+            row = ay + r
+            if 0 <= row < len(lv.left_wall) and 0 <= row < len(lv.right_wall):
+                wx = lv.left_wall[row] if side == 0 else lv.right_wall[row]
+                body_x_min = min(body_x_min, wx)
+                body_x_max = max(body_x_max, wx)
+        carve_extent = ax + sx * depth
+        x_lo = min(body_x_min, carve_extent, ax)
+        x_hi = max(body_x_max, carve_extent, ax)
+        bbox_tl = cam.world_to_screen(x_lo, ay)
+        bbox_br = cam.world_to_screen(x_hi, ay + width)
+        rx = int(min(bbox_tl[0], bbox_br[0]))
+        ry = int(min(bbox_tl[1], bbox_br[1]))
+        rw = max(1, int(abs(bbox_br[0] - bbox_tl[0])))
+        rh = max(1, int(abs(bbox_br[1] - bbox_tl[1])))
         if i == self.selected_object:
             pygame.draw.rect(screen, COL_SELECT,
                              (rx - 2, ry - 2, rw + 4, rh + 4), 2)
