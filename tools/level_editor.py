@@ -1918,6 +1918,8 @@ class Editor:
         self.hovered_laser_endpoint = False   # True when mouse is over the endpoint handle
         self.dragging_well_radius = False     # True while dragging the selected gravity well's radius handle
         self.hovered_well_radius = False      # True when mouse is over the radius drag handle
+        self.dragging_door_edge = None        # None or "top"|"bottom"|"outer" — resize selected door
+        self.hovered_door_edge = None         # mirror of above for hover highlight
         self.hovered_wall = None      # ("left"|"right", row)
         self.hovered_object = None    # index
         self.wall_tool = "draw"       # "draw" (freehand) or "line"
@@ -2499,6 +2501,12 @@ class Editor:
                     self.dragging_well_radius = True
                     self._set_well_radius_from_screen(mx)
                     return
+                door_edge = self._hit_test_door_edge(mx, my)
+                if door_edge is not None:
+                    self.undo.save(self.level)
+                    self.dragging_door_edge = door_edge
+                    self._set_door_edge_from_screen(door_edge, mx, my)
+                    return
                 # Wells have no sprite, so _hit_test_object skips them; check
                 # well centres separately first. Mines now render via the
                 # standard sprite path so _hit_test_object handles them.
@@ -2553,6 +2561,9 @@ class Editor:
             if self.dragging_well_radius:
                 self.level.dirty = True
                 self.dragging_well_radius = False
+            if self.dragging_door_edge:
+                self.level.dirty = True
+                self.dragging_door_edge = None
             if self.dragging_checkpoint:
                 self.level.dirty = True
                 self.dragging_checkpoint = None
@@ -2663,6 +2674,10 @@ class Editor:
             self._set_well_radius_from_screen(mx)
             return
 
+        if self.dragging_door_edge and self.selected_object is not None:
+            self._set_door_edge_from_screen(self.dragging_door_edge, mx, my)
+            return
+
         if self.dragging_object and self.selected_object is not None:
             grab_dx, grab_dy = self.dragging_object
             wx, wy = self.camera.screen_to_world(mx, my)
@@ -2688,11 +2703,13 @@ class Editor:
                     self.hovered_object = self._hit_test_well(mx, my)
                 self.hovered_laser_endpoint = self._hit_test_laser_endpoint(mx, my)
                 self.hovered_well_radius = self._hit_test_well_radius(mx, my)
+                self.hovered_door_edge = self._hit_test_door_edge(mx, my)
             elif self.mode == "band":
                 self.hovered_band = self._hit_test_band(mx, my)
         else:
             self.hovered_laser_endpoint = False
             self.hovered_well_radius = False
+            self.hovered_door_edge = None
 
     def _hit_test_wall(self, mx, my):
         """Test if screen position is near a wall edge. Returns (side, row) or None."""
@@ -3050,6 +3067,74 @@ class Editor:
         hx, hy = cx + rx_screen, cy
         r = GRAVITY_WELL_HANDLE_RADIUS + GRAVITY_WELL_HANDLE_HIT_PADDING
         return (mx - hx) ** 2 + (my - hy) ** 2 <= r * r
+
+    def _door_screen_bbox(self, obj):
+        """Screen-space bbox for the selected door's footprint (anchor X
+        out to ±depth, anchor Y down to anchor + height). Returns
+        (x_inner_screen, x_outer_screen, y_top, y_bottom, sx).
+        sx = -1 for left wall, +1 for right wall."""
+        cam = self.camera
+        width = max(1, obj.get("door_width", 1))
+        depth = max(1, obj.get("door_max_carve", 1))
+        side  = obj.get("door_side", 0)
+        sx_w  = -1 if side == 0 else +1
+        ax, ay = obj["x"], obj["y"]
+        inner_sx, top_sy = cam.world_to_screen(ax, ay)
+        outer_sx, bot_sy = cam.world_to_screen(ax + sx_w * depth, ay + width)
+        return inner_sx, outer_sx, top_sy, bot_sy, sx_w
+
+    def _hit_test_door_edge(self, mx, my):
+        """If the selected object is a door and (mx, my) is over a
+        resizable edge of its bbox, return 'top' / 'bottom' / 'outer'.
+        The 'inner' edge (at the anchor / wall side) is not draggable —
+        moving the door body is what the central drag already does."""
+        if self.selected_object is None:
+            return None
+        obj = self.level.objects[self.selected_object]
+        if obj["type"] != OBJECT_DOOR:
+            return None
+        inner_sx, outer_sx, top_sy, bot_sy, _ = self._door_screen_bbox(obj)
+        tol = 4
+        x_lo, x_hi = sorted((inner_sx, outer_sx))
+        # Edges only react inside the perpendicular bbox span.
+        if x_lo - tol <= mx <= x_hi + tol:
+            if abs(my - top_sy) <= tol:
+                return "top"
+            if abs(my - bot_sy) <= tol:
+                return "bottom"
+        if top_sy - tol <= my <= bot_sy + tol:
+            if abs(mx - outer_sx) <= tol:
+                return "outer"
+        return None
+
+    def _set_door_edge_from_screen(self, edge, mx, my):
+        """Apply a door-edge drag. World-space conversions clamped to
+        the door's valid ranges (width 1..32, depth 1..127). Preserves
+        the opposite edge so the drag feels anchored."""
+        obj = self.level.objects[self.selected_object]
+        wx, wy = self.camera.screen_to_world(mx, my)
+        side = obj.get("door_side", 0)
+        sx_w = -1 if side == 0 else +1
+        ay = obj["y"]
+        ax = obj["x"]
+        width = max(1, obj.get("door_width", 1))
+        if edge == "top":
+            # Keep bottom (ay + width) fixed; move top.
+            bottom = ay + width
+            new_top = max(0, min(bottom - 1, int(round(wy))))
+            new_w = bottom - new_top
+            new_w = max(1, min(32, new_w))
+            obj["y"] = bottom - new_w
+            obj["door_width"] = new_w
+        elif edge == "bottom":
+            new_bottom = max(ay + 1, int(round(wy)))
+            new_w = new_bottom - ay
+            obj["door_width"] = max(1, min(32, new_w))
+        elif edge == "outer":
+            # depth = |new_outer - anchor| along sx.
+            new_depth = int(round((wx - ax) * sx_w))
+            obj["door_max_carve"] = max(1, min(127, new_depth))
+        self.level.dirty = True
 
     def _set_well_radius_from_screen(self, mx):
         """Inverse of _well_screen_geometry's X axis: convert mouse X into
@@ -3966,6 +4051,24 @@ class Editor:
         if i == self.selected_object:
             pygame.draw.rect(screen, COL_SELECT,
                              (rx - 2, ry - 2, rw + 4, rh + 4), 2)
+            # Resize handles: ticks at top / bottom / outer edges. Active
+            # edge (hovered or being dragged) is brighter.
+            inner_sx_h, outer_sx_h, top_sy_h, bot_sy_h, _ = \
+                self._door_screen_bbox(obj)
+            mid_x = int((inner_sx_h + outer_sx_h) / 2)
+            mid_y = int((top_sy_h + bot_sy_h) / 2)
+            outer_xi = int(outer_sx_h)
+            active = self.dragging_door_edge or self.hovered_door_edge
+            for edge, x, y, horiz in (
+                ("top",    mid_x,   int(top_sy_h), True),
+                ("bottom", mid_x,   int(bot_sy_h), True),
+                ("outer",  outer_xi, mid_y,        False),
+            ):
+                col = COL_SELECT if edge == active else COL_DOOR
+                if horiz:
+                    pygame.draw.line(screen, col, (x - 6, y), (x + 6, y), 3)
+                else:
+                    pygame.draw.line(screen, col, (x, y - 6), (x, y + 6), 3)
         elif i == self.hovered_object and self.mode == "object":
             pygame.draw.rect(screen, (200, 200, 200),
                              (rx - 1, ry - 1, rw + 2, rh + 2), 1)
