@@ -425,7 +425,7 @@ def import_beebasm(path):
                     mine_phase, mine_amp = 0, 0
                     door_side = (gp >> 7) & 0x01
                     door_open_dir = (gp >> 6) & 0x01    # flat_window only
-                    door_shape = gp & 0x3F
+                    door_shape = gp & 0x03
                     door_width = slot_1
                     door_max_carve = slot_2
                 else:
@@ -817,12 +817,11 @@ def export_beebasm(levels):
                     data_1.append(0)
                     data_2.append(0)
                 elif t == OBJECT_DOOR:
-                    # Slot 0 packs (side << 7) | (open_dir << 6) | shape;
-                    # slot 1 = width; slot 2 = max carve depth.
-                    # open_dir only meaningful for flat_window (shape $02).
+                    # Slot 0 packs: bit 7 = side, bit 6 = open_dir (flat_window),
+                    # bits 0-1 = shape. Slot 1 = width; slot 2 = max carve depth.
                     side = o.get('door_side', 0) & 0x01
                     open_dir = o.get('door_open_dir', 0) & 0x01
-                    shape = o.get('door_shape', 0) & 0x3F
+                    shape = o.get('door_shape', 0) & 0x03
                     data_0.append(((side << 7) | (open_dir << 6) | shape) & 0xFF)
                     data_1.append(o.get('door_width', 1) & 0xFF)
                     data_2.append(o.get('door_max_carve', 1) & 0xFF)
@@ -3932,14 +3931,15 @@ class Editor:
         # Per-row carve depth (in world units, depth from the anchor wall).
         # Mirrors the engine's row-by-row write so the preview matches what
         # the player sees when the door is fully open.
-        if shape == 1:    # notch_v: V-cut, peak in the middle
+        if shape == 1:    # notch_v: symmetric V, +1 col per row to peak.
             rise = width // 2
-            per_row = []
-            for r in range(width):
-                if r < rise:
-                    per_row.append(depth - r)
-                else:
-                    per_row.append(max(0, depth - (2 * rise - r)))
+            descend = width - rise
+            v_protrusion = [0] * width
+            for r in range(rise):
+                v_protrusion[r] = r
+            for r in range(descend):
+                v_protrusion[rise + r] = rise - r
+            per_row = [max(0, depth - v_protrusion[r]) for r in range(width)]
         elif shape == 2:  # flat_window: outline the FULL slot so the
             # designer sees the whole footprint; the open/closed split
             # gets a separator line + the arrow below.
@@ -3953,13 +3953,8 @@ class Editor:
         # on the OPPOSITE wall too, so the editor fills both sides for
         # notch_v — the designer doesn't need to hand-carve anything.
         if shape == 1:
-            rise = width // 2
-            closed_off = []
-            for r in range(width):
-                if r < rise:
-                    closed_off.append(r)
-                else:
-                    closed_off.append(max(0, 2 * rise - r))
+            # Closed-state V protrusion = v_protrusion computed above.
+            closed_off = list(v_protrusion)
         else:
             closed_off = [0] * width
 
@@ -4920,6 +4915,17 @@ class Editor:
                 screen.set_clip(sprite_area)
                 screen.blit(scaled, (sx, sy))
                 screen.set_clip(prev_clip)
+            elif obj_type == OBJECT_DOOR:
+                # No in-game sprite — draw a door pictogram (frame + knob).
+                ih = min(sprite_area.height - 4, 22)
+                iw = max(6, ih * 2 // 3)
+                fx = sprite_area.x + (sprite_area.width - iw) // 2
+                fy = sprite_area.y + (sprite_area.height - ih) // 2
+                frame = pygame.Rect(fx, fy, iw, ih)
+                pygame.draw.rect(screen, (20, 20, 20), frame)
+                pygame.draw.rect(screen, COL_DOOR, frame, 1)
+                pygame.draw.circle(screen, COL_DOOR,
+                                   (frame.right - 2, frame.centery), 1)
 
             # Object name (truncated to fit label_area)
             name = OBJECT_TYPE_NAMES.get(obj_type, f"${obj_type:02X}")

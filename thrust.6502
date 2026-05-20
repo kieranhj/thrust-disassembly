@@ -12938,11 +12938,12 @@ IF _SWITCHES
         STA     door_carve_x_temp
 .door_carve_done
 
-        \\ Dispatch on shape code (low 6 bits of door_shape_temp).
-        \\ Bit 7 = side, bit 6 = flat_window direction; renderers
-        \\ pick those out themselves.
+        \\ Dispatch on shape code (low 2 bits of door_shape_temp).
+        \\ Bit 7 = side, bit 6 = flat_window direction, bits 2-5 =
+        \\ signed peak offset for notch_v (else 0); renderers pick
+        \\ those out themselves.
         LDA     door_shape_temp
-        AND     #$3F
+        AND     #$03
         BEQ     render_slot
         CMP     #$01
         BEQ     render_notch_v
@@ -12990,8 +12991,10 @@ IF _SWITCHES
 \ leaving a constant-width V-channel between them. Designer no longer
 \ has to hand-carve the opposite wall.
 .render_notch_v
+        \\ Peak protrusion is fixed at +1 col per row in the rise half,
+        \\ -1 col per row in the descend half (peak == width/2).
         LDA     door_width_temp
-        LSR     A                                        ; rise_count = width / 2
+        LSR     A                                        ; rise_count = width/2
         STA     door_rise_count_temp
         LDA     door_width_temp
         SEC
@@ -12999,13 +13002,18 @@ IF _SWITCHES
         STA     door_descend_count_temp
 
         BIT     door_shape_temp
-        BMI     render_notch_v_right
+        BPL     nv_left_side
+        JMP     render_notch_v_right
+.nv_left_side
 
-\ Left wall: rise loop ADC, descend loop SBC. carve_x is edge value.
-        LDY     door_row_temp
-        LDA     door_carve_x_temp
+\ === Left wall side: door=left_wall, opposite=right_wall.            ===
+\ === Step direction: rise ADD (peak protrudes RIGHT, into cavern). ===
+
+\ Door wall rise loop.
         LDX     door_rise_count_temp
         BEQ     nvl_skip_rise
+        LDY     door_row_temp
+        LDA     door_carve_x_temp
 .nvl_rise_loop
         STA     terrain_left_wall,Y
         CLC
@@ -13013,7 +13021,13 @@ IF _SWITCHES
         INY
         DEX
         BNE     nvl_rise_loop
+        JMP     nvl_descend_setup
 .nvl_skip_rise
+        LDY     door_row_temp
+        LDA     door_carve_x_temp
+
+\ Door wall descend loop.
+.nvl_descend_setup
         LDX     door_descend_count_temp
         BEQ     nvl_opp_start
 .nvl_descend_loop
@@ -13024,12 +13038,12 @@ IF _SWITCHES
         DEX
         BNE     nvl_descend_loop
 
-\ Opposite (right) wall V-recess for a left-wall door.
+\ Opposite (right) wall: V-recess at anchor (= closed-state door wall).
 .nvl_opp_start
-        LDY     door_row_temp
-        LDA     door_anchor_x_temp
         LDX     door_rise_count_temp
         BEQ     nvl_opp_skip_rise
+        LDY     door_row_temp
+        LDA     door_anchor_x_temp
 .nvl_opp_rise_loop
         STA     terrain_right_wall,Y
         CLC
@@ -13037,10 +13051,15 @@ IF _SWITCHES
         INY
         DEX
         BNE     nvl_opp_rise_loop
+        JMP     nvl_opp_descend_setup
 .nvl_opp_skip_rise
+        LDY     door_row_temp
+        LDA     door_anchor_x_temp
+.nvl_opp_descend_setup
         LDX     door_descend_count_temp
-        BNE     nvl_opp_descend_loop
+        BNE     nvl_opp_descend_run
         JMP     door_off_screen
+.nvl_opp_descend_run
 .nvl_opp_descend_loop
         STA     terrain_right_wall,Y
         SEC
@@ -13050,13 +13069,15 @@ IF _SWITCHES
         BNE     nvl_opp_descend_loop
         JMP     door_off_screen
 
-\ Right wall: rise loop SBC (peak protrudes into cavern = smaller X),
-\ descend loop ADC.
+\ === Right wall side: door=right_wall, opposite=left_wall.            ===
+\ === Step direction: rise SUB (peak protrudes LEFT, into cavern).    ===
 .render_notch_v_right
-        LDY     door_row_temp
-        LDA     door_carve_x_temp
+
+\ Door wall rise loop.
         LDX     door_rise_count_temp
         BEQ     nvr_skip_rise
+        LDY     door_row_temp
+        LDA     door_carve_x_temp
 .nvr_rise_loop
         STA     terrain_right_wall,Y
         SEC
@@ -13064,7 +13085,13 @@ IF _SWITCHES
         INY
         DEX
         BNE     nvr_rise_loop
+        JMP     nvr_descend_setup
 .nvr_skip_rise
+        LDY     door_row_temp
+        LDA     door_carve_x_temp
+
+\ Door wall descend loop.
+.nvr_descend_setup
         LDX     door_descend_count_temp
         BEQ     nvr_opp_start
 .nvr_descend_loop
@@ -13075,12 +13102,12 @@ IF _SWITCHES
         DEX
         BNE     nvr_descend_loop
 
-\ Opposite (left) wall V-recess for a right-wall door.
+\ Opposite (left) wall: V-recess at anchor (= closed-state door wall).
 .nvr_opp_start
-        LDY     door_row_temp
-        LDA     door_anchor_x_temp
         LDX     door_rise_count_temp
         BEQ     nvr_opp_skip_rise
+        LDY     door_row_temp
+        LDA     door_anchor_x_temp
 .nvr_opp_rise_loop
         STA     terrain_left_wall,Y
         SEC
@@ -13088,10 +13115,15 @@ IF _SWITCHES
         INY
         DEX
         BNE     nvr_opp_rise_loop
+        JMP     nvr_opp_descend_setup
 .nvr_opp_skip_rise
+        LDY     door_row_temp
+        LDA     door_anchor_x_temp
+.nvr_opp_descend_setup
         LDX     door_descend_count_temp
-        BNE     nvr_opp_descend_loop
+        BNE     nvr_opp_descend_run
         JMP     door_off_screen
+.nvr_opp_descend_run
 .nvr_opp_descend_loop
         STA     terrain_left_wall,Y
         CLC
@@ -13205,7 +13237,7 @@ IF _SWITCHES
         \\ (row sweep); slot / notch_v walk 0..max_carve (X depth). Read
         \\ from prelude-cached temps — no extra SMC fetches here.
         LDA     door_shape_temp
-        AND     #$3F
+        AND     #$03
         CMP     #$02
         BNE     open_use_max_carve
         LDA     door_width_temp
