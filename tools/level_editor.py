@@ -4897,26 +4897,11 @@ class Editor:
             label_area = pygame.Rect(tile_rect.x + 2, sprite_area.bottom,
                                      tile_rect.width - 4, label_h)
 
-            # Sprite — fitted entirely within sprite_area, centred
-            sprite = self.sprite_cache.get(obj_type, lv)
-            if sprite is not None:
-                sw_sp = sprite.get_width()
-                sh_sp = sprite.get_height()
-                scale = min(sprite_area.width / max(1, sw_sp),
-                            sprite_area.height / max(1, sh_sp))
-                if scale <= 0:
-                    scale = 1.0
-                dw = max(1, int(sw_sp * scale))
-                dh = max(1, int(sh_sp * scale))
-                scaled = pygame.transform.scale(sprite, (dw, dh))
-                sx = sprite_area.x + (sprite_area.width - dw) // 2
-                sy = sprite_area.y + (sprite_area.height - dh) // 2
-                prev_clip = screen.get_clip()
-                screen.set_clip(sprite_area)
-                screen.blit(scaled, (sx, sy))
-                screen.set_clip(prev_clip)
-            elif obj_type == OBJECT_DOOR:
-                # No in-game sprite — draw a door pictogram (frame + knob).
+            # Objects with no in-game sprite get a pictogram matching
+            # their in-level marker; everything else uses the cached
+            # sprite scaled to fit sprite_area.
+            if obj_type == OBJECT_DOOR:
+                # Door: frame + knob.
                 ih = min(sprite_area.height - 4, 22)
                 iw = max(6, ih * 2 // 3)
                 fx = sprite_area.x + (sprite_area.width - iw) // 2
@@ -4926,6 +4911,46 @@ class Editor:
                 pygame.draw.rect(screen, COL_DOOR, frame, 1)
                 pygame.draw.circle(screen, COL_DOOR,
                                    (frame.right - 2, frame.centery), 1)
+            elif obj_type == OBJECT_TELEPORTER:
+                # Teleporter: ring + centre dot, matching in-level marker.
+                cx_p = sprite_area.centerx
+                cy_p = sprite_area.centery
+                r_outer = min(sprite_area.width, sprite_area.height) // 2 - 2
+                if r_outer >= 3:
+                    pygame.draw.circle(screen, COL_TELEPORTER,
+                                       (cx_p, cy_p), r_outer, 2)
+                    pygame.draw.circle(screen, COL_TELEPORTER,
+                                       (cx_p, cy_p), max(2, r_outer // 4))
+            elif obj_type == OBJECT_GRAVITY_WELL:
+                # Gravity well: concentric rings + centre dot suggesting pull.
+                cx_p = sprite_area.centerx
+                cy_p = sprite_area.centery
+                r_outer = min(sprite_area.width, sprite_area.height) // 2 - 2
+                if r_outer >= 4:
+                    pygame.draw.circle(screen, COL_GRAVITY_WELL,
+                                       (cx_p, cy_p), r_outer, 1)
+                    pygame.draw.circle(screen, COL_GRAVITY_WELL,
+                                       (cx_p, cy_p), max(3, r_outer * 2 // 3), 1)
+                    pygame.draw.circle(screen, COL_GRAVITY_WELL,
+                                       (cx_p, cy_p), max(2, r_outer // 3))
+            else:
+                sprite = self.sprite_cache.get(obj_type, lv)
+                if sprite is not None:
+                    sw_sp = sprite.get_width()
+                    sh_sp = sprite.get_height()
+                    scale = min(sprite_area.width / max(1, sw_sp),
+                                sprite_area.height / max(1, sh_sp))
+                    if scale <= 0:
+                        scale = 1.0
+                    dw = max(1, int(sw_sp * scale))
+                    dh = max(1, int(sh_sp * scale))
+                    scaled = pygame.transform.scale(sprite, (dw, dh))
+                    sx = sprite_area.x + (sprite_area.width - dw) // 2
+                    sy = sprite_area.y + (sprite_area.height - dh) // 2
+                    prev_clip = screen.get_clip()
+                    screen.set_clip(sprite_area)
+                    screen.blit(scaled, (sx, sy))
+                    screen.set_clip(prev_clip)
 
             # Object name (truncated to fit label_area)
             name = OBJECT_TYPE_NAMES.get(obj_type, f"${obj_type:02X}")
