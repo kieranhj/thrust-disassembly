@@ -11,7 +11,7 @@
 \ *
 \ * Notes:
 \ * Original $.THRUST3 executable had to first be decrypted -> (Thrust4)
-\ * Relocated from load address $1A00 to executation address $A60 -> (Thrust5)
+\ * Relocated from load address $1A00 to execution address $A60 -> (Thrust5)
 \ * Relocation code modified slightly as no longer encrypted -> (Thrust6)
 \ * Source documented and annotated for first release --> (Thrust7)
 \ * Subsequent corrections & documentation --> (Thrust8)
@@ -1156,9 +1156,9 @@ ORG     NATIVE_ADDR
 {
         CPX        #$00
         BNE        terrain_accumulate_xpos_fn_counter_not_zero
-        INY                                            ; incremenet index into table
-        PHA                                            ; keep accumlator
-        LDA        (terrain_data_count_ptr),Y            ; read new count value from table
+        INY                                            ; increment index into table
+        PHA                                            ; keep accumulator
+        LDA        (terrain_data_count_ptr),Y          ; read new count value from table
         TAX                                            ; store new counter
         PLA                                            ; restore accumulated x
         
@@ -4269,7 +4269,7 @@ ORG     NATIVE_ADDR
         LDA     #HI(pixel_masks_1)
         STA     ship_pixel_mask_addr_HI                    ; **MODIFIES CODE**
 
-        LDA     #SHIELD_SPRITE_INDEX                    ; sheild sprite?
+        LDA     #SHIELD_SPRITE_INDEX                    ; shield sprite?
         JMP     L1ECB
 
     .L1EB7
@@ -6307,7 +6307,7 @@ ORG     NATIVE_ADDR
         LDY     #$1B
         JSR     wait_time_out_Y
 
-\\ Store important ZP vars termporarily
+\\ Store important ZP vars temporarily
 
         LDA     midpoint_ypos_INT_HI
         PHA
