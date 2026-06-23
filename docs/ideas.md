@@ -33,8 +33,8 @@ Open work items, one line each. Full details in the sections below; completed wo
 
 ### Engine / editor
 - [Custom directional line drawing routine](#custom-directional-line-drawing-routine) — walk-until-hit; renderer + collision query in one
-- [Configurable switches and triggers](#configurable-switches-and-triggers) — per-level wiring tables and editor UX for shoot-to-toggle puzzles
 - [Hostile bullets activate switches](#hostile-bullets-activate-switches) — let stray turret fire trigger switches to enable ricochet / self-defeat puzzles
+- [Cycle / sequence-lock action](#switches--triggers-follow-ups) — `cycle_param` action that steps through a list, enabling order-dependent puzzles
 
 ### Ship upgrades
 - [Upgrade system](#ship-upgrades) — nine candidate upgrades feeding the Metroidvania reward loop
@@ -48,7 +48,7 @@ Open work items, one line each. Full details in the sections below; completed wo
 ### Mission types
 - [Land safely / collect-and-deliver / briefings / popups](#new-mission-types) — table of new mission requirements
 - [Rescue NPCs](#rescue-npcs) — Choplifter-style pickups paying into the upgrade economy
-- [Keys and doors](#keys-and-doors) — full key/door system extending the existing $07/$08 switches
+- [Keys](#keys) — collectible keys that arm specific switches; doors and switch wiring already shipped
 - [Metroidvania structure](#metroidvania-structure) — one large interconnected map with gated upgrades
 - [Escape the flooding mine](#escape-the-flooding-mine) — race upward against a rising water line
 - [Puzzle-oriented levels](#puzzle-oriented-levels) — compose mechanics into self-contained logic puzzles
@@ -162,7 +162,6 @@ Timed laser turrets (types `$09..$0C`) are implemented — see [Completed](#comp
 - **No telegraph / warning before the on-phase.** Rely on the cycle being long enough that the player can read the rhythm.
 - **Optimised line draw.** The Bresenham line plotter is generic; a faster routine will be needed as the laser count grows (per-laser draw + erase XORs every frame). Worth profiling once a level uses several lasers at once. See [custom directional line drawing routine](#custom-directional-line-drawing-routine).
 - **Shield interaction.** Hasn't been investigated. Currently the beam destroys the player even with shield held — same path as terrain pixels do.
-- **Shootable behaviour toggles.** Let the player change a laser's config by shooting a switch object — toggle on/off, swap horizontal/vertical orientation, change duty/period. The existing door-switch object types ($07/$08) become the carrier; their action targets `gun_aim` on the wired laser instead of (or as well as) terrain. The general design — per-switch wiring table, action codes, editor UX — is in [Configurable switches and triggers](#configurable-switches-and-triggers).
 - **Rotating lasers.** Same idea as rotating gun emplacements but with the beam: increment the beam endpoint's `(dx, dy)` each frame around a circle. The expensive part is the per-frame Bresenham erase + re-draw, which a custom line-draw routine makes feasible. Probably budget-constrained to one or two rotators per level until profiled.
 
 ---
@@ -177,104 +176,33 @@ Generalise the laser draw path: given a start pixel and direction `(dx, dy)`, wa
 
 ---
 
-## Configurable switches and triggers
+## Switches & triggers follow-ups
 
-A meta-mechanic that lets the level designer wire shoot-the-button switches to changes in other objects (lasers, doors, fields), entirely from the editor. This is the foundation for puzzles: ordering challenges, gated laser grids, "shoot all four switches to unlock the exit" rooms, etc. Detailed implementation plan in [`docs/plan-switches-and-triggers.md`](plan-switches-and-triggers.md).
+The core system is shipped — see [Completed](#completed) for the implementation summary. Detailed implementation plan in [`docs/plan-switches-and-triggers.md`](plan-switches-and-triggers.md). Open follow-ups:
 
-### Current state (level 3/4/5 doors)
+- **`cycle_param` action.** Step the target's parameter through an authored value list, one step per trigger. This is what the [original sequence-lock puzzle archetype](#puzzle-implications-historical) needed. The existing `set_param` / `xor_param` cover toggle and direct-write; cycling needs a list-pointer per wiring entry and a per-switch "current step" byte. Cheap addition once the value list lives next to the wiring table.
+- **Switch state visualisation in-game.** Right now a fired switch looks identical to an idle one. A small palette-swap or sprite change on latch would help the player read puzzle state.
+- **Per-switch "accepts hostile fire" flag.** Currently all switches are player-bullet-only. Tied to [Hostile bullets activate switches](#hostile-bullets-activate-switches).
+- **Predicate triggers (combinations).** Today an action fires whenever its source switch is shot. A target that fires only when *all four* upstream switches are latched would need a small predicate / mask check before dispatching. Layered on top of the current dispatcher rather than replacing it.
 
-The existing system is the bare minimum that the original game needed and is hardcoded:
+### Puzzle archetypes that now compose
 
-- **Two switch object types** ($07 right, $08 left) that, when shot, set the global byte `door_switch_counter_A = $FF` (`thrust.6502:1817`). All switches on a level set the same byte — there is no per-switch state.
-- `tick_door_logic` (`thrust.6502:3294`) runs every frame: decrements `door_switch_counter_A` toward zero, then `CMP level_number` and dispatches to one of three hardcoded routines: `level_3_door_logic`, `do_level_4_door_logic`, `do_level_5_door_logic`.
-- Each per-level routine hardcodes:
-  - **Where the door is** (window-Y test before doing anything: `LDA #$69 SBC window_ypos_INT` etc.)
-  - **What the door looks like** (writes specific bytes into specific `terrain_left_wall,Y` rows — width 13 for level 3, 21 for level 4, two-segment diamond for level 5)
-  - **Animation curve** (`door_switch_counter_B` chases `_A` while open, increments back when closing)
-- Outcome: a single one-shot timed door per level, written into the *left wall* only, that re-closes on a fixed timer. No level can have two independent doors. No switch can target anything other than terrain. Levels 0/1/2 ignore switches entirely.
+These were the design motivation for the system; with switches/triggers + generic doors live, they're now editor-authorable rather than engine work:
 
-### Proposed generalised model
-
-Introduce a per-level **wiring table** that maps each switch object to a target object and an action. Replace the `level_number` dispatch with a generic walker.
-
-**Switch state.** Per-switch latch byte instead of one global counter — either an array indexed by object index, or a small bit field if 8 switches per level is enough. State is one of:
-- `latched` (just shot, action is firing or pulsing)
-- `idle` (default)
-
-For toggle-style targets the state is the *target's* state, not the switch's; the switch only fires the transition.
-
-**Wiring entry (per switch):**
-
-| Field | Bytes | Purpose |
-|-------|-------|---------|
-| target object index | 1 | which level object to act on (`$FF` = "modify terrain", same as today) |
-| action code | 1 | toggle / pulse / cycle / set / `gun_aim` mask write |
-| value or duration | 1-2 | action argument (e.g. new `gun_aim`, pulse frame count, cycle list pointer) |
-
-Three wiring bytes per switch × ~8 switches per level = ~24 bytes per level. Comparable to the existing per-laser endpoint arrays.
-
-**Action codes worth supporting:**
-
-- **`toggle_laser`** — flip a bit in the target's `gun_aim` (e.g. swap horizontal/vertical orientation, or invert duty bit) so the laser visibly changes behaviour. Cheapest to implement: just XOR a stored mask into `gun_aim,X`.
-- **`set_laser_aim`** — write a stored value into target's `gun_aim`. Lets a switch reset a laser to a specific phase / duty.
-- **`cycle_laser`** — step `gun_aim` through a small list of values (stored inline in the wiring table or as a separate list). Each shot advances by one. Ordering puzzles fall out of this naturally.
-- **`pulse_door`** — mimic current behaviour: write a hole into terrain for N frames then close. Door geometry now travels in the wiring entry (row, width, location) rather than being hardcoded. Probably needs a separate "door object" type so the geometry is editor-placeable.
-- **`flip_well`** — invert a gravity well's `strength` sign. Pull becomes push, opens routes that were previously closed.
-- **`destroy_object` / `spawn_object`** — wholesale enable/disable a target by setting/clearing its `OBJ_flag_alive` bit. Useful for "shoot the switch to drop the force field" without animating anything.
-
-The dispatch for these is a single jump table indexed by action code, so adding new actions is cheap.
-
-### State and ordering
-
-The single global counter has to go. Two replacements depending on ambition:
-
-1. **Per-target state byte.** Each *target* object has a "current mode" byte (already true for lasers via `gun_aim`). Switches just write into it. Easy. No ordering memory.
-2. **Per-level switch bit field.** A byte (or two) of "switch-was-triggered" flags. Targets can read the field and react to combinations (e.g. "laser turns off only if all four switches are set"). This is the path to ordering puzzles — combinations and sequences become expressible by giving the target a small predicate over the bit field.
-
-Approach 1 alone covers most cases. Approach 2 layered on top opens up puzzle design without changing the action set.
-
-### Editor UX
-
-- Switch placement is unchanged — drop a $07/$08 object as today.
-- Selecting a switch shows its **wiring**: a thin coloured line drawn from the switch sprite to its target object. The target is also subtly highlighted while the switch is selected.
-- Right-click on a target while a switch is selected = "rewire to this object". Very direct, no menu navigation.
-- A small popup (or status-bar field, in the same style as the laser `(dx, dy)` readout) shows the current action code and value. `[`/`]` cycles action codes; up/down nudges the value byte.
-- Doors stop being level-specific: a door-object type with editable position and width, triggered via a switch's `pulse_door` action. Levels 3/4/5 of the original game become regular wirings against this generic door object — no hardcoded routines.
-- Visual feedback in-editor for puzzle authoring: when a switch is hovered, draw the resulting state delta (e.g. show the laser in its post-shot config) so the designer can see the puzzle without simulating it.
-
-### Engine implications
-
-- `tick_door_logic` becomes `tick_switch_logic`: walk the wiring table, advance any pulses/cycles, write the resulting bytes into target objects' state. No more `level_number` test. The current per-level door routines collapse into the `pulse_door` action's body — generic door drawing into terrain given a (row, width, screen-Y) tuple.
-- Bullet collision against switch objects already exists for player bullets (it's how shooting them is detected). The collision hook just sets the switch's per-instance latch byte instead of the global counter. Extending the loop to also consider hostile-bullet particles is a separate idea — see [Hostile bullets activate switches](#hostile-bullets-activate-switches).
-- Per-level wiring table lives alongside the existing object arrays in `tools/output/thrust_levels_export*.asm`, exported by the editor like everything else.
-
-### Puzzle implications
-
-Once switches can target anything and the editor exposes wiring, a few puzzle archetypes follow naturally:
-
-- **Sequence locks.** Four switches must be shot in a specific order. Each switch's `cycle_laser` action depends on the previous laser being in a specific state, so out-of-order shots reset the chain.
-- **Mutually-exclusive switches.** Two switches each toggle the *same* laser between horizontal and vertical; the player must pick the orientation that matches the path they need. Re-shootable, encouraging trial.
-- **Field flips for routing bullets.** A switch flips a gravity well from pull to push so the player's bullets curve to a hidden target — combines with the "fields act on bullets" idea.
-- **Timed corridors.** A switch sets a laser's duty to a long-off phase; the player has a window to fly through before duty creeps back up via a separate `cycle_laser` somewhere else.
+- **Sequence locks** — needs `cycle_param`.
+- **Mutually-exclusive switches** — two switches each `xor_param` the same target. Already authorable.
+- **Field flips for routing bullets** — `xor_param` the sign bit of a well's strength. Already authorable, but pull-on-bullets must ship first (see [gravity well follow-ups](#gravity-well-follow-ups)).
+- **Timed corridors** — `set_param` a laser's phase/duty. Already authorable.
 
 ## Hostile bullets activate switches
 
-Today only player bullets can activate door switches. The bullet-vs-object loop at `thrust.6502:1907` walks particle slots `X = 3..0` (the four player-bullet slots only) and bails at `:1911-1912` on any particle whose `particles_type` is non-zero, so hostile-bullet particles (`PARTICLE_type_hostile_bullet = $03`) never reach the `handle_door_switch` latch.
+Today only player bullets can activate switches. The bullet-vs-object loop at `thrust.6502:1907` walks particle slots `X = 3..0` (the four player-bullet slots only) and bails at `:1911-1912` on any particle whose `particles_type` is non-zero, so hostile-bullet particles (`PARTICLE_type_hostile_bullet = $03`) never reach the switch latch.
 
-Generalising this so hostile bullets can also trigger switches opens a puzzle archetype that doesn't otherwise exist: turrets that defeat themselves. Place a switch where a turret's bullet trajectory will end up — directly with a deflecting gravity well, indirectly via a ricochet off geometry, or after a routing field flip — and the level becomes solvable by *not* shooting, just by surviving long enough for the turret to hit its own switch. Combines naturally with [field flips for routing bullets](#configurable-switches-and-triggers) and the gravity-well [bullet pull](#gravity-well-follow-ups) follow-up.
+Generalising this so hostile bullets can also trigger switches opens a puzzle archetype that doesn't otherwise exist: turrets that defeat themselves. Place a switch where a turret's bullet trajectory will end up — directly with a deflecting gravity well, indirectly via a ricochet off geometry, or after a routing field flip — and the level becomes solvable by *not* shooting, just by surviving long enough for the turret to hit its own switch. Combines naturally with the gravity-well [bullet pull](#gravity-well-follow-ups) follow-up.
 
-**Implementation:** drop the player-only filter at `:1911-1912` (or relax it to also accept type `$03`), and walk all 32 particle slots instead of just the four player-bullet slots so all live hostile bullets are considered. Cost is a wider AABB sweep per shootable object per frame; with the [generalised switches](#configurable-switches-and-triggers) wiring table in place, the per-switch action runs the same code path regardless of which side fired the bullet.
+**Implementation:** drop the player-only filter at `:1911-1912` (or relax it to also accept type `$03`), and walk all 32 particle slots instead of just the four player-bullet slots so all live hostile bullets are considered. Cost is a wider AABB sweep per shootable object per frame; the per-switch action runs the same code path regardless of which side fired the bullet.
 
-**Risk:** existing levels with player-only puzzles may degenerate if a wandering turret bullet trips a switch the designer assumed was player-gated. Either gate it per-switch (a "accepts hostile fire" flag in the wiring entry) or per-level via a build flag during the transition; the per-switch flag is the more durable answer once wiring tables exist.
-
-### Migration path
-
-Don't break the original game. Two-step rollout:
-
-1. Implement the wiring system behind a build flag (`_CONFIGURABLE_SWITCHES`). Original level-3/4/5 doors keep their hardcoded routines while the flag is off, anchoring the canonical CRC.
-2. With the flag on, generate equivalent wiring entries for the original doors during level export — the editor reads the original level 3/4/5 doors and writes them out as a wired pulse_door + generic door object pair. New levels use the system natively.
-
-This mirrors how `_TIMED_LASER` and `_GRAVITY_WELL` were introduced.
+**Risk:** existing levels with player-only puzzles may degenerate if a wandering turret bullet trips a switch the designer assumed was player-gated. Cleanest gate is a per-switch "accepts hostile fire" flag in the wiring entry — picked up via the existing inspector schema and packed into a free bit on the wiring row.
 
 ---
 
@@ -361,8 +289,8 @@ Combined with [Y-banded level parameters](#completed), each chamber can have its
 
 **Composes well with:**
 - [Metroidvania structure](#metroidvania-structure) — gated upgrades unlock teleporters into new caverns.
-- [Configurable switches and triggers](#configurable-switches-and-triggers) — switches in cavern A enable a teleporter in cavern B, sequencing exploration.
-- [Keys and doors](#keys-and-doors) — teleporters that need a key to activate, found in another cavern.
+- [Switches & triggers](#switches--triggers-follow-ups) — switches in cavern A enable a teleporter in cavern B, sequencing exploration.
+- [Keys](#keys) — teleporters that need a key to activate, found in another cavern.
 
 Respawn logic now uses a player-tracked active checkpoint instead of the height-based scan — see the [Completed](#completed) entry for `_LAST_USED_CHECKPOINT`. Dying inside a sub-cavern correctly respawns inside it, and the original pod-carry anti-cheat is preserved via a per-segment watermark (`deepest_checkpoint_visited`) that resets on teleport.
 
@@ -393,7 +321,7 @@ The current game loop is: collect pod, escape through ceiling, destroy reactor (
 | Collect and deliver | Track cargo state (empty/carrying/delivered); add delivery zone object type |
 | Mission briefing | Text display before level start; could reuse the existing string rendering (`draw_string`, line 2240) |
 | Mid-mission popup | Pause game, overlay text, resume on keypress |
-| Keys and doors | New object types for keys (collectible) and doors (blocking terrain). Door switch types $07/$08 already exist — extend the mechanism |
+| Keys | Pickup objects that arm one or more switches when collected; lookup integrates with the existing wiring table |
 
 ### Rescue NPCs
 
@@ -406,15 +334,15 @@ Little characters scattered around the level — civilians, stranded miners, sur
 - Limit on carry capacity (one at a time? or a counter?) adds a risk/reward dimension — do you go for more rescues or cash in what you have?
 - If carrying multiple NPCs conflicts with the single-pod constraint, start with "one rescue at a time"
 
-### Keys and doors
+### Keys
 
-Door switches (types $07 and $08) already exist in the object system. The current implementation likely toggles a terrain section. Extending this to a full key/door system would need:
+Generic doors (`OBJECT_door = $11`) and the switch wiring table both shipped — see [Completed](#completed). The remaining piece is collectible keys that *arm* a switch on pickup, so a designer can require "find the key, then shoot the switch" rather than just "shoot the switch."
 
-- Key objects that disappear when the ship touches them, setting a flag
-- Door objects that check the flag and open/close terrain sections
-- Visual feedback (door animation, key collection effect)
-
-See also [Configurable switches and triggers](#configurable-switches-and-triggers), which subsumes much of this.
+**Implementation sketch:**
+- New `OBJECT_key` type with a small sprite. Contact with the ship destroys the key (existing `destroy_object` path) and sets a per-level "keys held" bit field.
+- New switch action `requires_key` (or a per-switch flag on existing actions): on trigger, check the bit field — if the matching key bit is unset, the action no-ops and emits a "locked" feedback (sound / brief sprite flash).
+- Editor: pair keys to switches via the same wiring UX, or via a tag/colour ID so multiple switches can share one key.
+- Composes with [disconnected caverns](#disconnected-caverns) and the [Metroidvania structure](#metroidvania-structure) — keys gate teleporters, teleporters gate keys, etc.
 
 ### Metroidvania structure
 
@@ -515,6 +443,8 @@ Implemented features and finished investigations, newest first. Each entry links
 
 ### Features
 
+- **Configurable switches & triggers** (`_SWITCHES`, SWRAM build). The hardcoded `level_number`-dispatched door routines are replaced by a per-level wiring table walked by a single `tick_switch_logic` dispatcher each frame. Each wiring entry is `{source_obj_indices…, target_obj_index, action_code, arg_a, arg_b}` exported by the editor alongside the object arrays; multiple source switches can fan into a single target (Option F) so "shoot all four switches" style puzzles compose without combinator objects. Action set in the dispatcher's jump table: `pulse_door` (timed open/hold/close on a generic door object — see below), `set_param` (write a stored value into a target byte at a configurable offset), `xor_param` (toggle a bit mask in the same slot — gives toggle/flip behaviour for laser orientation, well sign, etc.), and `set_alive` / `clear_alive` / `set_disabled` / `clear_disabled` for object lifecycle. Switches latch per-instance in `level_obj_flags` so the global `door_switch_counter_A` is gone — no more shared state, no more level-number dispatch. `OBJ_flag_disabled` (`$10`) was added as a "keep-drawing-but-inert" bit so an object can be visibly present in the level but unresponsive until a switch enables it (used for the bobbing-mine local tick so a disabled mine freezes in place rather than vanishing). Editor: wiring lines from selected switch to target with arrowhead, inspector exposes action / arg fields, target-pick mode via right-click. Phases A (scaffolding + data tables), B (editor wiring UX), C (dispatcher + alive/destroy actions), then set_param/xor_param + multi-trigger + disabled. Plan in [`docs/plan-switches-and-triggers.md`](plan-switches-and-triggers.md). Open follow-ups: [cycle_param + hostile-bullet triggers + predicate combinations](#switches--triggers-follow-ups). Non-SWRAM CRC remains anchored at `6389c446`.
+- **Generic doors object** (`OBJECT_door = $11`, SWRAM build). Replaces the per-level hardcoded door routines from `level_3_door_logic` / `level_4_door_logic` / `level_5_door_logic` with a single editor-placeable object type. Each door carries its anchor (X, Y), shape (`slot` / `notch_v` / `flat_window`), width, max carve depth, and `data_0` bit-packing: bit 7 = side (left/right wall), bit 6 = open direction (flat_window only), bits 0-1 = shape. Three render paths in the engine: `render_slot` (simple rectangular hole), `render_notch_v` (V-shaped pinch; engine now auto-carves the matching V-recess into the *opposite* wall using the anchor as base, so the designer doesn't hand-edit terrain), and `render_flat_window` (rows progressively open along the Y axis, top-down or bottom-up). State machine has an explicit `door_phase` byte (opening / holding / closing) so the cursor can't bounce mid-close. Triggered via the `pulse_door` switch action — re-triggering during the hold phase re-latches the timer. Original game levels 3 / 4 / 5 / 6 all migrated through the editor to wired pulse_door + door object pairs; the legacy `tick_door_logic` and per-level door routines were removed from the SWRAM build. Editor: shape-accurate previews (closed-state fill + open-state outline polygon), drag handles for height (top/bottom) and depth (outer edge), direction arrow inside the cavity, per-shape inspector fields (Height / Open depth / Side / Direction-or-Wall). Doors D1 (slot + framework), D2 (notch_v + level 5 + pulse_door re-latch), D3 (flat_window + level 5 migration + open direction) commit series.
 - **Editor UI overhaul — right-pane inspector + sprite palette** (tooling, no engine impact). Replaces the overloaded status bar and right-click placement menu with a fixed-width right-hand pane: a schema-driven inspector on top (25%) and a sprite palette grid below (75%). Each selectable thing (level / wall / object-by-type / checkpoint / band) declares a list of `Field`s with `kind` ∈ `byte`/`signed_byte`/`word`/`colour`/`enum`/`ref`/`readonly`/`header`; widgets render and edit straight from the schema. Numeric fields use a spinner with explicit ◄/► hit boxes (Shift = `shift_step`); click value to text-edit (decimal, `$XX` hex, `±N` signed; suppresses global keymap while typing). Colour fields render as inline 8-cell palette + optional inherit cell. Refs (teleporter destination) get a `Pick` button that arms a one-shot canvas-click to write the index. Object placement: click a palette tile to arm, left-click on canvas drops one and disarms (Shift to keep armed). Wall mode: pinch tool (Shift+left-click on a wall sets `L=R`, dragging extends the band) plus a faint dotted crosshair from the cursor; wall highlight follows the pointer in colour-coded form (red=left, blue=right). Status bar slimmed to mode/level/file/cursor coords + contextual hint, with `L=`/`R=` wall values for the current row and per-mode hints. Inspector header strip per selection (e.g. `Level 3 Objects` / `Index: 5` / `Type: Gun ($02)`). Plan in [`docs/plan-editor-ui-overhaul.md`](plan-editor-ui-overhaul.md). **Deferred follow-ups** (none blocking; tracked here so they don't get lost): slider widget (spinner covers all numeric ranges today); collapsing the legacy `_adjust_selected_*` handlers into a single schema-driven hotkey dispatcher; Tab / Shift+Tab focus cycle between fields; red flash on out-of-range commit; drag-to-place from a palette tile; multi-select + bulk edit; drag-bezel resize for inspector width; inspector tabs / "all checkpoints" list view; search/filter; batched undo per slider drag; full level-properties modal.
 - **Last-used checkpoint respawn** (`_LAST_USED_CHECKPOINT`, SWRAM build). Replaces the engine's height-based checkpoint scan with a player-tracked active index. Two persistent ZP bytes (`active_checkpoint_index` at `$00AA`, `deepest_checkpoint_visited` at `$00AB`) sit outside the ZP-clear range so they hold across deaths; both reset to `$00` on level start in `initialise_level_pointers`. Per-frame `update_active_checkpoint` walks bidirectionally — retreats while `player_y < cp[active-1].y`, advances while `player_y > cp[active+1].y` — and bumps the deepest watermark on each advance. `level_reset` simplifies to `LDY active_checkpoint_index; JMP active_checkpoint_loaded` (historical scan and pod-flag direction flip both bypassed). Respawn-with-pod rule at the load site: if `cp[active].y` is above death Y, bump Y to `min(active+1, deepest_visited)` (anti-cheat, prevents free upward travel via death loop); whichever phase landed Y, drop the pod if Y equals `deepest_visited` (matches original game's "respawn at the bottom drops the pod" feel, applied to the segment-local watermark instead of `cp[size-1]`). Teleporter warp writes both trackers to the destination index so the watermark cap can never reference a checkpoint the player hasn't actually been to — fixes the disconnected-caverns case where dying in a sub-cavern would have matched a checkpoint above the divider band. Editor exports checkpoints sorted ascending by Y so index 0 is always the topmost spawn (level-start anchor); teleporter `obj_data_0` indices are remapped through the sort permutation. Plan in [`docs/plan-respawn-logic.md`](plan-respawn-logic.md).
 - **Teleporter pads** (`_TELEPORTER`, SWRAM build, type `$10`). One-way warp pads that send the ship to an existing level checkpoint. Per-instance destination index in obj_data slot 0; debris emitted each gravity tick via `well_emit_debris_particle` in repulsor mode for a visible field. AABB ship-contact test in `update_and_draw_all_objects` (|dx| < 5 chars, |dy| < 8 px, with `TELEPORTER_CENTRE_X/Y_OFFSET` to align the trigger zone with the visible particle ring) sets a deferred `teleporter_pending_index`; `teleporter_dispatch_pending` runs at end-of-frame and re-uses the level-restart path (pre-nudges `midpoint_ypos` so the matching loop in `level_reset` lands on checkpoint K, forces `level_reset_with_pod_flag = 0`, plays the teleport-out animation + `enter_orbit_sound`, resets the stack, and `JMP level_retry`). Guarded by `teleporter_just_warped` / `teleporter_overlap_this_frame` flags so the sound and warp don't re-trigger while the ship is still inside the AABB. Pad refuses to fire while pod is tethered. Editor: type-`$10` placement, `[`/`]` cycle through the level's checkpoints as destination, status bar shows `dest=#N/M -> (x, y)`, render is a cyan ring with a wiring line + arrowhead to the destination checkpoint. Placeholder 12×8 hollow-rectangle sprite registered (sprite is suppressed in-game so it can't collide with the ship). Plan in [`docs/plan-teleporter.md`](plan-teleporter.md).
