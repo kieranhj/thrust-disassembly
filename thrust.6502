@@ -172,8 +172,8 @@ player_velocityx_INT                = $0039     ; (as above)
 rnd_A                               = $003A     ; used by rnd function
 rnd_B                               = $003B     ; used by rnd function
 collecting_fuel_flag                = $003C     ; set to 1 if using tractor beam near fuel object
-generator_recharge_counter          = $003D     ; number of ticks to recharge generator
-generator_recharge_increase         = $003E     ; increase in time between recharges after each hit
+generator_recharge_counter          = $003D     ; number of ticks to recharge generator.  Guns do not fire while generator is temporarily damaged
+generator_total_damage              = $003E     ; permanent accumulated reactor damage.
 old_plot_pod_sprite_at_ptr          = $003F     ; remembers pod screen addr LO for erase
 old_plot_pod_sprite_at_ptr_HI       = $0040     ; remembers pod screen addr HI for erase
 old_pod_pixel_column                = $0041     ; remembers pod_pixel_column for erase
@@ -1277,7 +1277,7 @@ ORG     NATIVE_ADDR
         LDA     generator_recharge_counter
         BEQ     skip_dec_generator
 
-        DEC     generator_recharge_counter
+        DEC     generator_recharge_counter ;temporary gun-disabling timer recharges.
 
     .skip_dec_generator
         DEC     countdown_timer_ticks
@@ -1577,19 +1577,48 @@ ORG     NATIVE_ADDR
         STA     door_switch_counter_A
         JSR     L0F64
 
+
     .handle_generator
+        ; Generator damage system
+        ;
+        ; The generator has TWO independent state variables:
+        ;
+        ;   generator_recharge_counter
+        ;       Temporary "guns disabled" timer.
+        ;       While non-zero, planetary guns cannot fire.
+        ;       This value slowly counts back down to zero.
+        ;
+        ;   generator_total_damage
+        ;       Permanent accumulated reactor damage.
+        ;       Each hit adds a random amount (0-31) onto this value.
+        ;       This damage NEVER recovers.
+        ;
+        ; Every generator hit:
+        ;
+        ;   new_damage = generator_total_damage + random(0..31)
+        ;
+        ; The result is stored into BOTH variables:
+        ;
+        ;   generator_recharge_counter <- new_damage
+        ;   generator_total_damage <- new_damage
+        ;
+        ; If the 8-bit addition overflows, the reactor goes critical and
+        ; the planet self-destruct countdown begins.
+
         LDA     object_type
         CMP     #OBJECT_generator
         BNE     L0F7D
 
         JSR     L0F64
 
+        ; Add random damage to accumulated reactor damage.
+        ; Overflow means the reactor has reached critical state.
         JSR     rnd
 
         AND     #$1F
-        ADC     generator_recharge_increase
+        ADC     generator_total_damage
         STA     generator_recharge_counter
-        STA     generator_recharge_increase
+        STA     generator_total_damage
         BCC     delete_object
 
         LDA     planet_countdown_timer
@@ -2670,64 +2699,119 @@ ORG     NATIVE_ADDR
         RTS
 }
 
-\ ******************************************************************************
-\ * Function: update_window_and_terrain_tables
-\ * Description: Updates window X/Y position and rebuilds terrain tables after scroll
-\ ******************************************************************************
 
+; ******************************************************************************
+; * Function: update_window_and_terrain_tables
+; *
+; * High-level purpose:
+; *   1) Apply window_scroll_x / window_scroll_y to the window position.
+; *   2) For vertical scrolling, update terrain row indices once per pixel
+; *      so the terrain remains aligned with the window.
+; *   3) Compute the ship’s midpoint position relative to the window.
+; *   4) Update window_scroll_y for the next frame based on:
+; *        - ship vertical velocity,
+; *        - ship position within the viewport,
+; *        - bounded acceleration, braking and hysteresis.
+; *   5) Compute and update window_scroll_x using analogous horizontal
+; *      dead‑zones and braking logic.
+; *   6) Perform world‑X wrapping when window bounds are reached, applying
+; *      the wrap delta consistently to all world‑space X coordinates.
+; *   7) Update terrain draw tables so newly exposed columns are rebuilt
+; *      correctly after scrolling or wrapping.
+; ****************************************************************************** 
 .update_window_and_terrain_tables
 {
+        ; ---------------------------------------------------------------------------
+        ; Apply horizontal scroll directly to window X position.
+        ; (No terrain processing needed here.)
+        ; ---------------------------------------------------------------------------
+
         CLC
         LDA     window_scroll_x
         ADC     window_xpos_INT
         STA     window_xpos_INT
+
+        ; ---------------------------------------------------------------------------
+        ; Apply vertical scroll to window Y position.
+        ; Branch on sign of vertical scroll:
+        ;   >0  : scrolling down
+        ;   <0  : scrolling up
+        ;   =0  : no vertical scroll this frame
+        ; ---------------------------------------------------------------------------
+
         CLC
         LDA     window_scroll_y
-        BMI     L173B
+        BMI     L173B                    ; negative scroll → scroll up
 
-        BEQ     L174F
+        BEQ     L174F                    ; zero scroll → skip Y update
+
+        ; ---------------------------------------------------------------------------
+        ; Case 1: scrolling down (window_scroll_y > 0)
+        ;   - Add scroll amount to window_y
+        ;   - Update extended Y byte if carry occurs
+        ;   - For each pixel of scroll, advance terrain row index
+        ; ---------------------------------------------------------------------------
 
         ADC     window_ypos_INT
         STA     window_ypos_INT
         BCC     L172C
 
-        INC     window_ypos_EXT
+        INC     window_ypos_EXT           ; handle carry across 256-pixel boundary
         
     .L172C
         LDA     window_scroll_y
         
     .L172E
         PHA
-        JSR     terrain_process_accumulate_xpos            ; increments terrain_window_y_index
+        JSR     terrain_process_accumulate_xpos  ; advance terrain one row
 
         PLA
         SEC
         SBC     #$01
-        BNE     L172E
+        BNE     L172E                     ; repeat once per pixel of scroll
 
         JMP     L174F
+
+        ; ---------------------------------------------------------------------------
+        ; Case 2: scrolling up (window_scroll_y < 0)
+        ;   - Add scroll (negative) to window_y
+        ;   - Update extended Y byte if borrow occurs
+        ;   - For each pixel of scroll, decrement terrain row index
+        ; ---------------------------------------------------------------------------
 
     .L173B
         ADC     window_ypos_INT
         STA     window_ypos_INT
         BCS     L1743
 
-        DEC     window_ypos_EXT
+        DEC     window_ypos_EXT            ; handle borrow
         
     .L1743
         LDA     window_scroll_y
         
     .L1745
         PHA
-        JSR     terrain_process_subtract_xpos            ; decrements terrain_window_y_index
+        JSR     terrain_process_subtract_xpos    ; rewind terrain one row
 
         PLA
         CLC
         ADC     #$01
-        BNE     L1745
+        BNE     L1745                     ; repeat once per pixel of scroll
+
+        ; ---------------------------------------------------------------------------
+        ; At this point:
+        ;   - window_xpos / window_ypos reflect this frame's scroll
+        ;   - terrain tables are consistent with the new window position
+        ; Now compute *next frame's* vertical scroll speed.
+        ; ---------------------------------------------------------------------------
 
     .L174F
-        JSR     tick_door_logic
+        JSR     tick_door_logic            ; unrelated game logic, ticked here
+
+        ; ---------------------------------------------------------------------------
+        ; Compute ship midpoint position relative to the window.
+        ; This value is used to decide whether to accelerate, brake, or stop scrolling.
+        ; ---------------------------------------------------------------------------
 
         SEC
         LDA     midpoint_ypos_INT
@@ -2735,28 +2819,43 @@ ORG     NATIVE_ADDR
         SEC
         SBC     #SCREEN_ADDR_HI_OFFSET
         STA     midpoint_window_ypos_INT
+
+        ; ---------------------------------------------------------------------------
+        ; Decide how to update window_scroll_y for next frame.
+        ;
+        ; This logic:
+        ;   - Looks at ship vertical velocity (force_vectory_INT)
+        ;   - Applies asymmetric thresholds above/below the screen center
+        ;   - Limits scroll speed to be proportional to ship speed
+        ;   - Only changes scroll speed by ±1 per frame
+        ; ---------------------------------------------------------------------------
+
         SEC
         LDA     force_vectory_INT
-        BMI     L1785
+        BMI     L1785                    ; ship moving upward
+
+        ; ---------------------------------------------------------------------------
+        ; Ship moving downward (force_vectory_INT >= 0)
+        ; ---------------------------------------------------------------------------
 
         LDA     midpoint_window_ypos_INT
-        CMP     #$5D
-        BCS     L177D
+        CMP     #$5D                     ; lower threshold
+        BCS     L177D                    ; past threshold → force scroll
 
         LDA     window_scroll_y
-        BMI     L177A
+        BMI     L177A                    ; do not fight opposite scroll
 
         BEQ     L177A
 
         LDX     force_vectory_INT
-        INX
+        INX                              ; max scroll = ship velocity + 1
         CPX     window_scroll_y
         BCS     L177A
 
-        DEC     window_scroll_y
+        DEC     window_scroll_y          ; gently reduce scroll speed
         BNE     L177A
 
-        INC     window_scroll_y
+        INC     window_scroll_y          ; stabilise at ±1
         
     .L177A
         JMP     L17A3
@@ -2764,8 +2863,13 @@ ORG     NATIVE_ADDR
     .L177D
         LDX     force_vectory_INT
         INX
-        STX     window_scroll_y
+        STX     window_scroll_y          ; lock scroll to ship speed + 1
         JMP     L17A3
+
+        ; ---------------------------------------------------------------------------
+        ; Ship moving upward (force_vectory_INT < 0)
+        ; Symmetric logic to the above, but with different thresholds.
+        ; ---------------------------------------------------------------------------
 
     .L1785
         LDA     midpoint_window_ypos_INT
@@ -2779,7 +2883,7 @@ ORG     NATIVE_ADDR
         CMP     force_vectory_INT
         BCS     L179B
 
-        INC     window_scroll_y
+        INC     window_scroll_y          ; gently reduce magnitude
         BNE     L179B
 
         DEC     window_scroll_y
@@ -2790,8 +2894,14 @@ ORG     NATIVE_ADDR
     .L179E
         LDX     force_vectory_INT
         DEX
-        STX     window_scroll_y
-        
+        STX     window_scroll_y          ; lock scroll to ship speed − 1
+
+        ; ---------------------------------------------------------------------------
+        ; Hard braking zone:
+        ; If scroll is active but ship is within inner dead-zone,
+        ; forcibly stop scrolling to avoid jitter.
+        ; ---------------------------------------------------------------------------
+
     .L17A3
         LDA     window_scroll_y
         BEQ     L17C0
@@ -2807,6 +2917,8 @@ ORG     NATIVE_ADDR
         JMP     L17C0
 
     .L17B6
+        ; Final vertical hard‑brake zone:
+        ; if ship midpoint is far below screen centre, forcibly stop Y scrolling
         LDA     midpoint_window_ypos_INT
         CMP     #$50
         BCC     L17C0
@@ -2815,37 +2927,54 @@ ORG     NATIVE_ADDR
         STA     window_scroll_y
         
     .L17C0
+        ; -------------------------------------------------------------------
+        ; Begin horizontal scroll logic.
+        ; Compute ship midpoint position relative to window X.
+        ; midpoint_window_x = midpoint_x - window_x
+        ; -------------------------------------------------------------------
+
         SEC
         LDA     midpoint_xpos_INT
         SBC     window_xpos_INT
         STA     midpoint_window_xpos_INT
+
+        ; Shift origin so that screen centre corresponds to zero
         SEC
         SBC     #$10
         BCS     L17D1
 
+        ; Ship is left of centre dead‑zone → scroll window left
         STA     window_scroll_x
         JMP     L17DC
 
     .L17D1
+        ; Ship is right of centre; test right dead‑zone
         LDA     midpoint_window_xpos_INT
         SEC
         SBC     #$30
         BEQ     L17DC
-
         BCC     L17DC
 
+        ; Ship is far right → scroll window right
         STA     window_scroll_x
         
     .L17DC
+        ; -------------------------------------------------------------------
+        ; Horizontal braking / hysteresis.
+        ; If scrolling, gently decelerate and snap to zero inside dead‑zone.
+        ; -------------------------------------------------------------------
+
         LDA     window_scroll_x
-        BEQ     L1813
+        BEQ     L1813            ; no scroll → done
 
-        BMI     L17FC
+        BMI     L17FC            ; negative = scrolling left
 
+        ; ----- Scrolling right -----
         LDA     midpoint_window_xpos_INT
         CMP     #$1D
         BCS     L17EF
 
+        ; Ship near centre → stop scrolling
         LDA     #$00
         STA     window_scroll_x
         JMP     L1813
@@ -2854,17 +2983,21 @@ ORG     NATIVE_ADDR
         CMP     #$30
         BCS     L1813
 
+        ; Gradually reduce positive scroll speed
         DEC     window_scroll_x
         BNE     L1813
 
+        ; Stabilise at ±1
         INC     window_scroll_x
         JMP     L1813
 
     .L17FC
+        ; ----- Scrolling left (mirror logic) -----
         LDA     midpoint_window_xpos_INT
         CMP     #$23
         BCC     L1809
 
+        ; Ship near centre → stop scrolling
         LDA     #$00
         STA     window_scroll_x
         JMP     L1813
@@ -2873,45 +3006,75 @@ ORG     NATIVE_ADDR
         CMP     #$10
         BCC     L1813
 
+        ; Gradually reduce negative scroll speed
         INC     window_scroll_x
         BNE     L1813
 
-        DEC     window_scroll_x
+        ; Stabilise at ±1
+        DEC     window_scroll_x 
+
     .L1813
+        ; -------------------------------------------------------------------
+        ; World X wrapping logic.
+        ;
+        ; If the window X position approaches either extreme of the world,
+        ; wrap space around and apply a uniform delta to all X coordinates
+        ; so the world appears continuous.
+        ; -------------------------------------------------------------------
+
         LDA     window_xpos_INT
-        BEQ     L181B
+        BEQ     L181B                     ; near left edge → wrap backward
 
         CMP     #$DC
-        BCC     L181F
+        BCC     L181F                     ; not near right edge → continue
 
     .L181B
+        ; Wrap world backward (shift everything right)
         LDA     #WORLD_X_WRAP_BACKWARD
         BNE     L1825
 
     .L181F
         CMP     #WORLD_X_WRAP_THRESHOLD
-        BCC     L187E
+        BCC     L187E                     ; no wrap needed
 
+        ; Wrap world forward (shift everything left)
         LDA     #WORLD_X_WRAP_FORWARD
         
     .L1825
+        ; -------------------------------------------------------------------
+        ; Apply wrap delta to all world-space X positions so relative
+        ; positions remain consistent.
+        ; -------------------------------------------------------------------
+
         STA     window_deltax_INT
+
+        ; Shift window position
         LDA     window_xpos_INT
         CLC
         ADC     window_deltax_INT
         STA     window_xpos_INT
+
+        ; Shift midpoint
         LDA     midpoint_xpos_INT
         CLC
         ADC     window_deltax_INT
         STA     midpoint_xpos_INT
+
+        ; Shift player current and previous positions
         LDA     player_xpos_INT
         CLC
         ADC     window_deltax_INT
         STA     player_xpos_INT
+
         LDA     old_player_xpos_INT
         CLC
         ADC     window_deltax_INT
         STA     old_player_xpos_INT
+
+        ; -------------------------------------------------------------------
+        ; Shift all particle X positions by the same wrap delta.
+        ; -------------------------------------------------------------------
+
         LDX     #PARTICLE_table_max
         
     .L1845
@@ -2922,8 +3085,18 @@ ORG     NATIVE_ADDR
         DEX
         BPL     L1845
 
+        ; -------------------------------------------------------------------
+        ; Update terrain draw tables after horizontal wrapping.
+        ;
+        ; These tables track which terrain columns need redrawing.
+        ; Wrapping effectively invalidates certain columns and forces them
+        ; to be regenerated.
+        ; -------------------------------------------------------------------
+
         LDX     #$11
+
     .L1853
+        ; If neither table marks this column, schedule it for redraw
         LDA     terrain_draw_table_3,X
         BNE     L1868
 
@@ -2936,6 +3109,8 @@ ORG     NATIVE_ADDR
         JMP     L187B
 
     .L1868
+        ; If both tables think the column is fully drawn,
+        ; clear them so wrapping reinitialises rendering
         CMP     #SCREEN_WIDTH_CHARS
         BNE     L187B
 
@@ -2952,6 +3127,9 @@ ORG     NATIVE_ADDR
         BPL     L1853
 
     .L187E
+        ; -------------------------------------------------------------------
+        ; End of update_window_and_terrain_tables
+        ; -------------------------------------------------------------------
         RTS
 }
 
@@ -6878,7 +7056,7 @@ ORG     NATIVE_ADDR
         LDA     #$00
         STA     level_reset_with_pod_flag
         LDA     #$32
-        STA     generator_recharge_increase
+        STA     generator_total_damage
         
         LDX     level_number
         LDA     level_gravity_FRAC_table,X
