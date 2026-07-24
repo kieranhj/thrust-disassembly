@@ -6925,11 +6925,40 @@ ORG     NATIVE_ADDR
         LDA     level_reset_data_sizes,X
         STA     level_reset_size
 
-\\ Think this code is matching current ship (x,y) position against respawn positions & screen offset:
+
+\\ --------------------------------------------------------------------------
+\\ Respawn checkpoint selection.
+\\
+\\ The reset table contains a sequence of respawn points ordered by depth.
+\\ Given the current midpoint Y position, this code finds the appropriate
+\\ checkpoint for a level retry.
+\\
+\\ Behaviour inferred from the original game:
+\\
+\\  - On the descent (no pod), reaching a checkpoint does not immediately
+\\    make it active. The player must go clearly beyond it before it becomes
+\\    the respawn point. This is implemented by stepping back one checkpoint
+\\    (DEY) after the search.
+\\
+\\  - When carrying the pod, the player does not get moved back one
+\\    checkpoint in the same way.
+\\
+\\  - There is also special handling for the deepest checkpoint in the
+\\    level. In this case level_reset_with_pod_flag is cleared, which
+\\    appears to prevent the player from respawning with the pod attached.
+\\    This matches the gameplay behaviour that simply picking up the pod is
+\\    not sufficient; some escape progress must be made before the pod is
+\\    "secured".
+\\ --------------------------------------------------------------------------
         
         LDY     #$00
         
     .level_reset_loop
+
+\\ Compare current midpoint Y against checkpoint Y[Y].
+\\ Continue down the checkpoint list until we find the first checkpoint
+\\ whose depth is at or beyond the player's current depth.
+
         LDA     (level_reset_ptr2),Y
         SBC     midpoint_ypos_INT
         LDA     (level_reset_ptr),Y
@@ -6940,19 +6969,42 @@ ORG     NATIVE_ADDR
         CPY     level_reset_size
         BNE     level_reset_loop
 
+\\ Ran off the end of the checkpoint list.
+\\ Use the deepest checkpoint and clear the pod-respawn flag.
+
         LDA     #$00
         STA     level_reset_with_pod_flag
         
     .L2B4B
+
+\\ If this is the first checkpoint then leave it unchanged.
+
         CPY     #$00
         BEQ     L2B55
+
+\\ If level_reset_with_pod_flag is set then we also leave the checkpoint
+\\ unchanged (pod-carrying behaviour).
 
         LDA     level_reset_with_pod_flag
         BNE     L2B55
 
+\\ No pod-reset privilege:
+\\ step back one checkpoint.
+\\
+\\ This is the key logic that makes waypoint progression harsher on the
+\\ descent: a checkpoint does not become active until the player has moved
+\\ beyond it.
+
         DEY
         
     .L2B55
+
+\\ Special handling for the deepest checkpoint.
+\\
+\\ If Y+1 == number_of_checkpoints then this checkpoint is the final/deepest
+\\ checkpoint in the level. Clear level_reset_with_pod_flag so the player
+\\ will not be recreated with the pod attached.
+
         INY
         CPY     level_reset_size
         BNE     L2B5F
@@ -6961,10 +7013,24 @@ ORG     NATIVE_ADDR
         STA     level_reset_with_pod_flag
         
     .L2B5F
+
+\\ Undo the temporary INY above.
+\\ Final checkpoint index is now in Y.
+
         DEY
         CLC
 
-\\ Matched nearest respawn position so set new ship (x,y) coordinates
+\\ --------------------------------------------------------------------------
+\\ Apply selected respawn point.
+\\
+\\ Layout of level reset tables:
+\\   midpoint Y high
+\\   midpoint Y low
+\\   window X
+\\   window Y high
+\\   window Y low
+\\   midpoint X
+\\ --------------------------------------------------------------------------
         
         LDA     (level_reset_ptr),Y
         STA     midpoint_ypos_INT_HI
@@ -6997,6 +7063,9 @@ ORG     NATIVE_ADDR
         LDA     #$0E
         STA     top_nibble_index
 
+\\ Respawn with pod attached only if level_reset_with_pod_flag survived
+\\ the checkpoint-selection logic above.
+
         LDA     level_reset_with_pod_flag
         BEQ     dont_set_angle_to_pod
 
@@ -7006,7 +7075,7 @@ ORG     NATIVE_ADDR
 
         LDX     #$01                        ; angle $01 - straight up (+1)
         LDA     gravity_INT
-        BPL     L2BA5                        ; normal gravity
+        BPL     L2BA5                       ; normal gravity
 
         LDX     #$11                        ; angle $11 - straight down (+1)
 
