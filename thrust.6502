@@ -10324,6 +10324,26 @@ ORG     NATIVE_ADDR
 \ * Function: mission_complete
 \ * Description: Shows mission complete screen, calculates and awards bonus score
 \ ******************************************************************************
+\ Mission completion bonus:
+\   level_number = (mission_number - 1) MOD 6
+\   bonus = 400 * (level_number + 5) + (planet_destroyed ? 2000 : 0))
+\
+\ Hence:
+\   normal completion    = 2000..4000 points
+\   planet destroyed     = 4000..6000 points
+\
+\ Examples: 
+\ (values shown as normal_bonus / planet_destroyed_bonus)
+\   Mission  1 (level 0): 2000 / 4000
+\   Mission  2 (level 1): 2400 / 4400
+\   Mission  3 (level 2): 2800 / 4800
+\   Mission  4 (level 3): 3200 / 5200
+\   Mission  5 (level 4): 3600 / 5600
+\   Mission  6 (level 5): 4000 / 6000
+\   Mission  7 (level 0): 2000 / 4000
+\   Mission  8 (level 1): 2400 / 4400
+\   Mission  9 (level 2): 2800 / 4800
+\   Mission 10 (level 3): 3200 / 5200
 
 .mission_complete
 {
