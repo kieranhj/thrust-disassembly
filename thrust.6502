@@ -9381,6 +9381,22 @@ ORG     NATIVE_ADDR
         BMI     player_died_collision
 
     .player_died_countdown
+
+        \ Planet destroyed, but mission failed.
+        \
+        \ Reaching this path means:
+        \   - player did not run out of fuel
+        \   - player was not carrying the pod
+        \   - the planet countdown had been triggered
+
+        JSR     clear_screen_and_init
+        JSR     show_landscape
+
+        \ Award a one-level turret hostility penalty of +8 for the next mission.
+        \ This makes hostile guns significantly more aggressive after destroying
+        \ the planet but failing to escape with the pod.
+        LDA     #$08
+        STA     planet_destroyed_hostile_gun_modifier
         JSR     clear_screen_and_init
         JSR     show_landscape
 
