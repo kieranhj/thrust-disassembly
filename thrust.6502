@@ -195,7 +195,7 @@ ship_window_ypos_INT                = $0050     ; i.e. screen coordinates not wo
 pod_window_xpos_FRAC                = $0051     ; *think* these are relative to the window position
 pod_window_xpos_INT                 = $0052     ; i.e. screen coordinates not world
 pod_window_ypos_INT                 = $0053     ; "
-top_nibble_index                    = $0054     ; initialised to $E (14) and decremented by 2, used to index lookup_top_nibble
+tether_length                       = $0054     ; initialised to $E (14) and decremented by 2 when the ship+pod dies; used to index lookup_top_nibble
 fuel_beam_position_flag             = $0055     ; set & unset in tick_fuel_pickup_draw_beams
 fuel_value_updated_flag             = $0056     ; when zero indicates fuel value needs to be updated on screen
 fuel_just_ran_out_flag              = $0057     ; set moment player runs out of fuel
@@ -4884,12 +4884,12 @@ ORG     NATIVE_ADDR
 ;   to the spaceship; the full tether length is therefore twice this vector.
 ;
 ; High‑level equivalent (after final scaling):
-;   dx ≈  1.25 * sin(angle) * (tetherIndex + 2) / 4
-;   dy ≈ -2.5  * cos(angle) * (tetherIndex + 2) / 4
+;   dx ≈  1.25 * sin(angle) * (tether_length + 2) / 4
+;   dy ≈ -2.5  * cos(angle) * (tether_length + 2) / 4
 ;
-; Note that normally, tetherIndex=14; so the tether length is fixed.
+; Note that normally, tether_length=14; so the tether length is fixed.
 ; However when the player's ship is exploding, the tether beam is seen
-; to contract.  So in that case tetherIndex is decreased in steps of 2,
+; to contract.  So in that case tether_length is decreased in steps of 2,
 ; so as to create that animation.
 ;
 ; Implementation summary:
@@ -4913,8 +4913,8 @@ ORG     NATIVE_ADDR
 ; ---------------------------------------------------------------------------
 ; Load first SIN/COS sample into the accumulators.
 ;
-; This contributes the FIRST of (tetherIndex + 2) total samples.
-; The remaining (tetherIndex + 1) samples are added in the loop below.
+; This contributes the FIRST of (tether_length + 2) total samples.
+; The remaining (tether_length + 1) samples are added in the loop below.
 ; ---------------------------------------------------------------------------
 
         LDA     angle_to_x_FRAC,Y
@@ -4930,14 +4930,14 @@ ORG     NATIVE_ADDR
 ; ---------------------------------------------------------------------------
 ; Prepare nibble‑controlled accumulation loop.
 ;
-; top_nibble_index corresponds directly to pod.tetherIndex.
-; The loop executes (top_nibble_index + 1) times.
+; tether_length+2 corresponds directly to the tether length.
+; The loop executes (tether_length + 1) times.
 ;
 ; Combined with the initial sample above, this yields exactly
-; (tetherIndex + 2) accumulated SIN/COS samples.
+; (tether_length + 2) accumulated SIN/COS samples.
 ; ---------------------------------------------------------------------------
 
-        LDX     top_nibble_index               ; typically initialised to $0E (14)
+        LDX     tether_length               ; typically initialised to $0E (14)
 
 ; ===========================================================================
 ; NIBBLE‑CONTROLLED ACCUMULATION LOOP
@@ -4993,8 +4993,8 @@ ORG     NATIVE_ADDR
 ; The accumulated result is intentionally over‑scaled. Dividing by 4
 ; produces the final tether vector:
 ;
-;   dx ≈  1.25 * sin(angle) * (tetherIndex + 2) / 4
-;   dy ≈ -2.5  * cos(angle) * (tetherIndex + 2) / 4
+;   dx ≈  1.25 * sin(angle) * (tether_length + 2) / 4
+;   dy ≈ -2.5  * cos(angle) * (tether_length + 2) / 4
 ; ---------------------------------------------------------------------------
 
         LDA     midpoint_deltax_INT
@@ -7060,7 +7060,7 @@ ORG     NATIVE_ADDR
         STA     midpoint_xpos_INT
 
         LDA     #$0E
-        STA     top_nibble_index
+        STA     tether_length
 
 \\ Respawn with pod attached only if level_reset_with_pod_flag survived
 \\ the checkpoint-selection logic above.
@@ -9559,8 +9559,8 @@ ORG     NATIVE_ADDR
         JSR     palette_set_colour_Y_to_A
 
     .L38E2
-        DEC     top_nibble_index
-        DEC     top_nibble_index
+        DEC     tether_length
+        DEC     tether_length
         BPL     L38F0
 
         LDA     player_ship_destroyed_flag
