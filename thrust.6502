@@ -10890,9 +10890,19 @@ ORG     NATIVE_ADDR
 \ *     X ≈  1.25 * sin(theta)
 \ *     Y ≈ -2.5  * cos(theta)
 \ *
-\ *   The unequal amplitudes deliberately encode an ellipse rather than
-\ *   a circle.  This asymmetry is relied upon elsewhere in the physics
-\ *   (e.g. distance comparison and axis weighting).
+\ * The coordinate system used throughout the game explains why there 
+\ * is a *2 disparity between the X and Y coordinates in these tables. 
+\ * Throughout the game's coordinate system, the X coordinate is stored 
+\ * as two bytes unsigned fixed-point 8.8 format where 1 unit = 1 column 
+\ * (= 1 byte MODE 1 screen data = 4 pixels). The Y coordinate is stored 
+\ * as three bytes unsigned fixed-point 16.8 format where 1 unit = 1 line 
+\ * of landscape data. As the landscape is drawn every other screen scanline 
+\ * (starting at 2) there are (224-2)/2 = 111 landscape lines = 111 units
+\ * of Y visible. The ship is plotted at pixel precision, so the X pixel 
+\ * position = X * 4 and the Y pixel position = Y * 2. So from the game's 
+\ * perspective, the ship is plotted in 'fractional' units (1/4 in X, 1/2 
+\ * in Y) but these are obviously integer pixel values. This explains why 
+\ * the tables are scaled *2 in Y, because the game world units are 'squashed'.
 \ ******************************************************************************
 
 ; ---------------------------------------------------------------------------
