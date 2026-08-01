@@ -6931,9 +6931,6 @@ ORG     NATIVE_ADDR
 \\ y-coordinate.  Once a player passes a checkpoint, when they next die, 
 \\ they will respawn at the latest checkpoint they crossed.
 \\
-\\ The reset table contains a sequence of respawn points ordered by depth.
-\\ Given the current midpoint Y position, this code finds the appropriate
-\\ checkpoint for a level retry.
 \\
 \\ Respawn behaviour:
 \\
@@ -7059,6 +7056,9 @@ ORG     NATIVE_ADDR
 
         LDA     #$0E
         STA     tether_length
+
+\\ Respawn with pod attached only if level_reset_with_pod_flag survived
+\\ the checkpoint-selection logic above.
 
 \\ Respawn with pod attached only if level_reset_with_pod_flag survived
 \\ the checkpoint-selection logic above.
