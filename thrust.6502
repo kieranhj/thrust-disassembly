@@ -9283,7 +9283,12 @@ ORG     NATIVE_ADDR
         CPX     #$03            
         BCC     setup_level                                ; mission_number less than 3
 
-        INC     level_hostile_gun_probability            ; increment level_hostile_gun_probability
+        INC     level_hostile_gun_probability ; hostility rises by 1 each mission from mission 3 onwards:
+                                               ;   missions 3-6   -> 2..5
+                                               ;   missions 7-12  -> 6..11
+                                               ;   missions 13-18 -> 12..17
+                                               ;   missions 19-24 -> 18..23
+                                               ;   mission 36+    -> 35 (capped)
         LDA     level_hostile_gun_probability
         CMP     #$23
         BCC     setup_level
@@ -9294,6 +9299,9 @@ ORG     NATIVE_ADDR
     .setup_level
         CLC
         ADC     planet_destroyed_hostile_gun_modifier    ; level_hostile_gun_probability + planet_destroyed_hostile_gun_modifier
+                                                         ; this awards an extra +8 hostility in the case that the player
+                                                         ; destroyed the previous planet without escaping with orb.
+                                                         ; So this punishes player for not completing the previous mission.
         STA     hostile_gun_shoot_probability            ; store at hostile_gun_shoot_probability
 
         LDA     #$00
