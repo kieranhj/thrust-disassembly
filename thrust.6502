@@ -3939,8 +3939,6 @@ ORG     NATIVE_ADDR
 ;      - After thrust and gravity, linear drag is applied:
 ;          * Horizontal drag:  velocityX -= velocityX >> 6   (63/64)
 ;          * Vertical drag:    velocityY -= velocityY >> 8   (255/256)
-;      - Different drag strengths are intentional and replicate the
-;        original game’s feel.
 ;
 ; Result:
 ;   - velocity_vectorx / velocity_vectory contain the updated linear velocity
@@ -5509,11 +5507,13 @@ ORG     NATIVE_ADDR
 }
 
 \ ******************************************************************************
-\ * Function: generate_stars_to_start
+\ * Function: animate_ship_flying_text_banner
 \ * Description: Draw ship sprite and animate star particles until counter wraps to zero
+\ * This routine animates the stars and during the "I love space"/"Physics is Fun"/"Support Hotol"
+\ * messages after completing levels 24,48 and 72 respectively.
 \ ******************************************************************************
 
-.generate_stars_to_start
+.animate_ship_flying_text_banner
 {
         LDA     #$08
         STA     plot_ship_sprite_number
@@ -9151,23 +9151,30 @@ ORG     NATIVE_ADDR
         LDA     #$00
         STA     midpoint_ypos_INT
         STA     midpoint_ypos_INT_HI
-        INC     total_levels_played
-        INC     level_number
+
+        INC     total_levels_played       ; counts every completed level forever
+
+        INC     level_number              ; mission within current 6-level cycle
         LDA     level_number
-        CMP     #$06                                    ; number of levels
+        CMP     #$06                      ; 6 levels per cycle:
+                                          ;   0-5  Normal
+                                          ;   6-11 Reverse gravity
+                                          ;   12-17 Invisible landscape
+                                          ;   18-23 Reverse gravity + invisible landscape
+                                          ; After every 6 levels, toggle one modifier.
         BNE     setup_next_mission
 
         LDA     #$00
-        STA     level_number                            ; reset level number to 0
+        STA     level_number              ; restart cycle at mission 0
 
         LDA     reverse_gravity_flag
         EOR     #$FF
-        STA     reverse_gravity_flag                    ; invert flag
+        STA     reverse_gravity_flag      ; toggle reverse gravity
         BNE     setup_reverse_gravity
 
         LDA     invisible_landscape_flag
         EOR     #$0F
-        STA     invisible_landscape_flag                ; invert lower 4 bits of flag
+        STA     invisible_landscape_flag  ; toggle invisible landscape
 
     .setup_reverse_gravity
         LDA     reverse_gravity_flag
@@ -9176,10 +9183,13 @@ ORG     NATIVE_ADDR
         LDA     reverse_gravity_msg_shown
         BNE     setup_invisible_landscape
 
+        ; First reached after 6 completed levels.
+        ; (Subsequent visits skip because reverse_gravity_msg_shown is set.)
+
         JSR     clear_screen_and_init
         JSR     write_reverse_gravity
 
-        LDY     #$96                                    
+        LDY     #$96                        ; reused as both timeout and flag value
         STY     reverse_gravity_msg_shown
         JSR     wait_time_out_Y
 
@@ -9192,39 +9202,74 @@ ORG     NATIVE_ADDR
         LDA     invisible_landscape_msg_shown
         BNE     setup_clear_screen
 
+        ; First reached after 12 completed levels:
+        ;   level 0-5   normal
+        ;   level 6-11  reverse gravity
+        ;   level 12-17 invisible landscape
+
         JSR     clear_screen_and_init
         JSR     write_invisible_landscape
 
-        LDY     #$96                                    ; why $96?  Just timeout value recycled as flag!
-        STY     invisible_landscape_msg_shown
-        JSR     wait_time_out_Y
+        LDY     #$96
+        STY     invisible_landscape_msg_shown   ; reused as both timeout and flag value
+                                                ; Any non-zero value would work here.
+                                                ; $96 is reused because it is already
+                                                ; being loaded into Y as the timeout
+                                                ; parameter for wait_time_out_Y.
+        JSR     wait_time_out_Y        
 
     .setup_clear_screen
+
         INC     extra_string_counter
-        LDA     extra_string_counter                    ; number of attempts at level?
+
+        ; Trigger a special banner only every fourth 6-level cycle.
+        ;
+        ; Each cycle = 6 levels
+        ; Counter increments once per completed cycle
+        ;
+        ; Cycle 1 = 6  levels
+        ; Cycle 2 = 12 levels
+        ; Cycle 3 = 18 levels
+        ; Cycle 4 = 24 levels --> first banner
+        ; Cycle 8 = 48 levels --> second banner
+        ; Cycle 12 = 72 levels --> third banner
+
+        LDA     extra_string_counter
         AND     #$03
         BNE     setup_next_mission
 
         JSR     clear_screen_and_init
 
         LDX     extra_string_index
+
+        ; There are only three special messages.
+        ;
+        ; extra_string_index = 0  -> shown after 24 levels
+        ; extra_string_index = 1  -> shown after 48 levels
+        ; extra_string_index = 2  -> shown after 72 levels
+        ;
+        ; Once index reaches 2 it remains there permanently.
+
         CPX     #$02
         BEQ     skip_inc_extra_string_index
 
         INC     extra_string_index
-        
+
     .skip_inc_extra_string_index
+
         LDA     #HI(end_of_level_messages)
         STA     plot_string_ptr+1
+
         LDA     extra_string_ptrs,X
         TAX
-        JSR     write_message
 
-        JSR     generate_stars_to_start                    ; generate star field and scroll window
+        JSR     write_message             ; display special banner message
+
+        JSR     animate_ship_flying_text_banner
 
         LDY     #$50
         JSR     wait_time_out_Y
-
+        
     .setup_next_mission
         SED                                                ; set decimal mode
         CLC
