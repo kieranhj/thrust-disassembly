@@ -1689,50 +1689,117 @@ ORG     NATIVE_ADDR
         JMP     L1005
 
     .L0FB7
+        ; ------------------------------------------------------------
+        ; Fuel collection test.
+        ;
+        ; Requirements:
+        ;   - Player is NOT carrying a pod.
+        ;   - Object is a fuel canister.
+        ;   - Tractor beam button is pressed.
+        ;   - Fuel object is within a small pickup region.
+        ;
+        ; Note:
+        ; The exact visual meaning of the X/Y tests is not yet fully
+        ; understood because object coordinates and sprite origins may
+        ; not correspond to visible sprite centres.
+        ; ------------------------------------------------------------
+
         LDA     pod_attached_flag_1
-        BNE     L0FB4
+        BNE     L0FB4                  ; cannot collect fuel while carrying pod
 
         LDA     object_type
         CMP     #OBJECT_fuel
-        BNE     L0FB4
+        BNE     L0FB4                  ; object must be fuel
 
         CMP     #OBJECT_generator
-        BEQ     L0FB4
+        BEQ     L0FB4                  ; (defensive check / unreachable?)
 
         LDA     shield_tractor_pressed
-        BEQ     L0FB4
+        BEQ     L0FB4                  ; tractor beam must be active
+
+        ; ------------------------------------------------------------
+        ; Horizontal proximity test.
+        ;
+        ; Computes:
+        ;     current_obj_xpos_INT - player_xpos_INT
+        ;
+        ; Collection succeeds only if the unsigned result is:
+        ;
+        ;     1 <= Δx <= 5
+        ;
+        ; The fuel object therefore has to lie within a narrow
+        ; horizontal region relative to the player's reference point.
+        ;
+        ; The test appears asymmetric in raw coordinates, although
+        ; gameplay suggests sprite-origin offsets make the effective
+        ; pickup region appear almost centred on the fuel canister.
+        ; ------------------------------------------------------------
 
         LDA     current_obj_xpos_INT
         SEC
         SBC     player_xpos_INT
-        BEQ     L0FB4
+        BEQ     L0FB4                  ; reject Δx = 0
 
         CMP     #$06
-        BCS     L0FB4
+        BCS     L0FB4                  ; reject Δx >= 6
+
+        ; ------------------------------------------------------------
+        ; Vertical proximity test.
+        ;
+        ; Computes:
+        ;     current_obj_ypos - player_ypos
+        ;
+        ; Collection succeeds only if:
+        ;
+        ;     0 <= Δy <= 27
+        ;
+        ; Fuel must therefore lie within a limited vertical range
+        ; relative to the player. The coordinate appears to refer to
+        ; the fuel object's stored origin (possibly the sprite top),
+        ; not necessarily its visible centre.
+        ; ------------------------------------------------------------
 
         LDA     current_obj_ypos_INT
         SBC     player_ypos_INT
         TAX
         LDA     current_obj_ypos_EXT
         SBC     player_ypos_INT_HI
-        BNE     L0FB4
+        BNE     L0FB4                  ; reject if high byte differs
 
         CPX     #$1C
-        BCS     L0FB4
+        BCS     L0FB4                  ; reject Δy >= 28
+
+        ; ------------------------------------------------------------
+        ; Fuel collection active this frame.
+        ; ------------------------------------------------------------
 
         LDA     #$01
         STA     collecting_fuel_flag
+
+        ; Increment tractor-beam dwell time on this fuel object.
+        ; Fuel is only fully collected after sufficient consecutive
+        ; tractor-beam contact.
+
         LDX     current_object
         LDY     obj_tractor_counter,X
         INY
         TYA
         STA     obj_tractor_counter,X
+
+        ; Require 26 collection ticks before fuel disappears.
+
         CMP     #$1A
         BCC     L1005
+
+        ; ------------------------------------------------------------
+        ; Fuel fully collected.
+        ; Remove object, award score and play sound.
+        ; ------------------------------------------------------------
 
         LDA     level_obj_flags,X
         AND     #$FD
         STA     level_obj_flags,X
+
         LDA     #$30
         JSR     accumulate_score_A
 
