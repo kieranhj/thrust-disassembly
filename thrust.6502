@@ -1771,12 +1771,24 @@ ORG     NATIVE_ADDR
         ;   - Player is NOT carrying a pod.
         ;   - Object is a fuel canister.
         ;   - Tractor beam button is pressed.
-        ;   - Fuel object is within a small pickup region.
+        ;   - Fuel object is within the tractor-beam pickup region.
         ;
-        ; Note:
-        ; The exact visual meaning of the X/Y tests is not yet fully
-        ; understood because object coordinates and sprite origins may
-        ; not correspond to visible sprite centres.
+        ; Object coordinates represent the TOP-LEFT corner of each 
+        ; object's bounding box 
+        ;
+        ; Fuel canister sprite size:
+        ;     16 pixels wide
+        ;     14 pixels high
+        ;
+        ; Player coordinates are refer to the top-left of
+        ; the ship sprite, which has height and width 16*16 pixels 
+        ; when in its default vertical upward orientation.
+        ;
+        ; The resulting pickup region is slightly asymmetric in object
+        ; coordinates, but when sprite sizes are taken into account it
+        ; corresponds to a pickup area centred approximately over the
+        ; fuel canister, with a slight left bias matching observed
+        ; gameplay.
         ; ------------------------------------------------------------
 
         LDA     pod_attached_flag_1
@@ -1787,27 +1799,37 @@ ORG     NATIVE_ADDR
         BNE     L0FB4                  ; object must be fuel
 
         CMP     #OBJECT_generator
-        BEQ     L0FB4                  ; (defensive check / unreachable?)
+        BEQ     L0FB4                  ; defensive / unreachable check
 
         LDA     shield_tractor_pressed
         BEQ     L0FB4                  ; tractor beam must be active
 
         ; ------------------------------------------------------------
-        ; Horizontal proximity test.
+        ; Horizontal pickup test.
         ;
-        ; Computes:
-        ;     current_obj_xpos_INT - player_xpos_INT
+        ; Compute:
         ;
-        ; Collection succeeds only if the unsigned result is:
+        ;     fuel_x - ship_x
         ;
-        ;     1 <= Δx <= 5
+        ; Continue only if:
         ;
-        ; The fuel object therefore has to lie within a narrow
-        ; horizontal region relative to the player's reference point.
+        ;     1 <= (fuel_x - ship_x) <= 5
         ;
-        ; The test appears asymmetric in raw coordinates, although
-        ; gameplay suggests sprite-origin offsets make the effective
-        ; pickup region appear almost centred on the fuel canister.
+        ; where fuel_x is believed to be the LEFT edge of the fuel
+        ; collision box and ship_x is believed to be the ship origin.
+        ;
+        ; Given a 16-pixel-wide fuel sprite and a 21-pixel-wide ship
+        ; sprite, this corresponds to the ship visually overlapping
+        ; most of the fuel canister.
+        ;
+        ; Expressed in terms of sprite centres (assuming top-left
+        ; origins for both objects):
+        ;
+        ;     -2.5 <= shipCentreX - fuelCentreX <= 1.5
+        ;
+        ; giving a nearly centred pickup region with a slight bias
+        ; towards the left side of the fuel canister, consistent with
+        ; observed gameplay.
         ; ------------------------------------------------------------
 
         LDA     current_obj_xpos_INT
@@ -1819,19 +1841,28 @@ ORG     NATIVE_ADDR
         BCS     L0FB4                  ; reject Δx >= 6
 
         ; ------------------------------------------------------------
-        ; Vertical proximity test.
+        ; Vertical pickup test.
         ;
-        ; Computes:
-        ;     current_obj_ypos - player_ypos
+        ; Compute:
         ;
-        ; Collection succeeds only if:
+        ;     fuel_y - ship_y
         ;
-        ;     0 <= Δy <= 27
+        ; Continue only if:
         ;
-        ; Fuel must therefore lie within a limited vertical range
-        ; relative to the player. The coordinate appears to refer to
-        ; the fuel object's stored origin (possibly the sprite top),
-        ; not necessarily its visible centre.
+        ;     0 <= (fuel_y - ship_y) <= 27
+        ;
+        ; where fuel_y is the TOP of the fuel sprite.
+        ;
+        ; This places the valid collection region mostly ABOVE the
+        ; fuel canister, matching the visual behaviour of the
+        ; downward-pointing tractor beam.
+        ;
+        ; Assuming top-left origins:
+        ;
+        ;     -23.5 <= shipCentreY - fuelCentreY <= 3.5
+        ;
+        ; so the ship may be substantially above the fuel canister
+        ; while still collecting it.
         ; ------------------------------------------------------------
 
         LDA     current_obj_ypos_INT
@@ -1851,9 +1882,9 @@ ORG     NATIVE_ADDR
         LDA     #$01
         STA     collecting_fuel_flag
 
-        ; Increment tractor-beam dwell time on this fuel object.
-        ; Fuel is only fully collected after sufficient consecutive
-        ; tractor-beam contact.
+        ; Increment tractor-beam dwell counter for this fuel canister.
+        ; Continuous tractor-beam contact is required before the fuel
+        ; object is actually collected.
 
         LDX     current_object
         LDY     obj_tractor_counter,X
@@ -1861,14 +1892,14 @@ ORG     NATIVE_ADDR
         TYA
         STA     obj_tractor_counter,X
 
-        ; Require 26 collection ticks before fuel disappears.
+        ; Fuel disappears after 26 collection ticks.
 
         CMP     #$1A
         BCC     L1005
 
         ; ------------------------------------------------------------
         ; Fuel fully collected.
-        ; Remove object, award score and play sound.
+        ; Remove object, award score and play collection sound.
         ; ------------------------------------------------------------
 
         LDA     level_obj_flags,X
