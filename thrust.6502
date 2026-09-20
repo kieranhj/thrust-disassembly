@@ -1522,23 +1522,72 @@ ORG     NATIVE_ADDR
         JMP     destroy_object
 
     .bullet_test_object
+        ; ------------------------------------------------------------
+        ; Player's bullet collision test against current object.
+        ;
+        ; Each object is represented by a simple axis-aligned
+        ; bounding box:
+        ;
+        ;     object_x <= bullet_x < object_x + object_width
+        ;     object_y <= bullet_y < object_y + object_height
+        ;
+        ; This simple rectangular collision detection is used instead of
+        ; pixel perfect collision detection, in this case, of testing
+        ; player bullets against enemy objects.
+        ; Even though the turret guns appear largely as diagonal sprites,
+        ; when sat on the landscape, they do very tightly fit into an 
+        ; AABB rectangle.
+        ; Notes:
+        ; Object positions are treated as the TOP-LEFT corner of the
+        ; object's bounding rectangle. Width and height are looked up
+        ; from per-object-type tables.
+        ; ------------------------------------------------------------
+
         LDX     object_type
+
+        ; Load bounding-box dimensions for this object type.
         LDA     obj_type_width,X
         STA     current_object_width
+
         LDA     obj_type_height,X
         STA     current_object_height
+
+        ; Load explosion and score properties for later.
         LDA     obj_type_explosion_particle,X
         STA     explosion_particle_type
+
         LDA     obj_type_score_value,X
         STA     score_value
+
+        ; Test all four player bullets.
         LDX     #$03
-        
+
     .bullet_test_loop
+
+        ; Skip inactive bullets.
         LDA     particles_lifetime,X
         BEQ     L0F61
 
+        ; Only test normal bullets (type 0).
         LDA     particles_type,X
         BNE     L0F61
+
+        ; --------------------------------------------------------
+        ; Horizontal bounding-box test.
+        ;
+        ; Compute:
+        ;
+        ;     bullet_x - object_x
+        ;
+        ; Reject if:
+        ;
+        ;     bullet_x < object_x
+        ;     bullet_x >= object_x + object_width
+        ;
+        ; therefore:
+        ;
+        ;     0 <= bullet_x - object_x < object_width
+        ; --------------------------------------------------------
 
         SEC
         LDA     particles_xpos_INT,X
@@ -1548,10 +1597,28 @@ ORG     NATIVE_ADDR
         CMP     current_object_width
         BCS     L0F61
 
+        ; --------------------------------------------------------
+        ; Vertical bounding-box test.
+        ;
+        ; Compute:
+        ;
+        ;     bullet_y - object_y
+        ;
+        ; Reject if:
+        ;
+        ;     bullet_y < object_y
+        ;     bullet_y >= object_y + object_height
+        ;
+        ; therefore:
+        ;
+        ;     0 <= bullet_y - object_y < object_height
+        ; --------------------------------------------------------
+
         SEC
         LDA     particles_ypos_INT,X
         SBC     current_obj_ypos_INT
         TAY
+
         LDA     particles_ypos_INT_HI,X
         SBC     current_obj_ypos_EXT
         BNE     L0F61
@@ -1559,10 +1626,18 @@ ORG     NATIVE_ADDR
         CPY     current_object_height
         BCS     L0F61
 
+        ; --------------------------------------------------------
+        ; Bullet hit confirmed.
+        ;
+        ; Clear bullet active flag.
+        ; --------------------------------------------------------
+
         LDA     particles_lifetime,X
         AND     #PARTICLE_flag
         STA     particles_lifetime,X
-        
+
+        ; Process special object types.
+
         LDA     object_type
         CMP     #OBJECT_door_switch_right
         BEQ     handle_door_switch
