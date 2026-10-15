@@ -1,156 +1,64 @@
 # Plan: per-laser endpoint (length + angle) configuration
 
-Currently each laser uses one of four hardcoded `(dx, dy)` pairs from
-`laser_beam_dx_table` / `laser_beam_dy_table` in `thrust.6502`, indexed by
-orientation type. The four orientations give visual variety and pick the
-barrel corner, but the level designer can't change beam length or angle
-per-instance. Goal: store per-instance `(dx, dy)` so each laser's endpoint
-is authored in the editor; the four orientation types remain visual presets.
+**Status:** done (commits `00874b1`, `c9806e9`, `997f831`, `7877046`, `02e1112`, `a852e68`; later moved onto the generic `obj_data` slots).
 
-## Decisions confirmed
+Timed laser turrets (`OBJECT_laser_turret_*`, types `$09..$0C`, behind `_TIMED_LASER`) originally drew their beam with one of four hard-coded `(dx, dy)` pairs from `laser_beam_dx_table` / `laser_beam_dy_table`, picked by orientation. Each laser now carries its own `(dx, dy)`, authored in the editor. The four orientation types still choose the sprite and the barrel corner.
 
-- **Parameterise as `(dx, dy)`** rather than angle + length — matches what the
-  asm needs for `draw_line` and what the editor naturally produces from a
-  drag. No sin/cos lookup required at runtime.
-- **Mismatched orientation + dx/dy is allowed**, e.g. an `$09 up_right` sprite
-  with a beam pointing down-left. Editor lets it through without a warning;
-  trust the level designer.
-- **`gun_aim` keeps its current 4+4 nibble split** (low = phase, high = duty).
-  dx/dy live in their own bytes.
-- **Delete `laser_beam_dx/dy_table` from the asm** once the runtime reads
-  per-instance values. The defaults the editor stamps onto a new laser
-  move into the editor's Python constants.
+## Design
+
+- **`(dx, dy)` rather than angle + length.** This is what `draw_line` needs and what an editor drag produces, so there is no sin/cos lookup at runtime.
+- **Orientation and beam direction are independent.** An `$09 up_right` turret may fire down-left; the editor does not warn.
+- **`gun_aim` (slot 0) keeps its 4+4 nibble split**: low nibble = phase index (× 8 frames), high nibble = duty index (× 4 + 4 frames), period 128 frames.
+- **`laser_beam_dx/dy_table` are deleted** from the asm. The orientation defaults now live only in the editor.
 
 ## Data model
 
-Two new bytes per object slot, signed:
+dx and dy use generic per-object data slots 1 and 2, shared with gravity wells (radius, strength) and bobbing mines:
 
-| Symbol                       | Type            | Range            |
-|------------------------------|-----------------|------------------|
-| `level_N_laser_dx_pixels`    | 8-bit signed    | −128..127 BBC px |
-| `level_N_laser_dy_rows`      | 8-bit signed    | −128..127 rows   |
+| Slot | Array | Meaning for a laser |
+|------|-------|---------------------|
+| 0 | `level_N_obj_data_0` | `gun_aim` (phase / duty) |
+| 1 | `level_N_obj_data_1` | dx, signed, in pixels (4 per character) |
+| 2 | `level_N_obj_data_2` | dy, signed, in pixel rows |
 
-These are parallel to `level_N_obj_pos_X` etc., one byte per object index.
-Non-laser slots ignore them, same as `gun_aim`.
+The per-level base addresses are in `level_obj_data_1_lookup_LO/HI` and `level_obj_data_2_lookup_LO/HI` (`thrust.6502:10970-10988`, in SWRAM). The first implementation used dedicated `level_N_laser_dx_pixels` / `level_N_laser_dy_rows` arrays; the editor still accepts those names on import.
 
-**Defaults for unset entries** (existing levels pre-dating these arrays, or new
-laser placed in editor): the orientation-type's existing direction —
-`(+60, −30)` for `$09`, `(+60, +30)` for `$0A`, `(−60, −30)` for `$0B`,
-`(−60, +30)` for `$0C` — so behaviour matches today's build before the user
-has touched anything.
+Orientation defaults, used for new lasers, for the reset key and for old exports with no dx/dy data:
+
+| Type | dx | dy |
+|------|----|----|
+| `$09` up-right | +60 | −30 |
+| `$0A` down-right | +60 | +30 |
+| `$0B` up-left | −60 | −30 |
+| `$0C` down-left | −60 | +30 |
 
 ## Game changes (`thrust.6502`)
 
-1. Two new SMC sites in `update_one_laser_beam`, modelled on
-   `laser_load_object_type` and `laser_load_gun_aim`:
+1. **SMC loads.** `update_one_laser_beam` (`thrust.6502:11194`) loads slot 1 and slot 2 at `laser_load_dx` / `laser_load_dy` into the scratch bytes `laser_dx_temp` / `laser_dy_temp` (`thrust.6502:10948`). `initialise_level_pointers` patches these sites from the slot lookups inside `IF _TIMED_LASER` (`thrust.6502:7307-7316`).
 
-   ```asm
-   .laser_load_dx
-       LDA level_0_laser_dx_pixels,X        ; **SMC** patched by initialise_level_pointers
-       laser_load_dx_addr_LO = laser_load_dx+1
-       laser_load_dx_addr_HI = laser_load_dx+2
-       STA laser_clip_t_x_max               ; reuse: stash dx (still unused at this point)
+2. **Beam geometry.** `draw_laser_beam_at_obj_screen` (`thrust.6502:11386`):
+   - Start X = `(obj_screen_x + gun_bullet_x_offset[type − $09]) · 4`, in pixels; the beam is skipped if the barrel is at character 64 or beyond. Start Y = `obj_screen_y + 2 · gun_bullet_y_offset[type − $09]`, in pixel rows.
+   - `range_x` = pixels to the screen edge in the dx direction (`255 − start_x` or `start_x`); `range_y` likewise for dy.
+   - If `|dx| ≤ range_x` and `|dy| ≤ range_y`, the end point is just `start + (dx, dy)`.
+   - Otherwise the beam is parameterised by `t_q` in Q0.7 (127 ≈ full length). For each axis that overflows, `laser_divide_q7` computes `(range << 7) / |d|`, a 7-iteration shift-and-subtract; `t_q` is the minimum of those and 127. The end point is `start + hi(2 · d · t_q)` per axis via `multiply_signed_8x8`.
+   - The draw coordinates `draw_line_start_x/y`, `end_x/y` (`$88..$8B`) alias the multiply's zero-page operands, so the clip path keeps the coordinates in `laser_save_*` scratch and copies them back afterwards (fixed in `997f831`).
+   - The beam is XOR-drawn with `draw_line` in the level's object colour (`OBJECT_COLOUR_BYTE`).
 
-   .laser_load_dy
-       LDA level_0_laser_dy_rows,X          ; **SMC**
-       laser_load_dy_addr_LO = laser_load_dy+1
-       laser_load_dy_addr_HI = laser_load_dy+2
-       STA laser_dy_temp                    ; new scratch byte
-   ```
+3. **Erase/redraw.** The screen position and the dx/dy used for the last draw are cached in `obj_laser_prev_screen_x/y` and `obj_laser_prev_dx/dy`, so the erase XORs exactly the pixels that were drawn, even if a switch action (`set_param` / `xor_param`) has rewritten slot 1 or 2 in the meantime. `OBJ_flag_laser_beam_drawn` (bit 2 of `level_obj_flags`) records that a beam is on screen. `OBJ_flag_laser_redraw_pending` (bit 3) forces one erase and redraw after a geometry change. When the beam is on, already drawn and the window has not scrolled, `update_one_laser_beam` returns without redrawing.
 
-2. Two new lookup tables, `level_laser_dx_lookup_LO/HI` and
-   `level_laser_dy_lookup_LO/HI`, mirroring `level_obj_type_lookup_*`. These
-   hold the per-level base addresses of the new arrays.
-
-3. `initialise_level_pointers` patches the new SMC addresses, gated by
-   `IF _TIMED_LASER` (one block, parallel to the existing
-   `laser_load_object_type` patch).
-
-4. `draw_laser_beam_at_obj_screen` drops the `laser_beam_dx_table` /
-   `laser_beam_dy_table` lookups and uses the cached per-instance `dx, dy`
-   instead. The proportional-clipping math stays in spirit but the slope is
-   no longer fixed at 2:1, so:
-   - `t_x_max` = `(255 − start_x) / |dx|` for right-facing, `start_x / |dx|`
-     for left-facing.
-   - `t_y_max` = same pattern for Y.
-   - `t_clip = min(t_x_max, t_y_max, |dy|)` (or `|dx|` — pick whichever axis
-     parameterises t consistently; |dy| was the choice with the fixed slope).
-   - End coords: `start + sign(d) * t_clip * (|dy| / |d_axis|)` etc.
-
-   The divides by |dx| and |dy| are real — no longer power-of-two halving.
-   Use a small unsigned-divide subroutine; the inputs are bounded (|dx|, |dy|
-   ≤ 127). Two divisions per laser per frame (worst case) is well within
-   budget.
-
-5. The orientation type still picks the sprite (via `obj_sprite_data_*_table_*`),
-   the barrel offset (via `gun_bullet_x_offset` / `gun_bullet_y_offset`
-   indexed by `(type − $09)`), and the destructibility branch — all unchanged.
-
-6. Per-level data: extend the editor's level export with the new arrays.
-   Existing test levels: write the type-driven defaults so behaviour after
-   the rebuild matches what the user sees today.
-
-7. **Cleanup:** remove `laser_beam_dx_table` / `laser_beam_dy_table` from
-   `thrust.6502` once nothing references them.
+4. **Unchanged by this work:** the orientation type still selects the sprite (`obj_sprite_data_*_table_*`), the barrel offset (`gun_bullet_x/y_offset`) and the destructibility branch.
 
 ## Editor changes (`tools/level_editor.py`)
 
-1. **Level data model:** add `laser_dx`, `laser_dy` keys to each object dict
-   alongside `gun_aim`. Loader fills them from the new export arrays, or from
-   the orientation-type defaults if missing (back-compat with old exports).
-
-2. **Endpoint drag handle:** when a laser is selected, draw a small filled
-   circle at the beam's end-point (already computed for the preview line)
-   and make it click-draggable. Dragging updates `laser_dx`, `laser_dy` in
-   BBC pixel/row units. Same `grab_dx/grab_dy` offset trick as the recent
-   object-drag fix.
-
-3. **Beam preview:** `_render_laser_beam` reads `obj["laser_dx"]` /
-   `obj["laser_dy"]` instead of the hardcoded `LASER_BEAM_DX_PIXELS` /
-   `LASER_BEAM_DY_ROWS` dicts. The aspect / scaling math stays as-is —
-   the `row_h_px / 2` factor still applies.
-
-4. **Reset-to-default hotkey** (e.g., `\` or backspace) so the designer can
-   always get back to a sensible direction without dragging precisely.
-
-5. **Status bar:** add `dx`, `dy` numerics next to the existing `duty` / `phase`
-   info, e.g. `dx=+60 dy=-30 duty=20f phase=32f`.
-
-6. **Export / import:** emit and parse `level_N_laser_dx_pixels`,
-   `level_N_laser_dy_rows`. Padding for non-laser slots: emit `0, 0` (game
-   ignores them).
-
-## Suggested implementation order
-
-Each step is independently testable — at the end of step 2 the runtime works
-with whatever defaults the level data has; the editor work in 3–4 just lets
-the designer change them.
-
-1. **Asm SMC + lookup tables + `initialise_level_pointers` wiring**, gated
-   by `IF _TIMED_LASER`. Default the level data to today's per-orientation
-   `(dx, dy)` so the build is byte-for-byte unchanged in behaviour.
-2. **Asm: switch `draw_laser_beam_at_obj_screen`** to read per-instance
-   `(dx, dy)` and rework the proportional-clip math for arbitrary slopes.
-   Build, verify visually that lasers still draw correctly.
-3. **Editor: model fields + endpoint drag handle + status bar.** Verify in
-   the editor that drag changes the preview line.
-4. **Editor: export / import the new arrays.** Round-trip test: edit, export,
-   build, run, confirm in-game beam matches editor preview.
-5. **Cleanup:** delete `laser_beam_dx_table` / `laser_beam_dy_table` from
-   `thrust.6502`.
-6. **Update `docs/ideas.md`:** the "Beam direction and length" caveat under
-   Timed laser turrets goes away.
+- **Model:** `laser_dx`, `laser_dy` on each object dict next to `gun_aim`. Export writes them into `level_N_obj_data_1` / `_2`. Import reads them from there, falls back to the legacy arrays, and finally to the orientation defaults (`LASER_BEAM_DX_PIXELS` / `LASER_BEAM_DY_ROWS`).
+- **Endpoint drag handle:** with a laser selected, a dot is drawn at the beam tip; dragging it sets `laser_dx` / `laser_dy` (`_set_laser_endpoint_from_screen`, clamped −128..127).
+- **Preview:** `_laser_beam_screen_coords` draws from the barrel corner (`LASER_BARREL_X_CHARS` / `LASER_BARREL_Y_ROWS`) using the same scale on both axes (`char_w_px / 4` per pixel), so the angle matches the game.
+- **Reset:** `\` restores the selected laser's orientation default.
+- **Properties panel** (`SCHEMA_LASER`): Phase (`[` / `]`), Duty (`,` / `.`), Beam dx and Beam dy (−127..127, Shift step 8).
 
 ## Things to watch out for
 
-- **8-bit signed `dx`/`dy` range** ±127 covers more than a screen but not the
-  full 256-row world Y span. If a designer wants a near-vertical full-screen
-  beam they may need to clamp.
-- **Existing pre-rebuild SSDs** are fine to lose; the canonical non-SWRAM CRC
-  `6389c446` doesn't change since this is all under `_TIMED_LASER` /
-  `_SWRAM_BUILD`.
-- **Per-laser divides** are the only new runtime cost. Cap the implementation
-  on shift-and-subtract (≤ 8 iterations); inputs are bounded.
-- **`level_obj_flags` bit 2** (`OBJ_flag_laser_beam_drawn`) keeps its meaning
-  unchanged. The cached `obj_laser_prev_screen_x/y` machinery is unaffected
-  by the dx/dy change.
+- **Range.** Signed 8-bit dx/dy reach ±127 pixels or rows, more than half the screen but not a full-width beam.
+- **Cost.** A beam that needs clipping costs up to two 7-step divides and two `multiply_signed_8x8` calls, on top of `draw_line`. An unclipped beam needs neither. The fast path skips all of it on frames with no scroll and no state change.
+- **Shared slots.** Slots 1 and 2 mean radius/strength for a gravity well and amplitude/state for a mine. The editor export ORs the laser and well fields into the same byte, relying on the unused pair being 0.
+- **Stale comment.** The header of `draw_laser_beam_at_obj_screen` still mentions the per-orientation table and the hostile-bullet colour; the code uses per-instance dx/dy and `OBJECT_COLOUR_BYTE`.

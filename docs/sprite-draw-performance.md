@@ -2,27 +2,31 @@
 
 ## Overview
 
-Thrust renders four categories of sprite every frame: the **ship** (17 rotation angles + shield), the **pod** (towed payload), **static objects** (guns, fuel, generator, door switches, pod stand), and **particles** (bullets, thrust exhaust, stars, debris). All sprites use XOR (EOR) drawing for flicker-free erase-then-draw animation.
+Thrust draws four kinds of sprite every frame: the **ship** (17 rotation frames, mirrored to 32 angles, plus shield), the **pod** (towed payload) and its **tether line**, **static objects** (guns, fuel, generator, door switches, pod stand; laser turrets and bobbing mines in SWRAM builds), and **particles** (bullets, stars, debris; thrust exhaust in SWRAM builds). All use XOR (EOR) drawing: erase by redrawing at the old position, then draw at the new one. Data formats and routines are described in `sprite-drawing.md`.
 
-**Target platform:** BBC Micro Model B, 2 MHz 6502A. At 50 Hz, one frame = 40,000 cycles (39,936 exact).
+**Target platform:** BBC Micro Model B, 2 MHz 6502. Vsync is 50 Hz (40,000 cycles; 39,936 exact), but the game loop waits until the centisecond clock reaches 3 before resetting it (`draw_player_timed_to_vsync`), so a game frame is at least 3 cs = **60,000 cycles** (~33 frames/s). Percentages below are of the 60,000-cycle game frame. When a frame's work exceeds 60,000 cycles the frame simply takes longer.
+
+Cycle counts use standard NMOS 6502 timings. Unless stated, they assume no page-crossing penalties: `abs,X`/`abs,Y`/`(zp),Y` loads and read-modify sources take +1 when the index crosses a page, and taken branches take +1 when the target is in another page. For the ship and pod the screen operand `EOR (ptr),Y` crosses a page roughly a quarter of the time (Y offsets reach `$78`), adding about 0.3 cycles per pixel on average.
 
 ---
 
 ## Frame Budget Context
 
-The main game loop (`tick_loop`, line 8649) calls rendering routines in this order:
+The main game loop (`tick_loop`, `thrust.6502:9626`) runs these phases in order:
 
 | Phase | Routine | Colour marker |
 |---|---|---|
-| 1 | `draw_player_timed_to_vsync` (ship + pod + tether line) | Red |
-| 2 | `update_and_draw_all_objects` (static sprites) | Blue |
-| 3 | `landscape_draw` (terrain) | Magenta |
-| 4 | `tick_fuel_pickup_draw_beams` (fuel beams) | — |
-| 5 | `particles_update_and_draw` (bullets, exhaust, stars) | Cyan |
+| 1 | `hide_landscape`, `ship_input_rotate`, `midpoint_add_force_vector`, `update_window_and_terrain_tables` | Yellow |
+| 2 | `draw_player_timed_to_vsync` → `draw_ship_line_and_pod` (tether erase, ship + pod, tether draw) | Red (during the draw) |
+| 3 | `update_and_draw_all_objects` (static sprites) | Blue |
+| 4 | `landscape_draw` (terrain) | Magenta |
+| 5 | `tick_fuel_pickup_draw_beams` (fuel beams), `ship_input_fire` | none |
+| 6 | `particles_update_and_draw` (bullets, stars, debris) | Cyan |
+| 7 | pause test, fuel display, sound, thrust force, etc. | Green |
 
-The background colour debug markers (`SET_BG_COL`) in the source allow visual timing on hardware — each colour band on the border shows the time spent in that phase.
+`draw_player_timed_to_vsync` draws the player as soon as User VIA timer 1 has fired (`irq1_timer1_signal`) while it waits for the 3 cs clock, or after the wait if the timer hasn't fired. The `SET_BG_COL` markers (enabled with `_DEBUG_RASTERS`) colour the background during each phase for timing on hardware.
 
-The landscape draw alone consumes ~64% of the frame during typical scrolling (see `landscape-draw-performance.md`). This leaves roughly **14,000 cycles** for all sprite drawing, physics, input, and sound. Understanding the sprite costs is critical for determining whether the frame budget is achievable.
+From `landscape-draw-performance.md`, `landscape_draw` costs ~11,600 cycles (19%) with a static view and ~25,000 cycles (42%) when scrolling typically.
 
 ---
 
@@ -30,17 +34,17 @@ The landscape draw alone consumes ~64% of the frame during typical scrolling (se
 
 ### Data Format
 
-Ship sprites use a single-stream format where each byte < `$80` is a pixel position and each byte >= `$80` is a row advance marker. Values `$81`–`$FE` serve double duty: they signal "end of row" AND encode the first pixel of the next row (bit 7 is masked out during coordinate extraction).
+Single-stream: each byte < `$80` is a pixel position, each byte ≥ `$80` a row advance, and `$81`-`$FE` also give the first pixel of the new row. `$80` is an empty row.
 
-Ship sprite 0 (upright) has 38 pixels across 16 rows. Across all 17 rotation frames, pixel counts range from 38–41 with 13–16 rows.
+Frame 0 (upright) is 38 pixels in 16 rows with 15 row advances and no empty rows. Across the 17 frames: 38-41 pixels, 13-16 non-empty rows, 15-20 row advances of which 0-4 are empty (`$80`). The shield has 44 pixels.
 
-### Plot Routine (`plot_ship_loop`, line 4379)
+### Plot Routine (`plot_ship_loop`, `thrust.6502:4962`)
 
-The ship plotter uses three self-modified `LDA sprite_data,X` instructions, all patched to the same data address. This avoids an extra branch — after a row advance, execution falls directly into the appropriate re-read instruction without needing to reload X.
+Three self-modified `LDA sprite_data,X` instructions are patched to the same address: one in the main loop and one after each kind of row advance, so the row-advance code re-reads the current byte and drops straight back into the pixel decode.
 
 #### Per-Pixel Cycle Count (Draw Mode)
 
-In draw mode, the collision test site is patched to `JMP plot_ship_loop` (3 cycles), bypassing the `AND + BEQ` test.
+In draw mode the collision test site holds `JMP plot_ship_loop`.
 
 ```
 plot_ship_loop:
@@ -51,7 +55,7 @@ plot_ship_loop:
     BMI  row_advance             ; 2  (not taken)
 plot_ship_inner_loop:
     SEC                          ; 2
-    CMP  #$FF                    ; 2  (self-modified: CMP keeps A, clears carry)
+    CMP  #$FF                    ; 2  (self-modified: CMP #$FF or EOR #$1F)
     ADC  plot_ship_pixel_column  ; 3  (ZP)
     TAY                          ; 2
     AND  #$3C                    ; 2
@@ -60,25 +64,25 @@ plot_ship_inner_loop:
     TYA                          ; 2
     AND  #$03                    ; 2
     TAX                          ; 2
-    LDA  pixel_masks_1,X         ; 4  (abs,X — self-modified)
+    LDA  pixel_masks_3,X         ; 4  (abs,X — self-modified)
     LDY  plot_ship_at_y_offset   ; 3  (ZP)
     EOR  (plot_ship_at_ptr),Y    ; 5  (ind,Y)
     STA  (plot_ship_at_ptr),Y    ; 6  (ind,Y)
-    JMP  plot_ship_loop          ; 3  (self-modified: replaces AND+BEQ)
+    JMP  plot_ship_loop          ; 3  (patched over AND abs,X)
                                  ; ----
-                                 ; 59 cycles per pixel
+                                 ; 57 cycles per pixel
 ```
 
 #### Per-Pixel Cycle Count (Erase Mode, No Collision)
 
-In erase mode, the collision test site is `AND pixel_masks_1,X` + `BEQ plot_ship_loop`:
+In erase mode the site holds `AND pixel_masks_1,X`, followed by `BEQ plot_ship_loop`:
 
 ```
     ...same as above through STA...
     AND  pixel_masks_1,X         ; 4  (abs,X)
     BEQ  plot_ship_loop          ; 3  (taken = no collision)
                                  ; ----
-                                 ; 63 cycles per pixel
+                                 ; 61 cycles per pixel
 ```
 
 #### Per-Pixel Cycle Count (Erase Mode, Collision Detected)
@@ -87,42 +91,40 @@ In erase mode, the collision test site is `AND pixel_masks_1,X` + `BEQ plot_ship
     AND  pixel_masks_1,X         ; 4
     BEQ  (not taken)             ; 2
     LDA  #$FF                    ; 2
-    STA  collision_detected      ; 3  (ZP)
+    STA  plot_ship_collision_detected ; 3  (ZP)
     JMP  plot_ship_loop          ; 3
                                  ; ----
-                                 ; 70 cycles per pixel
+                                 ; 68 cycles per pixel
 ```
 
 #### Row Advance (Within Character Cell)
 
-When a byte >= `$80` is encountered, the code advances to the next pixel row:
+A byte ≥ `$80` takes the BMI and re-reads the byte after moving down a row:
 
 ```
-    LDA  sprite_data,X           ; 4  (abs,X)
-    BMI  L1F1F                   ; 3  (taken)
+    BMI  L1F1F                   ; 3  (taken: +1 over the pixel path)
     CMP  #$FF                    ; 2
-    BEQ  return                  ; 2  (not taken)
-    LDX  plot_ship_index         ; 3  (ZP — reload X)
+    BEQ  plot_ship_return        ; 2  (not taken)
+    LDX  plot_ship_index         ; 3  (ZP — redundant, X is unchanged)
     DEC  plot_ship_row_counter   ; 5  (ZP)
-    BMI  char_crossing           ; 2  (not taken)
+    BMI  L1F35                   ; 2  (not taken)
     INC  plot_ship_at_ptr        ; 5  (ZP)
     LDA  sprite_data,X           ; 4  (abs,X — re-read same byte)
     CMP  #$80                    ; 2
-    BNE  inner_loop              ; 3  (taken: pixel data)
+    BNE  plot_ship_inner_loop    ; 3  (taken: pixel data)
                                  ; ----
-                                 ; 35 cycles overhead
+                                 ; +29 cycles on top of the 57/61-cycle pixel
 ```
 
-If the re-read value is `$80` (empty row, no pixel), the branch falls through to `JMP plot_ship_loop` (+3 cycles, total 38), and the pixel plot is skipped entirely.
+For an empty row (`$80`) the BNE falls through to `JMP plot_ship_loop`: the whole iteration costs 45 cycles and plots nothing.
 
 #### Row Advance (Character Row Crossing)
 
-When `plot_ship_row_counter` goes negative (every 8th pixel row):
+When `plot_ship_row_counter` goes negative (every 8th row), `INC plot_ship_at_ptr` (5) is replaced by:
 
 ```
-    DEC  plot_ship_row_counter   ; 5  (ZP)
-    BMI  char_crossing           ; 3  (taken)
-    LDA  #$07                   ; 2
+    BMI  L1F35                   ; 3  (taken: +1)
+    LDA  #$07                    ; 2
     STA  plot_ship_row_counter   ; 3  (ZP)
     CLC                          ; 2
     LDA  plot_ship_at_ptr        ; 3  (ZP)
@@ -131,72 +133,47 @@ When `plot_ship_row_counter` goes negative (every 8th pixel row):
     LDA  plot_ship_at_ptr+1      ; 3  (ZP)
     ADC  #$02                    ; 2
     STA  plot_ship_at_ptr+1      ; 3  (ZP)
-    LDA  sprite_data,X           ; 4  (re-read)
-    CMP  #$80                    ; 2
-    BNE  inner_loop              ; 3
                                  ; ----
-                                 ; 55 cycles overhead (vs 35 normal)
+                                 ; +19 cycles over a normal row advance
 ```
 
-The offset `$0239` = `$0240 - 7` accounts for the 7 bytes traversed within the character cell before the boundary.
+`$0239` = `$0240 - 7` steps from the bottom row of one cell to the top row of the cell below. A 16-row sprite crosses one or two boundaries depending on its starting row (two in 7 cases out of 8).
 
-### Setup (`plot_ship_or_sheild`, line 4323)
+The end marker (`$FF`) costs 26 cycles including the RTS.
 
-Called once per draw or erase pass:
+### Setup (`plot_ship_or_shield`, `thrust.6502:4906`)
 
-```
-Setup sprite data pointers:
-    6 x STA (self-mod addrs)     ; 24  (abs stores)
-    2 x LDA table,Y              ; 8   (abs,Y)
-    TAY + initial LDAs           ; ~10
-                                 ; ----
-                                 ; ~42 cycles
-
-Opcode/operand patching:
-    LDA + STA (mask addr LO)     ; 6
-    LDA + STA (mask addr HI)     ; 6
-    LDA + STA (opcode)           ; 6
-    LDA + STA (operand)          ; 6
-                                 ; ----
-                                 ; ~24 cycles
-
-Row counter init:
-    LDA + AND + EOR + STA        ; 10
-    LDX #$00                     ; 2
-    JMP plot_ship_start          ; 3
-                                 ; ----
-                                 ; 15 cycles
-
-Total setup: ~81 cycles
-```
-
-### Screen Address Calculation (line 4261)
+Called once per pass:
 
 ```
-Y contribution (shift chain):
-    LDA + STA (clear)            ; 5
-    LDA + CLC + AND              ; 6
-    5 x ROR/ROR                  ; 10
-    2 x ADC + STA                ; 10
-                                 ; ----
-                                 ; ~31 cycles
-
-X contribution (table lookup):
-    LDY + 2x(LDA + ADC + STA)   ; 17
-                                 ; ----
-                                 ; ~17 cycles
-
-Pixel row offset:
-    LDA + AND + ADC + STA        ; 10
-                                 ; ----
-                                 ; ~10 cycles
-
-Total screen addr calc: ~58 cycles
+Opcode/mask patching (4 x LDA # + STA abs)  ; 24
+LDA plot_ship_sprite_number + BPL           ; 6
+CMP #$11 + BCC (unmirrored)                 ; 5
+TAY + 2 x LDA table,Y + 6 x STA abs         ; 34
+Row counter init (LDA/AND/EOR/STA)          ; 10
+LDX #$00 + JMP plot_ship_start              ; 5
+                                            ; ----
+                                            ; ~84 cycles (~104 mirrored, +6 for the JSR)
 ```
+
+### Screen Address Calculation (`thrust.6502:4827`)
+
+Done once per frame, before the draw pass; the erase pass reuses `old_plot_ship_at_ptr`.
+
+```
+Pixel column (PLA, 3 x ROL, AND, 2 x STA)   ; 18
+Y contribution (shift chain + ADC $38)      ; 46
+X contribution (mult_by_8 lookup, 16-bit)   ; 26
+Pixel row offset (AND #7 + ADC + 2 x STA)   ; 14
+                                            ; ----
+                                            ; ~104 cycles
+```
+
+Before this, `update_shield_tractor_draw_ship_and_pod` spends ~120 cycles turning the midpoint and tether delta into the ship's window position (more for the shield, which adds an angle offset).
 
 ### Collision Test Mode Copy
 
-The erase/draw orchestration copies 3 bytes to switch between AND-mode and JMP-mode:
+Each pass starts by copying the 3-byte AND or JMP template into the test site:
 
 ```
     LDX  #$02                    ; 2
@@ -211,22 +188,21 @@ The erase/draw orchestration copies 3 bytes to switch between AND-mode and JMP-m
 
 ### Per-Frame Ship Cost
 
-Using ship sprite 0 (38 pixels, 16 rows, ~2 character row crossings):
+Ship frame 0 (38 pixels, 15 row advances, 2 character row crossings):
 
 | Component | Erase | Draw |
 |---|---|---|
 | Mode copy (3 bytes) | 43 | 43 |
-| Setup (`plot_ship_or_sheild`) | 81 | 81 |
-| Screen address calculation | 58 | 58 |
-| Old state restore/save | ~30 | ~30 |
-| Pixel plotting (38 pixels) | 38 × 63 = 2,394 | 38 × 59 = 2,242 |
-| Row advances (14 normal) | 14 × 35 = 490 | 14 × 35 = 490 |
-| Row advances (2 char crossing) | 2 × 55 = 110 | 2 × 55 = 110 |
-| **Subtotal** | **3,206** | **3,054** |
+| Old state restore / position calc | 24 | ~120 |
+| Screen address calculation | — | 104 |
+| Setup (`plot_ship_or_shield` + JSR) | 90 | 90 |
+| Pixel plotting (38 pixels) | 38 × 61 = 2,318 | 38 × 57 = 2,166 |
+| Row advances (15) | 15 × 29 = 435 | 15 × 29 = 435 |
+| Char row crossings (2) | 2 × 19 = 38 | 2 × 19 = 38 |
+| End marker | 26 | 26 |
+| **Subtotal** | **~2,970** | **~3,020** |
 
-**Total ship per frame: ~6,260 cycles (15.7% of frame)**
-
-For mirrored sprites (angles 9–16), the `EOR #$1F` opcode is used instead of `CMP #$FF`. This EOR flips the pixel X coordinate for horizontal mirroring. The cycle count is identical — the opcode `EOR imm` takes the same 2 cycles as `CMP imm`.
+**Total ship per frame: ~6,000 cycles (10% of the game frame).** Frames with empty rows add 45 cycles per `$80`; mirrored angles add ~20 cycles of setup per pass. Under mirroring `EOR #$1F` replaces `CMP #$FF`, both 2 cycles.
 
 ---
 
@@ -234,38 +210,34 @@ For mirrored sprites (angles 9–16), the `EOR #$1F` opcode is used instead of `
 
 ### Data Format
 
-The pod uses the identical single-stream format as the ship. It has a single sprite (no rotation), stored at `pod_sprite_data` (line 2263). The pod sprite has 28 pixels across 11 rows.
+Same single-stream format. One frame, `pod_sprite_data` (`thrust.6502:2650`): 28 pixels in 11 rows, 15 row advances of which 4 are empty leading rows.
 
-### Plot Routine (`plot_pod_sprite`, line 5074)
+### Plot Routine (`plot_pod_sprite`, `thrust.6502:5664`)
 
-The pod plotter is a near-clone of the ship plotter, with the same three self-modified `LDA` instructions for the data stream and the same pixel plotting logic. The key differences:
+A near-clone of the ship plotter with three self-modified `LDA` instructions. Differences that affect timing:
 
-- Includes inline screen address calculation (ship does this externally)
-- Calls `set_plot_pod_sprite_mask_addr` (JSR, ~40 cycles) twice — once for setup, once before the plot loop
-- The collision flag STA address is self-modified (`plot_pod_sprite_addr_zp`), allowing the same routine to write to different collision flag ZP addresses
-
-#### Per-Pixel Cost
-
-Identical to ship: **59 cycles** (draw), **63 cycles** (erase, no collision).
+- The decode uses `CLC` (2) instead of `SEC` + `CMP #$FF` (4), but `STA pod_temp` / `LDA pod_temp` (3+3) instead of `TAY`/`TYA` (2+2): the pixel still costs **57 cycles** (draw) and **61** (erase, no collision)
+- No row counter: a row advance tests `(ptr AND 7) == 7` (LDA/AND/CMP/BEQ, 9 cycles) instead of `LDX`/`DEC`/`BMI` (10). A row advance with a pixel costs +28; a crossing adds 14 more; an empty row costs 42
+- The screen address is computed inline in the draw pass (~100 cycles); the erase pass enters at `L21B6` with the saved address
+- `set_plot_pod_sprite_mask_addr` (28 cycles including JSR/RTS) runs twice in the draw pass (the first call is redundant) and once in the erase pass
+- The collision flag store address is self-modified (`plot_pod_sprite_addr_zp`); it is always set to `plot_pod_collision_detected`
 
 ### Per-Frame Pod Cost
 
-Only drawn when the pod is attached (tether active). With 28 pixels and 11 rows (~1 char crossing):
+The pod is erased if it was drawn last frame and drawn only while tethered.
 
 | Component | Erase | Draw |
 |---|---|---|
-| Mode copy + orchestration | ~80 | ~80 |
-| Screen address calculation | ~58 | ~58 |
-| `set_plot_pod_sprite_mask_addr` (×2) | ~80 | ~80 |
-| Sprite data pointer setup | ~30 | ~30 |
-| Pixel plotting (28 pixels) | 28 × 63 = 1,764 | 28 × 59 = 1,652 |
-| Row advances (10 normal) | 10 × 35 = 350 | 10 × 35 = 350 |
-| Row advances (1 char crossing) | 55 | 55 |
-| **Subtotal** | **2,417** | **2,305** |
+| Orchestration, mode copy, position calc | ~100 | ~150 |
+| Screen address + mask setup (`plot_pod_sprite`) | — | ~130 |
+| `L21B6` setup (mask + 6 pointer stores) | 63 | 63 |
+| Pixel plotting (28 pixels) | 28 × 61 = 1,708 | 28 × 57 = 1,596 |
+| Row advances with pixel (11) | 11 × 28 = 308 | 11 × 28 = 308 |
+| Empty rows (4) | 4 × 42 = 168 | 4 × 42 = 168 |
+| Char row crossings (~2) + end marker | ~54 | ~54 |
+| **Subtotal** | **~2,400** | **~2,470** |
 
-**Total pod per frame: ~4,722 cycles (11.8% of frame)**
-
-This cost is zero when the pod is not attached.
+**Total pod per frame: ~4,900 cycles (8%).** Zero when no pod is attached.
 
 ---
 
@@ -273,7 +245,7 @@ This cost is zero when the pod is not attached.
 
 ### Algorithm
 
-The tether line uses a Bresenham line-drawing algorithm (`draw_line`, line 7135). It plots individual pixels using XOR with `pixel_masks_1` (colour 3). The line is drawn twice per frame: once to erase the old line, once to draw the new line.
+The tether is a Bresenham line (`draw_line`, `thrust.6502:8269`) plotted with XOR in colour 3 (`pixel_masks_1` ANDed with `plot_line_pixels_byte` = `level_line_pixels_byte` = `$FF`). `draw_ship_line_and_pod` erases the old line before the ship and pod are drawn and draws the new one after. The same routine draws the fuel pickup beams (with `plot_line_pixels_byte` = `$0F`).
 
 ### Per-Pixel Cost
 
@@ -288,38 +260,36 @@ plot_line_pixels:
     DEX                          ; 2
     BNE  plot_line_bresenham_1   ; 3  (taken)
                                  ; ----
-                                 ; 28 cycles per pixel (plot only)
+                                 ; 28 cycles (plot only)
 
 plot_line_bresenham_1:
-    JSR  step_function           ; 6 + ~20 (self-modified JSR target)
+    JSR  step_function           ; 6 + body + RTS (self-modified target)
+                                 ;   pixels_ptr_add_7: 13 + 6, ~22 avg with byte wrap
+                                 ;   pixels_ptr_increment: 12 + 6, ~21 avg with row wrap
     LDA  bresenham_error         ; 3  (ZP)
     CLC                          ; 2
     ADC  draw_line_delta_minor   ; 3  (ZP)
-    BCS  bresenham_2             ; 2  (not taken, common case)
+    BCS  plot_line_bresenham_2   ; 2  (not taken)
     CMP  draw_line_delta_major   ; 3  (ZP)
-    BCS  bresenham_2             ; 2  (not taken)
+    BCS  plot_line_bresenham_2   ; 2  (not taken)
     STA  bresenham_error         ; 3  (ZP)
                                  ; ----
-                                 ; ~44 cycles (minor step only)
-                                 ; ~60 cycles (major + minor step)
+                                 ; ~67-74 cycles per pixel, major step only
 ```
 
-Typical per-pixel (mixed stepping): **~50 cycles**.
+A pixel that also steps the minor axis goes through `plot_line_bresenham_2` (SBC, STA, a second JSR to a step function, JMP), adding ~30 cycles. A typical tether pixel is **~85 cycles**.
 
 ### Per-Frame Tether Cost
 
-The tether line length depends on the distance between ship and pod. Typical range: 20–60 pixels.
+Line length depends on the tether angle. Assume ~40 pixels.
 
 | Component | Erase | Draw |
 |---|---|---|
-| Setup (`draw_line` + Bresenham init) | ~120 | ~120 |
-| Screen address calc (`calculate_pixels_ptr`) | ~50 | ~50 |
-| Per-pixel plotting (40 pixels typical) | 40 × 50 = 2,000 | 40 × 50 = 2,000 |
-| **Subtotal** | **~2,170** | **~2,170** |
+| `draw_line` setup incl. `calculate_pixels_ptr` | ~250 | ~250 |
+| Per-pixel plotting (40 pixels) | 40 × 85 = 3,400 | 40 × 85 = 3,400 |
+| **Subtotal** | **~3,650** | **~3,650** |
 
-**Total tether per frame: ~4,340 cycles (10.9% of frame)**
-
-Only drawn when the pod is attached. Combined with the pod sprite, attaching the tether adds ~9,000 cycles to each frame.
+**Total tether per frame: ~7,300 cycles (12%).** Only drawn while the pod is attached; with the pod sprite, towing adds ~12,000 cycles per frame.
 
 ---
 
@@ -327,15 +297,15 @@ Only drawn when the pod is attached. Combined with the pod sprite, attaching the
 
 ### Data Format
 
-Objects use a two-stream format. Stream A provides byte offsets (Y register values for indirect addressing) and row-advance markers. Stream B provides complete MODE 1 screen bytes — 4 pixels per byte with 2-bit colour depth — that are XOR'd onto the screen. This is more efficient than per-pixel plotting for wider, denser sprites.
+Two streams: stream A gives byte offsets (Y for `(ptr),Y`) and row-advance markers; stream B gives whole MODE 1 screen bytes to XOR. One EOR writes up to 4 pixels.
 
-### Plot Routine (`plot_static_sprite`, line 2064)
+### Plot Routine (`plot_static_sprite`, `thrust.6502:2449`)
 
 ```
 Setup:
     LDX  current_object          ; 3  (ZP)
     LDA  level_obj_flags,X       ; 4  (abs,X)
-    ORA  #$01                    ; 2
+    ORA  #OBJ_flag_drawn         ; 2
     STA  level_obj_flags,X       ; 5  (abs,X)
     LDA  plot_sprite_at_ptr      ; 3  (ZP)
     AND  #$07                    ; 2
@@ -348,7 +318,7 @@ Setup:
                                  ; 34 cycles setup
 ```
 
-#### Per-Byte-Plot (No Row Advance)
+#### Per-Byte Plot (No Row Advance)
 
 ```
 L11DB:
@@ -360,16 +330,16 @@ L11D3:
     STA  (plot_sprite_at_ptr),Y  ; 6  (ind,Y)
     INX                          ; 2
                                  ; ----
-                                 ; 24 cycles per byte-plot
+                                 ; 24 cycles per byte
 ```
 
-Each byte-plot writes 4 pixels in a single EOR, making this **6 cycles per pixel** — vastly more efficient than the per-pixel ship format (59 cycles per pixel).
+At 4 pixels per byte that is 6 cycles per pixel, but many object bytes carry only one or two set pixels (e.g. `$88`, `$11`), so 8-24 cycles per pixel is more realistic. Either way it is far cheaper than the ship's 57.
 
 #### Row Advance (Within Character Cell)
 
 ```
     LDY  sprite_data_A,X         ; 4
-    BPL  ...                     ; 2  (not taken: bit 7 set)
+    BPL  L11D3                   ; 2  (not taken: bit 7 set)
     CPY  #$FF                    ; 2
     BNE  L11B3                   ; 3  (taken: not end marker)
 L11B3:
@@ -385,87 +355,92 @@ L11D3:
     STA  (ptr),Y                 ; 6
     INX                          ; 2
                                  ; ----
-                                 ; 47 cycles (row advance + first byte-plot)
+                                 ; 47 cycles (row advance + first byte)
 ```
 
 #### Row Advance (Character Row Crossing)
 
-When `sprite_rows_to_boundary` reaches zero:
+When `sprite_rows_to_boundary` reaches zero, the `BNE` falls through to:
 
 ```
-    DEC  sprite_rows_to_boundary ; 5
-    BNE  ...                     ; 2  (not taken)
+    BNE  L11D3                   ; 2  (not taken)
     DEC  plot_sprite_at_ptr      ; 5  (ZP — undo the INC)
     LDA  plot_sprite_at_ptr      ; 3  (ZP)
-    ADC  #$39                    ; 2
+    ADC  #$39                    ; 2  (carry clear from CPY #$FF)
     STA  plot_sprite_at_ptr      ; 3  (ZP)
     LDA  plot_sprite_at_ptr+1    ; 3  (ZP)
     ADC  #$02                    ; 2
     STA  plot_sprite_at_ptr+1    ; 3  (ZP)
-    LDA  #$08                   ; 2
+    LDA  #$08                    ; 2
     STA  sprite_rows_to_boundary ; 3  (ZP)
-    TYA                          ; 2
+    TYA                          ; 2  (redundant: Y is already masked)
     AND  #$7F                    ; 2
     TAY                          ; 2
                                  ; ----
-                                 ; 78 cycles (crossing + first byte-plot)
+                                 ; 78 cycles (crossing + first byte)
 ```
 
 ### Object Sprite Sizes
 
-| Object | Stream A+B bytes | Rows | Char crossings | Typical cost |
-|---|---|---|---|---|
-| Gun (any direction) | 33 | ~14 | 1 | ~1,000 |
-| Fuel | 44 | ~14 | 1 | ~1,300 |
-| Pod stand | 37 | ~19 | 2 | ~1,200 |
-| Generator | 43 | ~18 | 2 | ~1,350 |
-| Door switch (either) | 16 | ~14 | 1 | ~600 |
+Cost per plot pass = 34 setup + 24 per byte + 23 per row advance + 31 per crossing + ~16 end/RTS (+6 JSR), assuming ~2 crossings (1 for the teleporter).
 
-### Object Update Loop (`update_and_draw_all_objects`, line 1438)
+| Object | Byte plots | Row advances | Cost per pass |
+|---|---|---|---|
+| Gun (`$00`-`$03`) | 33 | 13-14 | ~1,200 |
+| Fuel (`$04`) | 44 | 13 | ~1,460 |
+| Pod stand (`$05`) | 37 (44 in SWRAM data) | 19 | ~1,430 (~1,600) |
+| Generator (`$06`) | 43 | 17 | ~1,530 |
+| Door switch (`$07`, `$08`) | 16 | 14 | ~810 |
+| Laser turret (`$09`-`$0C`, SWRAM) | 33 | 13-14 | ~1,200 |
+| Bobbing mine (`$0E`, `$0F`, SWRAM) | 20 | 12 | ~860 |
 
-For each object, the loop:
-1. Reads object type and gun parameters (self-modified addresses) — ~25 cycles
-2. Sets up 4 self-modified sprite data pointers — ~32 cycles
-3. Calls `object_visibility_test` — ~40 cycles (cull) or ~80 cycles (visible)
-4. If visible and position changed: erase at old position + draw at new position = 2 × plot cost
-5. If visible and unchanged: skip both draws — ~10 cycles
-6. Gun firing logic, bullet collision, fuel pickup — ~50-200 cycles (conditional)
+Gravity wells (`$0D`), teleporters (`$10`) and doors (`$11`) skip the sprite code. Laser turret beams are drawn separately (`update_one_laser_beam`) and are not counted here.
 
-#### Per-Object Overhead (Visible, Position Unchanged)
+### Object Update Loop (`update_and_draw_all_objects`, `thrust.6502:1645`)
 
-The most common case during static camera:
+Each object in the list (10-20 in the shipped levels; 20 slots, 32 in SWRAM builds) costs, before any plotting:
+
+1. Type load, gun-aim unpack, pod stand / generator flag updates: ~60 cycles (+~40 in SWRAM builds for the gravity well / mine / teleporter / door type checks)
+2. Four sprite-pointer patches (`LDA abs,Y` + `STA abs`): 32 cycles
+3. `object_visibility_test`: ~60 cycles when culled on Y, ~100 when culled on X, ~200 when visible (including `calculate_object_plot_addr`)
+4. Dirty-rect compare against `level_obj_plot_at_ptr_LO/HI`: ~40 cycles
+5. Bullet test against the 4 player-bullet slots: ~100 cycles when all are empty. This runs for every live object, on screen or not
+6. Tractor, gun-fire and generator-debris checks and plot tail: ~40-60 cycles (more when a gun fires)
+
+#### Per-Object Cost (Visible, Position Unchanged)
+
+The dirty-rect check skips both erase and redraw:
+
 ```
-    Type/param load + pointer setup + visibility test + position compare + skip
-    ~25 + 32 + 80 + 20 + 10 = ~167 cycles
+    ~60 + 32 + 200 + 40 + 100 + 60 = ~500 cycles
 ```
 
 #### Per-Object Cost (Visible, Position Changed)
 
 ```
-    Overhead + screen addr calc + erase + draw
-    ~167 + 58 + ~1,100 + ~1,100 = ~2,425 cycles (typical gun/fuel)
+    Overhead + erase + draw + bookkeeping
+    ~500 + ~1,200 + ~1,200 + ~50 = ~3,000 cycles (gun; ~3,500 for fuel or generator)
 ```
 
-#### Per-Object Cost (Off-Screen, Culled)
+#### Per-Object Cost (Off-Screen)
 
 ```
-    Type/param load + pointer setup + visibility fail
-    ~25 + 32 + 40 = ~97 cycles
+    ~60 + 32 + ~80 + 100 + ~60 + ~20 = ~350 cycles
 ```
+
+A destroyed object (alive flag clear, not drawn) costs ~120 cycles.
 
 ### Per-Frame Object Cost
 
-A typical level has 15–25 objects. During scrolling, perhaps 8–12 are visible. Of those, most have changed position (the viewport moved).
+Object screen positions change whenever the window moves (scrolling is in software), so during scrolling every visible object is erased and redrawn. Assume a level with 18 objects:
 
-| Scenario | Visible | Off-screen | Cost |
-|---|---|---|---|
-| Static view | 10 unchanged, 12 culled | — | 10×167 + 12×97 = **2,834** |
-| Slow scroll | 10 redrawn, 12 culled | — | 10×2,425 + 12×97 = **25,414** |
-| Fast scroll | 8 redrawn, 14 culled | — | 8×2,425 + 14×97 = **20,758** |
+| Scenario | Objects | Cost |
+|---|---|---|
+| Static view | 8 visible unchanged, 10 off-screen | 8×500 + 10×350 = **~7,600** |
+| Scrolling | 8 visible redrawn, 10 off-screen | 8×3,000 + 10×350 = **~27,500** |
+| Fast scroll | 6 visible redrawn, 12 off-screen | 6×3,000 + 12×350 = **~22,200** |
 
-**Typical object cost per frame: ~2,800–25,400 cycles (7–64% of frame)**
-
-Objects are the second most expensive rendering system after the landscape during scrolling.
+**Object cost per frame: ~7,600-27,500 cycles (13-46%).** While scrolling, objects cost about as much as the landscape.
 
 ---
 
@@ -473,23 +448,23 @@ Objects are the second most expensive rendering system after the landscape durin
 
 ### Data Format
 
-Particles are not traditional sprites — each particle is a single byte-pair (2 adjacent screen bytes) XOR'd at a computed screen address. The particle system supports up to 32 simultaneous particles (`PARTICLE_table_max = $1F`).
+Each particle is one screen byte pattern written to two consecutive bytes, i.e. the same byte on two adjacent scanlines (row 7 is clamped to row 6 so both stay in one cell). `particles_xpos_byte_mask` (`$CC`, `$66`, `$66`, `$33`) makes it 2 pixels wide, so a particle is 2×2 pixels. The pool has 32 slots (`PARTICLE_table_max = $1F`).
 
 ### Per-Particle Cycle Count
 
-#### Erase Phase (particle has `PARTICLE_flag` set in lifetime)
+#### Erase Phase (`PARTICLE_flag` set in lifetime)
 
 ```
     LDA  particles_lifetime,X    ; 4  (abs,X)
     BPL  skip                    ; 2  (not taken)
-    AND  #($FF EOR flag)         ; 2
+    AND  #($FF EOR PARTICLE_flag); 2
     STA  particles_lifetime,X    ; 5  (abs,X)
-    LDA  scraddr_LO,X           ; 4  (abs,X)
+    LDA  particles_scraddr_LO,X  ; 4  (abs,X)
     STA  particle_write_ptr      ; 3  (ZP)
-    LDA  scraddr_HI,X           ; 4  (abs,X)
+    LDA  particles_scraddr_HI,X  ; 4  (abs,X)
     STA  particle_write_ptr+1    ; 3  (ZP)
     LDY  #$00                    ; 2
-    LDA  pixels_byte,X           ; 4  (abs,X)
+    LDA  particles_pixels_byte,X ; 4  (abs,X)
     PHA                          ; 3
     EOR  (particle_write_ptr),Y  ; 5
     STA  (particle_write_ptr),Y  ; 6
@@ -498,100 +473,103 @@ Particles are not traditional sprites — each particle is a single byte-pair (2
     EOR  (particle_write_ptr),Y  ; 5
     STA  (particle_write_ptr),Y  ; 6
                                  ; ----
-                                 ; ~64 cycles (erase 2 bytes = 8 pixels)
+                                 ; 64 cycles
 ```
+
+Each slot also pays 5 cycles to clear `particle_collision_flag` first.
 
 #### Update Phase (physics + visibility)
 
 ```
-    Lifetime decrement             ; ~10
-    test_particle_X_close_to_player ; 6 (JSR) + ~30 (body) = ~36
-    particle_move_index_X          ; 6 (JSR) + ~40 (position update) = ~46
-    Pixel byte lookup              ; ~10
-    Visibility test (Y range)      ; ~20
-    Visibility test (terrain)      ; ~15
-    Visibility test (X range)      ; ~15
-                                   ; ----
-                                   ; ~152 cycles
+    Lifetime decrement                         ; 15
+    test_particle_X_close_to_player            ; 21 (JSR, type test, RTS) for non-bullets
+    particle_move_index_X                      ; ~94 (JSR, two 16-bit adds, Y high byte)
+    Pixel byte lookup + JMP                    ; 14
+    Visibility test (Y range)                  ; 21
+    Visibility test (terrain walls)            ; 26
+    Visibility test (X range, screen rows)     ; 37
+                                               ; ----
+                                               ; ~228 cycles
 ```
+
+Stars are stationary but still go through `particle_move_index_X`.
 
 #### Draw Phase (visible particle)
 
 ```
-    Screen address calculation     ; ~58 (same shift chain as ship)
-    Pixel row clamping             ; ~10
-    Pixel column lookup            ; ~15
-    EOR byte 1                     ; 5+6 = 11
-    Collision test byte 1          ; ~10
-    EOR byte 2                     ; 5+6 = 11
-    Collision test byte 2          ; ~10
-    Store screen address           ; ~8
-                                   ; ----
-                                   ; ~133 cycles
+    Set PARTICLE_flag                          ; 11
+    Screen address (shift chain + mult_by_8)   ; 74
+    Row clamp + low-byte add + save            ; 23
+    Pixel column and mask lookup               ; 40
+    EOR byte 1 + collision test                ; 20
+    EOR byte 2 + collision test                ; 26
+    Collision flag test + loop                 ; 16
+                                               ; ----
+                                               ; ~210 cycles
 ```
 
 ### Per-Frame Particle Cost
 
-Typical active particles: 5–15 (stars + thrust exhaust + occasional bullets).
+Typical active particles: 5-15 (stars and occasional bullets, plus exhaust in SWRAM builds).
 
 | Component | Per particle | 10 particles |
 |---|---|---|
-| Erase (if drawn last frame) | 64 | 640 |
-| Update (physics + visibility) | 152 | 1,520 |
-| Draw (if visible) | 133 | 1,330 |
-| Inactive slot (lifetime = 0) | ~8 | varies |
-| **Total per active particle** | **~349** | **3,490** |
+| Erase (if drawn last frame) | 69 | 690 |
+| Update (physics + visibility) | 228 | 2,280 |
+| Draw (if visible) | 210 | 2,100 |
+| **Total per active particle** | **~507** | **~5,070** |
+| Inactive slot (lifetime = 0) | 26 | 22 × 26 = 572 |
 
-Plus `particles_generate_stars` overhead: ~200 cycles.
+Plus `particles_generate_stars` (every other frame, near the top of the level): ~100 cycles.
 
-**Typical particle cost per frame: ~3,700 cycles (9.3% of frame)**
-
-Worst case (32 active particles): ~11,400 cycles.
+**Typical particle cost per frame: ~5,700 cycles (9.5%) for 10 active particles.** 15 active: ~8,200. All 32 active: ~16,000.
 
 ---
 
 ## Complete Frame Budget
 
+"Physics + input + sound" is a rough estimate, not a measured figure.
+
 ### Scenario 1: Static View, No Pod
 
-| System | Cycles | % of frame |
+| System | Cycles | % of 60,000 |
 |---|---|---|
-| Landscape draw | 11,580 | 29.0% |
-| Ship (erase + draw) | 6,260 | 15.7% |
-| Objects (10 visible, unchanged) | 2,834 | 7.1% |
-| Particles (10 active) | 3,700 | 9.3% |
-| Physics + input + sound | ~3,000 | 7.5% |
-| **Total** | **~27,374** | **68.4%** |
+| Landscape draw | 11,600 | 19% |
+| Ship (erase + draw) | 6,000 | 10% |
+| Objects (8 visible unchanged, 10 off-screen) | 7,600 | 13% |
+| Particles (10 active) | 5,700 | 10% |
+| Physics + input + sound | ~3,000 | 5% |
+| **Total** | **~33,900** | **57%** |
 
-Comfortable headroom — **~12,600 cycles spare**.
+About 26,000 cycles to spare; the loop waits out the rest of the 3 cs.
 
-### Scenario 2: Slow Scroll, Pod Attached
+### Scenario 2: Scrolling, Pod Attached
 
-| System | Cycles | % of frame |
+| System | Cycles | % of 60,000 |
 |---|---|---|
-| Landscape draw | 25,460 | 63.7% |
-| Ship (erase + draw) | 6,260 | 15.7% |
-| Pod (erase + draw) | 4,722 | 11.8% |
-| Tether line (erase + draw) | 4,340 | 10.9% |
-| Objects (10 visible, redrawn) | 25,414 | 63.5% |
-| Particles (10 active) | 3,700 | 9.3% |
-| Physics + input + sound | ~3,000 | 7.5% |
-| **Total** | **~72,896** | **182.2%** |
+| Landscape draw | 25,000 | 42% |
+| Ship (erase + draw) | 6,000 | 10% |
+| Pod (erase + draw) | 4,900 | 8% |
+| Tether line (erase + draw) | 7,300 | 12% |
+| Objects (8 visible redrawn) | 27,500 | 46% |
+| Particles (10 active) | 5,700 | 10% |
+| Physics + input + sound | ~3,000 | 5% |
+| **Total** | **~79,400** | **132%** |
 
-**This exceeds the frame budget by 82%.** The game relies on the system clock timing in `draw_player_timed_to_vsync` — it waits for at least 3 centisecond ticks (0.03 seconds) per frame, which is 60,000 cycles at 2 MHz. This gives roughly 1.5 frames worth of time. Additionally, the game naturally runs at a variable frame rate; scrolling with the pod attached and many visible objects will drop to ~25 fps.
+The frame takes ~4 cs instead of 3, so the game drops to ~25 frames/s.
 
-### Scenario 3: Fast Scroll, No Pod, Many Objects
+### Scenario 3: Fast Scroll, No Pod
 
-| System | Cycles | % of frame |
+| System | Cycles | % of 60,000 |
 |---|---|---|
-| Landscape draw | 42,000 | 105.0% |
-| Ship (erase + draw) | 6,260 | 15.7% |
-| Objects (8 redrawn) | 20,758 | 51.9% |
-| Particles (15 active) | 5,400 | 13.5% |
-| Physics + input + sound | ~3,000 | 7.5% |
-| **Total** | **~77,418** | **193.6%** |
+| Landscape draw | ~40,000 | 67% |
+| Ship (erase + draw) | 6,000 | 10% |
+| Objects (6 redrawn) | 22,200 | 37% |
+| Particles (15 active) | 8,200 | 14% |
+| Physics + input + sound | ~3,000 | 5% |
+| **Total** | **~79,400** | **132%** |
 
-Again well over budget — the game visibly drops frames during fast scrolling.
+Again ~4 cs per frame.
 
 ---
 
@@ -599,84 +577,54 @@ Again well over budget — the game visibly drops frames during fast scrolling.
 
 ### Cycles per Pixel by System
 
-| System | Cycles/pixel | Pixels/byte | Effective cycles/pixel |
+| System | Cycles per write | Pixels per write | Cycles/pixel |
 |---|---|---|---|
-| Ship (draw) | 59 | 1 | 59.0 |
-| Ship (erase) | 63 | 1 | 63.0 |
-| Pod (draw) | 59 | 1 | 59.0 |
-| Tether line | ~50 | 1 | ~50.0 |
-| Object sprite | 24 | 4 | **6.0** |
-| Particle | ~22 | 8 | **~2.8** |
-| Landscape | 27 | 4 | **6.75** |
+| Ship (draw) | 57 | 1 | 57 |
+| Ship (erase) | 61 | 1 | 61 |
+| Ship, `_FAST_SPRITES` (draw / erase) | 33 / 37 | 1 | 33 / 37 |
+| Pod (draw) | 57 | 1 | 57 |
+| Tether line | ~85 | 1 | ~85 |
+| Object sprite | 24 | 1-4 | 6-24 |
+| Particle (erase + draw only) | ~280 | 4 | ~70 |
+| Landscape | 27 | 4 | 6.75 |
 
-The ship and pod are **10× more expensive per pixel** than objects. This is the fundamental cost of per-pixel single-colour wireframe drawing vs. per-byte multi-colour block drawing.
+The ship and pod cost several times more per pixel than objects: per-pixel single-colour drawing with run-time coordinate decode versus pre-built screen bytes.
 
 ### Time Breakdown by Operation (Ship Pixel)
 
-Of the 59 cycles per ship pixel (draw mode):
+Of the 57 cycles per ship pixel (draw mode):
 
 | Operation | Cycles | % |
 |---|---|---|
-| Loop overhead (LDX/INX/STX) | 8 | 13.6% |
-| Data fetch (LDA sprite_data,X + BMI) | 6 | 10.2% |
-| X coordinate decode (SEC→TAX) | 19 | 32.2% |
-| Mask table lookup | 4 | 6.8% |
-| Screen offset load (LDY) | 3 | 5.1% |
-| Screen read-modify-write (EOR+STA indirect) | 11 | 18.6% |
-| Collision skip (JMP) | 3 | 5.1% |
-| **Total overhead** | **48** | **81.4%** |
-| **Actual screen write** | **11** | **18.6%** |
+| Loop overhead (LDX/INX/STX) | 8 | 14% |
+| Data fetch (LDA sprite_data,X + BMI) | 6 | 11% |
+| X coordinate decode (SEC → TAX) | 22 | 39% |
+| Mask table lookup | 4 | 7% |
+| Screen offset load (LDY) | 3 | 5% |
+| Screen read-modify-write (EOR + STA indirect) | 11 | 19% |
+| Collision skip (JMP) | 3 | 5% |
+| **Total overhead** | **46** | **81%** |
+| **Actual screen write** | **11** | **19%** |
 
-Only 18.6% of the per-pixel time is spent on actual screen writes. The coordinate decoding (32.2%) and loop management (13.6%) dominate.
+Coordinate decode and loop management dominate.
 
 ---
 
 ## Optimisation Suggestions
 
-### 1. Pre-decode Ship Sprite Coordinates (Save ~19 cycles/pixel)
+Status as of the current source: #4 is implemented behind `_FAST_SPRITES` (off by default); #6 and #8 were already in the original code; the rest are not implemented.
 
-**Current cost:** 19 cycles of X coordinate decoding per pixel (SEC, CMP/EOR, ADC, TAY, AND, ROL, STA, TYA, AND, TAX).
+### 1. Pre-decode Ship Sprite Coordinates
 
-**Proposal:** Pre-process sprite data at level load into a decoded format where each byte directly provides:
-- The screen byte offset (what `plot_ship_at_y_offset` becomes)
-- The pixel mask table index
+**Status:** superseded by #4.
 
-Store these as two parallel arrays per sprite frame (like the object two-stream format). The plot loop becomes:
+Pre-processing the sprite data into `(offset, mask)` pairs removes the 22-cycle decode and gives a 24-cycle loop like the objects', but the pixel column is added at run time, so the decoded data either needs 4 variants (one per pixel column) or keeps the ADC/AND/ROL decode, which saves little. With 4 variants this becomes #4.
 
-```asm
-    LDY  sprite_offset,X         ; 4  (abs,X)
-    LDA  sprite_mask,X           ; 4  (abs,X)
-    EOR  (plot_ship_at_ptr),Y    ; 5
-    STA  (plot_ship_at_ptr),Y    ; 6
-    INX                          ; 2
-    BNE  loop                    ; 3
-                                 ; ----
-                                 ; 24 cycles per pixel
-```
+### 2. Unroll the Ship Plot Loop (Save ~6 cycles/pixel)
 
-**Savings:** 35 cycles/pixel. For 38 pixels × 2 passes = **2,660 cycles/frame** (~6.7% of frame).
+**Status:** not implemented.
 
-**Trade-off:** Each decoded sprite needs 2 bytes per pixel × ~40 pixels × 17 frames = ~1,360 bytes of pre-decoded data. The original compressed data is ~650 bytes total. However, this eliminates the need for the sub-character pixel column (`plot_ship_pixel_column`) addition, so the pre-decoded data would need 4 variants (one per pixel column offset 0–3), requiring ~5,440 bytes. This may be prohibitive.
-
-**Alternative:** Pre-decode only the `(offset, mask_index)` pair without baking in the pixel column. Keep the pixel column addition but skip the bitfield extraction:
-
-```asm
-    LDA  sprite_offset_raw,X    ; 4  (abs,X)
-    ADC  pixel_column            ; 3  (ZP)
-    TAY                          ; 2
-    AND  #$3C                    ; 2
-    ROL  A                       ; 2
-    STA  y_offset                ; 3  (ZP)
-    ; ...still need mask lookup from low 2 bits...
-```
-
-This doesn't actually save much because the coordinate encoding IS the bottleneck, and it can't be simplified without pre-baking the pixel column.
-
-### 2. Unroll the Ship Plot Loop (Save ~8 cycles/pixel)
-
-**Current cost:** 8 cycles loop overhead (LDX/INX/STX at `plot_ship_loop`).
-
-**Proposal:** Unroll the pixel loop body N times, using a computed jump to enter at the right offset for the pixel count. The sprite data stream pointer advances implicitly via INX within the unrolled body. Row advance checks (BMI) remain inline.
+Unrolling the pixel loop keeps the index in X (still `INX` per pixel) and drops the `LDX`/`STX plot_ship_index` pair (6 cycles):
 
 ```asm
     ; Unrolled body (repeated N times):
@@ -686,118 +634,98 @@ This doesn't actually save much because the coordinate encoding IS the bottlenec
     ; ...pixel plot (no LDX/STX)...
 ```
 
-**Savings:** 8 cycles/pixel × 38 pixels = 304 cycles per pass, 608 per frame. Modest but free in terms of data size.
+The decode clobbers X (`TAX` for the mask index), so the body would also need to keep the index elsewhere (or use Y for the mask), which eats into the saving. **Savings:** up to 6 × 38 × 2 ≈ 450 cycles/frame. **Cost:** ~40 bytes per unrolled copy, plus a row-advance target per copy.
 
-**Trade-off:** Code size increases by ~40 bytes per unrolled iteration. Unrolling 8 iterations adds ~320 bytes. The row advance handling becomes more complex (each unrolled slot needs its own row advance target that falls through correctly).
+### 3. Replace Indirect Addressing with Self-Modified Absolute
 
-### 3. Replace Indirect Addressing with Self-Modified Absolute (Save ~2 cycles/pixel)
+**Status:** not implemented; probably not worth it.
 
-**Current:** `EOR (plot_ship_at_ptr),Y` (5 cycles) + `STA (plot_ship_at_ptr),Y` (6 cycles) = 11 cycles.
+`EOR abs,Y` (4) + `STA abs,Y` (5) instead of `EOR (ptr),Y` (5) + `STA (ptr),Y` (6) saves 2 cycles per pixel, but every row advance must then update two operand addresses (`INC abs` × 2 = 12 cycles instead of `INC zp` = 5) and crossings must patch both high bytes. For frame 0 (38 pixels, 15 row advances) that is 76 saved against ~105 added: a net loss.
 
-**Proposal:** Self-modify the address operand and use absolute indexed:
+### 4. Two-Stream Ship Format (implemented: `_FAST_SPRITES`)
 
-```asm
-    EOR  screen_addr,Y           ; 4  (self-modified abs,Y)
-    STA  screen_addr,Y           ; 5  (self-modified abs,Y)
-                                 ; ----
-                                 ; 9 cycles (saves 2)
-```
+**Status:** implemented in commit 4ed77ea, behind `_FAST_SPRITES = (_SWRAM_BUILD AND FALSE)`, so not in the default build. `tools/generate_ship_streams.py` writes `tools/output/ship_twostream_data.asm` from the original sprite data: 32 angles × 4 pixel columns, plus 4 shield variants, ~12KB including pointer tables, assembled into sideways RAM bank `SPRITE_BANK` (5) and saved as the `Sprites` file. The plotter is the second `plot_ship_or_shield` / `plot_ship_ts_loop` (`thrust.6502:13918`).
 
-**Savings:** 2 cycles/pixel × 38 × 2 = 152 cycles/frame.
-
-**Trade-off:** Two more self-modified code sites. The address must be updated on every row advance. Low risk, low reward.
-
-### 4. Combined Two-Stream Ship Format (Save ~35 cycles/pixel)
-
-**Proposal:** Convert ship sprites to the same two-stream format used by objects. Pre-compute a stream A (screen byte offsets including row advances) and stream B (pixel mask bytes). The plot loop becomes identical to `plot_static_sprite`:
+The loop is longer than the object loop because stream B holds both-bitplane masks (needed for the collision test) and is reduced to the ship colour at run time:
 
 ```asm
-    LDY  stream_A,X              ; 4
-    BPL  plot                    ; 3
-    ; row advance...
-.plot:
-    LDA  stream_B,X              ; 4
-    EOR  (ptr),Y                 ; 5
-    STA  (ptr),Y                 ; 6
+plot_ship_ts_loop:
     INX                          ; 2
+    LDY  stream_A,X              ; 4  (self-modified)
+    BPL  plot_ship_ts_pixel      ; 3
+plot_ship_ts_pixel:
+    LDA  stream_B,X              ; 4  (self-modified)
+    STA  ship_ts_mask_temp       ; 4  (absolute)
+    AND  #$0F                    ; 2  (self-modified: $0F ship, $FF shield)
+    EOR  (plot_ship_at_ptr),Y    ; 5
+    STA  (plot_ship_at_ptr),Y    ; 6
+    JMP  plot_ship_ts_loop       ; 3  (erase: AND ship_ts_mask_temp + BEQ = 4+3)
                                  ; ----
-                                 ; 24 cycles per pixel (same as objects)
+                                 ; 33 cycles draw, 37 erase
 ```
 
-**Savings:** 35 cycles/pixel × 38 × 2 = **2,660 cycles/frame**.
+A row advance adds 24 cycles (crossing +16 more). Empty rows are stored as a `$80` entry with a `$00` mask, so they cost a full (no-op) plot. For frame 0 one pass costs ~1,670 (draw) / ~1,820 (erase) against ~2,670 / ~2,820, saving **~2,000 cycles per frame** (3% of the game frame), less ~50 cycles of `SET_RAM_BANK` switching. Setup is ~71 cycles.
 
-**Trade-off:** Loses the per-pixel-column flexibility — the stream B mask bytes would need to be pre-computed for each of the 4 possible sub-character pixel columns. This means 4 copies of each sprite's B stream: 4 × ~40 bytes × 17 frames = ~2,720 bytes. Stream A is shared across all pixel columns (same offsets), adding ~40 × 17 = 680 bytes. Total: ~3,400 bytes vs ~650 bytes original.
+Mirroring and the pixel column are baked into the data. The generator mirrors with `(x EOR $1F)`, but the original decode adds 1 for mirrored angles (carry set from the `SEC`), so mirrored angles may be one pixel left of the original in this build; this has not been checked in an emulator.
 
-However, this approach also eliminates the need for the pixel mask table lookup, the coordinate decoding, and the loop overhead in one stroke. **The ship would plot at the same speed as objects.**
+### 5. Shared Ship/Pod Plot Routine
 
-The collision detection would need to be modified — instead of per-pixel AND-masking, the erase pass would AND the screen byte with the mask before EOR and check for residue. This is actually simpler and costs the same ~4 cycles.
+**Status:** not implemented. The pod still uses `plot_pod_sprite`; the generator emits `pod_ts_*` streams but nothing references them.
 
-**This is the highest-impact single change for sprite performance.**
+With the two-stream plotter the pod could use the same loop (4 pixel-column variants of a 28-pixel sprite, ~250 bytes) and `plot_pod_sprite` (~200 bytes of code) could go. This saves ~1,600 cycles/frame while towing, at the same per-pixel rate as #4.
 
-### 5. Shared Ship/Pod Plot Routine (Save ~200 bytes code)
+### 6. Skip Unchanged Objects
 
-The pod plotter is a near-exact copy of the ship plotter. If the ship is converted to the two-stream format (suggestion 4), both ship and pod can share `plot_static_sprite`. The pod already has only one frame, so the data expansion is minimal (~28 bytes × 4 pixel columns = 112 bytes for stream B, + 28 bytes for stream A = ~140 bytes).
+**Status:** already in the original code. `update_and_draw_all_objects` compares the new plot address from `object_visibility_test` with `level_obj_plot_at_ptr_LO/HI` and skips both erase and redraw when it is unchanged and the object is alive. During scrolling every visible object's address changes, so nothing is saved then; reusing the old pixels would need a hardware or copy-based scroll.
 
-**Savings:** ~200 bytes of code (the entire pod plot routine). No speed improvement, but code size reduction frees space for the expanded sprite data.
+### 7. Inline the Particle Hostile-Bullet Check (Save ~12 cycles/particle)
 
-### 6. Skip Unchanged Objects Early (Save ~2,000 cycles/frame when scrolling)
+**Status:** not implemented.
 
-**Current:** When scrolling, every visible object is erased and redrawn even if the object hasn't moved in world space — only the viewport has moved, so the screen position changes.
-
-**Proposal:** Instead of comparing old and new screen addresses (which always differ during scrolling), add a "viewport delta" fast path:
-
-1. At frame start, compute `viewport_delta_x` and `viewport_delta_y`
-2. For each visible object, if the object hasn't moved in world space, apply the viewport delta to the old screen address to get the new address
-3. If the delta is zero (no scrolling), skip the erase/draw entirely
-
-This doesn't reduce the per-object cost when scrolling is happening, but it avoids the full erase+draw cycle when the camera is stationary — which is the common case when the player is hovering near an object.
-
-### 7. Reduce Particle Physics Overhead (Save ~5 cycles/particle)
-
-**Current:** `test_particle_X_close_to_player` is called for every particle via JSR (6 cycles) even though it only applies to hostile bullets (type 3). Most particles are stars or exhaust.
-
-**Proposal:** Inline the type check before the JSR:
+`test_particle_X_close_to_player` is called for every live particle but only acts on hostile bullets (type 3). For other particles the call costs 21 cycles (JSR, LDA, CMP, BNE, RTS). Testing the type inline costs 9:
 
 ```asm
     LDA  particles_type,X        ; 4
     CMP  #PARTICLE_type_hostile_bullet ; 2
     BNE  skip_proximity          ; 3 (taken for non-bullets)
-    JSR  test_particle_X_close_to_player ; 6 + body
+    JSR  test_particle_X_close_to_player
 .skip_proximity:
 ```
 
-**Savings:** ~30 cycles per non-bullet particle (avoids JSR+RTS + body of proximity test). For 10 non-bullet particles: ~300 cycles/frame.
+**Savings:** ~12 cycles per non-bullet particle, ~120 cycles/frame for 10 particles.
 
-### 8. Object Visibility Early-Out on Y (Save ~10 cycles/object when off-screen)
+### 8. Object Visibility Early-Out on Y
 
-The object visibility test (`object_visibility_test`) checks both Y and X range. Y range failures are slightly more expensive because of the `EXT` byte comparison. Adding an early exit after the Y range check (before computing X) saves the X range calculation cycles for objects that are vertically off-screen.
-
-The current code already does this to some degree, but the flow could be tightened.
+**Status:** already in the original code. `object_visibility_test` returns as soon as the Y high byte or Y range fails, before computing X.
 
 ### 9. Batch Object Sprite Data Pointer Setup (Save ~16 cycles/object)
 
-**Current:** 4 separate `LDA table,Y` + `STA self_mod_addr` sequences = 4 × (4+4) = 32 cycles.
+**Status:** not implemented.
 
-**Proposal:** Use a pair of 16-bit pointer copies instead, or restructure the sprite data tables so that A and B streams for each type are at a fixed offset from each other, requiring only 2 pointer setups instead of 4.
+The update loop patches four operand bytes per object (4 × (4+4) = 32 cycles) for every object, including destroyed and off-screen ones. Placing each type's B stream at a fixed offset from its A stream would halve this, or the patching could move after the alive and visibility checks. **Savings:** ~16 cycles per object, ~300 cycles/frame for 18 objects.
 
-**Savings:** ~16 cycles per object × 22 objects = ~352 cycles/frame. Marginal.
+### Other Small Inefficiencies
+
+- The bullet test (~100 cycles) runs for every live object, including off-screen ones. Skipping it when no player bullet is active would save ~1,000-1,500 cycles per frame in a typical level
+- `plot_ship_loop` reloads X (`LDX plot_ship_index`) on row advance although X is unchanged: 3 cycles per row advance
+- `plot_pod_sprite` calls `set_plot_pod_sprite_mask_addr` twice: 28 cycles per draw
+- `plot_static_sprite` repeats `TYA`/`AND #$7F`/`TAY` on a character-row crossing: 6 cycles per crossing
 
 ---
 
 ## Summary of Optimisation Opportunities
 
-| # | Optimisation | Cycles saved/frame | Code size impact | Complexity |
+| # | Optimisation | Cycles saved/frame | Size impact | Status |
 |---|---|---|---|---|
-| 4 | Two-stream ship format | ~2,660 | +2,750 bytes data | High |
-| 1 | Pre-decoded coordinates | ~2,660 | +700–5,400 bytes | Medium |
-| 2 | Unrolled ship plot loop | ~608 | +320 bytes | Medium |
-| 5 | Shared ship/pod routine | ~0 (code size only) | −200 bytes code | Low |
-| 7 | Inline particle type check | ~300 | −10 bytes | Low |
-| 3 | Self-modified absolute EOR | ~152 | +10 bytes | Low |
-| 6 | Skip unchanged objects | ~2,000 (static only) | +30 bytes | Medium |
-| 9 | Batch pointer setup | ~352 | +20 bytes | Low |
-| 8 | Object Y early-out | ~220 | +5 bytes | Low |
+| 4 | Two-stream ship format | ~2,000 | ~12KB data (SWRAM bank 5) | Implemented (`_FAST_SPRITES`, off) |
+| 5 | Pod on the two-stream plotter | ~1,600 (towing only) | ~250 bytes data, −200 bytes code | Not implemented |
+| — | Skip bullet test with no live player bullets | ~1,000-1,500 | ~10 bytes | Not implemented |
+| 2 | Unrolled ship plot loop | up to ~450 | ~320 bytes | Not implemented |
+| 9 | Batch / defer object pointer setup | ~300 | ~20 bytes | Not implemented |
+| 7 | Inline particle type check | ~120 | ~7 bytes | Not implemented |
+| 3 | Self-modified absolute EOR | net loss | +10 bytes | Not worth it |
+| 1 | Pre-decoded coordinates | — | — | Superseded by #4 |
+| 6 | Skip unchanged objects | — | — | Already in original |
+| 8 | Object Y early-out | — | — | Already in original |
 
-The single highest-impact change is converting ship sprites to the two-stream object format (#4). This would reduce the ship from **59 cycles/pixel to 24 cycles/pixel** — a 2.5× speedup in the most expensive per-pixel operation — at the cost of ~2,750 bytes of pre-computed sprite data. Combined with sharing the plot routine with the pod (#5), the total sprite rendering cost drops from ~15,300 cycles (ship + pod + tether) to ~8,500 cycles, saving roughly **17% of the frame budget**.
-
-For the game's actual bottleneck (the landscape draw at 64% of frame), see `landscape-draw-performance.md` — reducing sprite costs widens the headroom available for landscape rendering during scrolling.
+The two-stream ship plotter cuts the ship from 57 to 33 cycles per pixel and saves ~2,000 cycles per frame; putting the pod on it as well would save another ~1,600 while towing. The tether line (~7,300) and especially object redraws during scrolling (~22,000-27,500) cost more than the ship and pod together, so they are the larger targets after the landscape (see `landscape-draw-performance.md`).

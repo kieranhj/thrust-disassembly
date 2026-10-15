@@ -1,110 +1,84 @@
 # Plan: gravity-well debris visualisation
 
-**Status: done.** Implemented across `thrust.6502` (emit gate + `well_emit_debris_particle`) and editor (pixel-square diamond). Repulsors spawn at the centre and fly outward; pull spawns at the perimeter and falls inward.
+**Status:** done (commits `893f0cd`, `9462ac2`). The emitter is `well_emit_debris_particle` (`thrust.6502:11888`), called from the emit gate in `apply_gravity_wells_to_force`. The teleporter (`_TELEPORTER`) reuses the same routine in repulsor mode for its pad fountain.
+
+The gravity well (see [plan-gravity-well.md](plan-gravity-well.md)) has no sprite, because a plotted sprite would be lethal through ship-vs-pixel collision. Its position and extent are shown instead by short-lived, non-lethal debris particles: a pull well draws debris in from its perimeter to its centre, a repulsor throws debris out from its centre to its perimeter.
 
 Polish items left for later:
-- **Randomise particle directions further.** Currently the 8 fixed diamond vertices give a visibly octagonal spawn ring. Adding a small random angular jitter (or going to 16/32 directions) would dissolve the ring into a noisier cloud.
-- **Better approximate the well centre vs ship rest position.** The ship settles slightly off the plotted well centre because the pull-equation comparison uses `midpoint_*` (ship+pod centre of mass when tethered). The visualised centre is the well's true `obj_pos`. Aligning the two without breaking tethered-pod physics needs more thought.
+- **More spawn directions.** The 8 fixed points on the diamond give a visibly 8-spoked pattern. A small random jitter along each edge, or more directions, would turn it into a cloud.
+- **Well centre vs ship resting point.** The pull targets `midpoint_*` (the ship+pod centre of mass when tethered), so the ship settles slightly off the debris centre, which is the well's true `obj_pos`. Aligning them without breaking tethered-pod physics needs more thought.
 
-The gravity well is invisible in-game because giving it a sprite makes it lethal on collision. Visualise its position and field by spawning short-lived, non-lethal debris particles that drift inward toward the well centre — a "matter falling into a black hole" feel that also implicitly shows the radius.
+## Design
 
-## Decisions confirmed
+- **Reuses `PARTICLE_type_debris` (`$01`).** Only `PARTICLE_type_hostile_bullet` is checked in `test_particle_X_close_to_player` (`thrust.6502:6722`), so debris never kills the ship, and the existing particle update/draw path plots it. No new particle type.
+- **Emission is driven by the well walk**, not a separate per-frame pass. It runs inside `apply_gravity_wells_to_force`, so it shares the gravity tick gate.
+- **Always on.** There is no "ship in range" test; the debris marks where wells are even when the ship is far away. A disabled well (`OBJ_flag_disabled`) or one with radius 0 emits nothing.
+- **Pull** (`strength ≥ 0`): spawn on the perimeter, fly to the centre.
+- **Push** (`strength < 0`): spawn at the centre, fly out to the perimeter.
+- **Lifetime equals travel time**, so particles expire as they arrive.
+- **Gated by `_GRAVITY_WELL`**; the non-SWRAM CRC `6389c446` is unaffected.
 
-- **Reuse `PARTICLE_type_debris` (`$01`)** — already non-lethal to the ship (only `PARTICLE_type_hostile_bullet` is checked in `test_particle_X_close_to_player` at `thrust.6502:6517`), and the existing particle update/draw path renders it for free. Don't define a new particle type.
-- **Spawn cadence is well-driven, not frame-driven.** Hook into `apply_gravity_wells_to_force` (already a per-tick walk over wells) and gate by `level_tick_counter` so each well emits at most once every N ticks. Avoids burning the 32-slot particle pool.
-- **No "ship inside radius" gate** — always-on emission, so the debris functions as a position marker even when the ship is far away. The user explicitly wants to see where wells are.
-- **Spawn at the radius perimeter, velocity toward centre.** Looks like material being sucked in. Particle lifetime is sized so it reaches the centre as it expires — natural fade-in/out.
-- **Repulsors invert the direction.** When `strength < 0` the particle spawns at the centre and flies outward to the radius. Same emitter, just sign-flipped velocity.
-- **No new asm scratch state per well.** Whatever the spawn function needs lives in the existing well scratch slots or local registers.
-- **Gated by `_GRAVITY_WELL`.** Non-SWRAM CRC `6389c446` stays anchored.
+## Particle maths
 
-## Particle math
+The perimeter is the same pixel-square diamond as the pull region (`2·|dx| + |dy| = radius`). Directions come from two 8-entry Q0.7 tables (`well_dir_dx_factor` / `well_dir_dy_factor`, `thrust.6502:11635`), giving the 4 vertices and the 4 edge midpoints:
 
-For a well at world `(WX, WY)` with radius `R`:
+| dir | X factor | Y factor | offset (X, Y) |
+|-----|----------|----------|---------------|
+| 0 | `$3F` | `$00` | (r/2, 0) |
+| 1 | `$1F` | `$3F` | (r/4, r/2) |
+| 2 | `$00` | `$7F` | (0, r) |
+| 3 | `$E1` | `$3F` | (−r/4, r/2) |
+| 4 | `$C1` | `$00` | (−r/2, 0) |
+| 5 | `$E1` | `$C1` | (−r/4, −r/2) |
+| 6 | `$00` | `$81` | (0, −r) |
+| 7 | `$1F` | `$C1` | (r/4, −r/2) |
 
-1. Pick a random angle `θ ∈ [0, 32)` using the existing 32-step angle system (`angle_to_x_*` / `angle_to_y_*` lookup tables).
-2. **Spawn position** = `(WX, WY) + R * (sin θ, -cos θ)` — i.e. on the perimeter. Use the same lookups the gun-fire code uses.
-3. **Velocity** = `-(spawn_pos - centre) / lifetime_frames` ≈ `-step_per_frame * (sin θ, -cos θ)`. Magnitude = `R / lifetime`.
-4. **Lifetime** = a small fixed value (e.g. 24 frames). Long enough to be visible; short enough that the pool doesn't fill.
-5. **Sign flip for repulsors:** if `strength < 0`, swap step 2 with `centre`, step 3 with `+(perimeter - centre)/lifetime`. Same magnitude, opposite direction.
+The X factors are half the Y factors because a world X unit is twice the on-screen size of a world Y unit.
 
-The angle lookup tables already give us a unit vector per angle. Multiply by `R` to get the offset to the perimeter; multiply by `R / lifetime` to get the per-frame velocity. Both multiplies are by the same per-well constant — pre-compute once per emit.
+1. `dir = rnd AND 7`.
+2. `offset = hi(2 · factor[dir] · radius)` per axis (`multiply_signed_8x8`, then `ASL`/`ROL` to undo the Q0.7 scaling).
+3. Spawn position: pull → `obj_pos + offset` (X wraps at 8 bits; Y offset is sign-extended into `particles_ypos_INT_HI`); push → `obj_pos` itself.
+4. Velocity per axis, as Q8.8 in `particles_d{x,y}_INT/FRAC`: pull → `−offset · 16 / 256 = −offset/16`; push → `+offset/16`. Computed with a signed multiply by `$10`.
+5. `particles_type = PARTICLE_type_debris`; `particles_lifetime = (old AND PARTICLE_flag) OR WELL_DEBRIS_LIFETIME`.
 
-The 32-angle system means perimeter samples are octagonal, not perfectly circular. Visually fine — particles chase the field, not the ring outline.
+`WELL_DEBRIS_LIFETIME = $10` (16 frames). Lifetime decrements once per game frame, so after 16 frames the particle has moved exactly `offset` and expires at the centre (pull) or on the perimeter (push). Using a power of two turns the divide into the multiply-by-16 above.
 
 ## Spawn cadence
 
-- Each well emits one particle per spawn tick.
-- Spawn ticks: gate on `level_tick_counter AND #SPAWN_MASK`. With `SPAWN_MASK = $07` that's one emit every 8 ticks per well.
-- Per-well jitter: AND the tick counter with `$07` and compare against `(current_object AND $07)`, so wells in different slots fire on different ticks. Avoids all wells emitting on the same frame and clumping.
-- Worst case: 8 wells × 1 emit per 8 ticks = 1 per tick = ~16/sec. Lifetime 24 frames ≈ 1 sec. Steady-state ~16 particles. Fits the 32-slot pool with headroom.
+The gate in `apply_gravity_wells_to_force` (`thrust.6502:11717-11729`):
 
-## Asm changes (`thrust.6502`)
+```asm
+        LDA     level_tick_counter
+        EOR     current_object
+        AND     #$01
+        BNE     well_emit_skip
+        JSR     well_emit_debris_particle
+    .well_emit_skip
+```
 
-1. **Constant near the laser/well section:**
-   ```asm
-   IF _GRAVITY_WELL
-   WELL_DEBRIS_LIFETIME = $18                    ; 24 ticks
-   WELL_DEBRIS_SPAWN_MASK = $07                  ; emit every 8 ticks per well
-   ENDIF
-   ```
+The walk only runs on gravity ticks (`level_tick_counter AND $0F` in {0, 3, 5, 8, B, D}). An earlier `AND #$07` stagger never fired for most slots, because `tick AND 7` on those ticks is only ever 0, 3 or 5. The parity stagger means adjacent slots fire on different ticks, but it is uneven:
 
-2. **Inside `apply_gravity_wells_to_force`**, after the radius/strength load and before (or in parallel with) the pull math, run a "should this well emit a particle this frame?" gate. If yes, call a new `well_emit_debris_particle` subroutine:
+- even-numbered object slots emit on ticks 0 and 8: 2 particles per 16 frames (about 4 a second at ~33Hz);
+- odd-numbered slots emit on ticks 3, 5, B and D: 4 per 16 frames (about 8 a second).
 
-   ```asm
-   \\ Per-well emit gate. current_object is in current_object; well_radius_save
-   \\ already loaded. Spawn one debris particle every SPAWN_MASK+1 ticks per
-   \\ well, jittered by current_object so wells don't all emit simultaneously.
-   LDA     level_tick_counter
-   EOR     current_object
-   AND     #WELL_DEBRIS_SPAWN_MASK
-   BNE     well_emit_skip
-   JSR     well_emit_debris_particle
-   .well_emit_skip
-   ```
+With a 16-frame lifetime that is 2 or 4 live particles per well. A level with four wells adds about 12 particles to the 32-slot pool.
 
-   `well_emit_debris_particle` clobbers A/Y at minimum; X is current_object on entry and should be preserved (or restored from current_object after) since the walker uses it.
+The constant `WELL_DEBRIS_SPAWN_MASK = $01` is defined next to the lifetime but the gate uses the literal `#$01`.
 
-3. **`well_emit_debris_particle`** does:
-   - `JSR particle_return_free_slot_in_Y` to claim a slot.
-   - Random angle: `JSR rnd; AND #$1F` → A in `[0, 32)`. Save as `well_emit_angle` scratch.
-   - Strength sign: load `well_load_strength` value (8-bit signed). If positive, "in" mode; if negative, "out" mode. (Could simply XOR the angle's lookup result by the sign.)
-   - Compute spawn position. Use existing `angle_to_x_INT,Y` / `angle_to_y_INT,Y` tables (already used by `angle_to_bullet_dx_dy`). Multiply unit vector by radius:
-     - `dx_perim = (angle_to_x_INT[θ] * radius) >> 7` (signed Q1.7-ish multiply via `multiply_signed_8x8`).
-     - Same for Y.
-     - `pos_x = WX + dx_perim`, `pos_y = WY + dy_perim` (16-bit Y add to handle EXT byte).
-   - Compute velocity. `vel = -dx_perim / lifetime` per axis. Approximate as right-shift by `log2(lifetime)` if lifetime is a power of 2 (use 16 instead of 24 for the shift trick — 4 right-shifts), or do a divide. **Simplest: pick lifetime = 16 frames so velocity = `-dx_perim >> 4`** — saves a divide.
-   - Repulsor branch: skip the negation, leave velocity outward.
-   - Write `particles_xpos_INT/FRAC`, `particles_ypos_INT/FRAC/INT_HI`, `particles_dx_INT/FRAC`, `particles_dy_INT/FRAC`, `particles_type = PARTICLE_type_debris`, `particles_lifetime = (existing_PARTICLE_flag) | WELL_DEBRIS_LIFETIME`.
-   - RTS.
+## Asm summary (`thrust.6502`)
 
-4. **Re-walking concern:** `multiply_signed_8x8` clobbers ZP `$88..$8B` + `multiply_sign_ext`. `apply_gravity_wells_to_force` already uses these for the pull math. The emit's multiplies must not interleave with mid-pull state. Cleanest order: do the pull (which already returns to a known state), then the emit. Or, emit first then pull — the pull's multiply doesn't depend on prior multiply state.
+- Scratch (`thrust.6502:11608-11627`): `well_obj_x_save`, `well_obj_y_lo_save`, `well_obj_y_hi_save` hold the well's world position so the emitter can use it after the pull maths has reused the other scratch; `well_emit_dir`, `well_emit_offset_x/y`, `well_emit_slot` belong to the emitter.
+- `well_emit_debris_particle` claims a slot with `particle_return_free_slot_in_Y` (`thrust.6502:6377`), saves it in `well_emit_slot` (because `multiply_signed_8x8` clobbers X), and restores `X = current_object` before returning.
+- The emit runs before the pull maths for that well. Both use `multiply_signed_8x8` but neither depends on multiply state left by the other.
+- Cost per emit: four `multiply_signed_8x8` calls (~220-380 cycles each), the free-slot scan (up to ~400 cycles when the pool is busy) and the stores: roughly 1,500-1,900 cycles. Only one well in two emits on any gravity tick, so a few wells cost a few per cent of the 60,000-cycle game frame on those ticks.
 
-5. **Particle timing.** `particle_return_free_slot_in_Y` is cheap (linear scan of 32 lifetimes). The whole emit (rnd, two multiplies, six 16-bit writes) is ~250-300 cycles. With 1 emit per tick worst case at 16 wells active in radius (impossible in practice — typical level has 1-3 wells), this is well under a scanline.
+## Editor
 
-6. **No new RAM bytes** beyond a couple of zero-page-able scratches if needed (`well_emit_angle`, `well_emit_dx_perim`, `well_emit_dy_perim`). Actually, the existing `well_dx_signed`, `well_dy_signed`, `well_pull` scratch bytes are reused inside the emit since the pull math is already done by the time emit runs.
-
-## Editor changes
-
-None required — the editor's diamond outline + centre dot already shows the well's position and radius. Optionally:
-
-- Render a few static "ring" sample points around the perimeter as a visual hint that debris spawns there. Cosmetic only.
-
-## Suggested implementation order
-
-1. **Test the emit in isolation:** add `well_emit_debris_particle` as a stub that just spawns a static debris particle at `(WX, WY)` (no math, no lifetime jitter). Verify a particle appears at every well.
-2. **Add radius-perimeter spawn:** wire in the angle lookup + radius multiply. Verify particles appear *around* the well, not on top of it.
-3. **Add inward velocity:** use the simple `>> 4` trick, lifetime 16. Verify particles move toward the centre.
-4. **Repulsor branch:** flip sign for `strength < 0`.
-5. **Per-well jitter:** add the `EOR current_object` to the spawn gate.
-6. **Tuning:** adjust `SPAWN_MASK` and `WELL_DEBRIS_LIFETIME` if visuals feel too sparse / dense.
+No editor change was needed: the diamond outline and centre dot drawn by `_render_gravity_well` already show the well's position and radius (blue for pull, red for push).
 
 ## Things to watch out for
 
-- **`particle_return_free_slot_in_Y` can fall back to a random eviction** when no slots are free (line 6196). On a busy level, well debris could displace player bullets or stars momentarily. Acceptable — debris is short-lived and cheap.
-- **Particle velocity precision.** `dx_perim >> 4` for 24-frame lifetime undershoots; for 16-frame it's exact. Use 16. If that's too short visually, do a real divide instead.
-- **Y high-byte handling.** The well centre's Y is 16-bit (`obj_pos_Y_EXT:obj_pos_Y`). Particle Y is also 16-bit (`particles_ypos_INT_HI:particles_ypos_INT`). When adding `dy_perim` (signed 8-bit) to the well centre, propagate sign extension into the high byte. The existing well code already does this pattern when computing dy.
-- **XOR plot interaction.** Debris is XOR-plotted. Two particles overlapping on the same pixel cancel. Visually fine for sparse debris, looks weird if a stream of particles converges on the centre and each new particle re-erases the last. Mitigation: keep spawn rate low and lifetimes long enough that particles spread out before reaching the centre.
-- **Wells off-screen.** The emit runs even when the well is off-screen. Particles spawned off-screen will be invisible until / unless they enter the viewport. Probably fine — a well off-screen exerts no visible pull, so wasted emits are cheap and harmless. If profiling shows a hotspot, add an on-screen check using the existing visibility test.
-- **Repulsor visuals.** When `strength < 0` particles move outward — same machinery, just opposite. Spawn at centre, fly to perimeter, expire. The lifetime sizing still works.
-- **Centre singularity.** Particle's velocity is computed from the *spawn* position, not updated each frame, so they fly in a straight line toward the centre and overshoot. They expire near the centre because the lifetime equals the travel time. Slight overshoot before expiry is fine; if particles look like they "punch through" the centre, shorten lifetime by 1-2 frames.
+- **Pool pressure.** When no slot is free, `particle_return_free_slot_in_Y` falls back to any slot whose lifetime is below `PARTICLE_lifetime_generator`, and then to a random slot. On a busy level debris can displace a bullet or star for a frame. Acceptable because the debris is short-lived.
+- **XOR plotting.** Debris is XOR-plotted, so two particles on the same pixel cancel. With pull wells, particles converge on the centre at the end of their life; the low spawn rate keeps this from being noticeable.
+- **Off-screen wells** still emit. The particles are invisible until they enter the view. If profiling shows a cost, add an on-screen test before the emit.
+- **Overshoot.** Velocity is fixed at spawn, so particles fly in a straight line. Because lifetime equals travel time they expire on arrival; `dx/16` is exact, so there is no drift.

@@ -1,93 +1,93 @@
 # Plan: gravity well object
 
-A new object type that, while the ship is inside its radius, applies a per-frame radial pull toward its centre. Stored per-instance so a level designer authors centre, radius, and strength. SWRAM-only — gated by a new `_GRAVITY_WELL` flag so the canonical non-SWRAM CRC `6389c446` is unaffected.
+**Status:** done (commits `0312d67`..`c3f4543`, plus the debris visualisation in [plan-gravity-well-debris.md](plan-gravity-well-debris.md)). Open follow-ups are listed in `docs/ideas.md` under "Gravity well follow-ups".
 
-The companion idea **gravity null** (zero gravity inside a radius) is in scope as a sign/flavour of the same object: a signed strength byte means strength=0 effectively cancels a designer-blended pull, and a dedicated negative range can be reserved for "repulsor" later. Keep the on-disc layout identical for both so adding new behaviours is a runtime branch, not a data-format change.
+An invisible object type that, while the ship is inside its radius, adds a radial pull (or push) to the ship's force vector. Centre, radius and strength are authored per instance in the level editor. SWRAM-only, gated by `_GRAVITY_WELL` (`thrust.6502:40`), so the canonical non-SWRAM CRC `6389c446` is unaffected.
 
-## Decisions confirmed
+## Design summary
 
-- **One object type, signed `strength` byte.** Positive = pull (well), negative = push (repulsor), zero = inert. Avoids burning two type slots for what is the same code path.
-- **Linear ramp inside radius** — no divide, no `1/r²`. Force magnitude = `strength * (radius − r) / radius` clamped at zero outside. Cheap, monotonic, behaves intuitively at the centre (max pull, no singularity).
-- **Manhattan distance** (`|dx| + |dy|`) for the inside-radius test and as the basis of the ramp. Avoids a 16-bit square + sqrt. Visual asymmetry at the diamond edge is acceptable for an authored hazard.
-- **Affect ship only in v1.** Bullets and the pod are deferred — see "Things to watch out for". The hook point still leaves room to extend.
-- **No interaction with the existing constant gravity.** Pull is *added* to `force_vectory_FRAC/INT` (and `force_vectorx_*`) after the existing `add_gravity_to_force_vector` block. Gravity-null variant (strength sign-bit interpretation TBD) can substitute rather than add later if desired.
-- **SWRAM-only.** New flag `_GRAVITY_WELL = _SWRAM_BUILD AND TRUE` near `thrust.6502:39`. Matches the laser pattern; CRC unchanged for the canonical build.
+- **One object type, signed `strength` byte.** Positive = pull (well), negative = push (repulsor). Pull and push share the same code path; only the sign of the multiply result differs.
+- **Linear ramp inside the radius**: no divide, no `1/r²`. Pull magnitude = high byte of `strength * (radius − r)`, zero outside. Maximum at the centre, no singularity.
+- **Pixel-square Manhattan distance**: `r = 2·|dx| + |dy|`. One world X unit (a character, 4 pixels) is twice the height of one world Y unit (2 pixel rows), so doubling `|dx|` makes the region a diamond that is square on screen. No 16-bit square or sqrt.
+- **Ship only.** Bullets, thrust particles and the pod's own integrator are not affected (follow-ups in `ideas.md`). The pull is applied to the `midpoint_*` reference point, which is the ship+pod centre of mass when tethered, so tethered physics stays consistent.
+- **Adds to the constant gravity**, it does not replace it. A well pulling upward against downward gravity lightens the ship before reversing it.
+- **Honours `OBJ_flag_disabled`**: a disabled well applies no force and emits no debris (used by the switches system).
 
 ## Object-type slot
 
-Next free type id after the laser block:
-
 ```
-OBJECT_gravity_well                  = $D       ; SWRAM only, behind _GRAVITY_WELL
+OBJECT_gravity_well                 = $D        ; thrust.6502:127, inside IF _GRAVITY_WELL
 ```
 
-at `thrust.6502:113` area, inside an `IF _GRAVITY_WELL` block. Bump `obj_type_width` and `obj_type_height` (`thrust.6502:1401`/`1408`) with one entry each — pick a small hitbox (`$04`/`$04`) since the well is non-collidable visually. `obj_type_explosion_particle` and `obj_type_score_value` get `$00,$00` pad entries (not destructible).
+Per-type table entries (all inside `IF _GRAVITY_WELL`):
+
+| Table | Value | Line |
+|-------|-------|------|
+| `obj_type_width` | `$04` | `thrust.6502:1434` |
+| `obj_type_height` | `$04` | `thrust.6502:1450` |
+| `obj_type_explosion_particle` | `$00` (not destructible) | `thrust.6502:1467` |
+| `obj_type_score_value` | `$00` | `thrust.6502:1484` |
+| `object_type_cull_size_table` | `$44` | `thrust.6502:2350` |
+
+The well is never drawn and never bullet-tested: `update_and_draw_all_objects` jumps straight to `next_object` for type `$0D` (`thrust.6502:1670-1680`). A placeholder `obj_sprite_data_A/B_gravity_well` exists in `tools/output/object_sprites.asm` only to keep the sprite tables indexed by type. Giving the well a plotted sprite would make it lethal through ship-vs-pixel collision, which is why it is visualised with debris particles instead.
 
 ## Data model per instance
 
-Two new signed bytes, parallel to `level_N_obj_pos_X` etc. Existing position arrays carry the centre.
+The well uses the generic per-object data slots shared with lasers, mines, teleporters and doors. Position comes from the normal `level_N_obj_pos_X` / `_Y` / `_Y_EXT` arrays.
 
-| Symbol                            | Type            | Range            | Notes                              |
-|-----------------------------------|-----------------|------------------|------------------------------------|
-| `level_N_well_radius`             | 8-bit unsigned  | 0..127 BBC px    | 0 = disabled. Manhattan radius.    |
-| `level_N_well_strength`           | 8-bit signed    | −127..+127       | Q0.7-ish; positive = pull.         |
+| Slot | Array | Meaning for a well |
+|------|-------|--------------------|
+| 0 | `level_N_obj_data_0` | unused (exported as 0) |
+| 1 | `level_N_obj_data_1` | radius, unsigned, 1..127. 0 = inactive. |
+| 2 | `level_N_obj_data_2` | strength, signed −127..+127 |
 
-Per-level lookup tables (`level_well_radius_lookup_LO/HI`, `level_well_strength_lookup_LO/HI`), mirroring the laser ones at `thrust.6502:10267`. Both tables live in SWRAM alongside `level_laser_dx_lookup_*` (RAM is tight in the SWRAM build — note at `thrust.6502:10264-10266`).
+Slots 1 and 2 are found through `level_obj_data_1_lookup_LO/HI` and `level_obj_data_2_lookup_LO/HI` (`thrust.6502:10970-10988`), which live in SWRAM next to the laser code and are shared with the laser dx/dy SMC sites. No well-specific arrays or lookup tables were added, so the RAM cost is only the code and scratch bytes.
 
-Non-well slots emit `0,0` in their entries; the runtime never indexes these for non-well types, so the cost is purely 2 bytes × 32 slots × 6 levels = 384 bytes total per pair, both pairs = 768 bytes. If RAM bites, see "Things to watch out for".
+The radius must stay at or below 127: `radius − r` is passed to `multiply_signed_8x8` as a signed byte, so a larger value would flip the pull's sign near the centre. The editor's drag handle clamps to 0..127.
 
 ## Physics integration
 
-The constant gravity is applied at `thrust.6502:4069 .add_gravity_to_force_vector`. That routine runs on the ship-input/thrust path, not every object iteration. The natural hook is **a new function `apply_gravity_wells_to_force` called once per frame from the same place**, immediately after the gravity add and before the thrust force is summed in:
+`ship_input_thrust_calculate_force` (`thrust.6502:4267`) adds gravity only on 6 of every 16 ticks (`level_tick_counter AND $0F` in {0, 3, 5, 8, B, D}). `apply_gravity_wells_to_force` is called straight after the gravity add, inside the same tick gate (`thrust.6502:4315`), so the wells share gravity's update rate (about 12 times a second at the ~33Hz game frame rate).
 
-1. `JSR apply_gravity_wells_to_force` after the gravity addition at line ~4076, gated by `IF _GRAVITY_WELL`.
-2. The function walks the object type array (terminated by `$FF`) the same way `update_all_laser_beams` does at `thrust.6502:10311-10335`. SMC-patched LDAs, mirror entries in `initialise_level_pointers` at `thrust.6502:6900` (alongside the laser block at `6933-6948`).
-3. For each object whose type == `OBJECT_gravity_well`:
-   - Load `dx = obj_pos_X − new_ship_xpos_INT` (signed); `dy = obj_pos_Y − new_ship_ypos_INT` (signed). World X wraps; treat `dx` modulo 256 as already signed by virtue of two's complement subtraction. Y high byte is ignored — wells must not span more than ±127 rows from the ship to register; outside that is effectively "not in radius".
-   - Compute `r = |dx| + |dy|` (Manhattan).
-   - If `r >= radius`, next object.
-   - Compute `pull = strength * (radius − r)` — one 8×8 multiply, high byte is the Q0.7 pull magnitude. Use the existing `multiply_*` machinery (zp slots `$88..$8B` are already wired for the laser, but those are reused at draw-line time only — verify no overlap with this earlier-in-frame call).
-   - Decompose along axes: `force_x_add = pull * sign(dx) * |dx| / r`, same for Y. To avoid the divide: since `r = |dx| + |dy|`, the per-axis share is just `|dx| / (|dx| + |dy|)` — pre-tabulate a 128-entry "ratio" table keyed on `|dx|` with `|dy|` implicit, OR simply skip the ratio and apply `pull * sign(dx)` and `pull * sign(dy)` independently scaled by 1/2 each. The latter is simpler and preserves diamond-symmetry visually; pick that for v1.
-   - `force_vectorx_FRAC/INT += pull_x`; same for Y, signed add with carry/borrow propagation.
+`apply_gravity_wells_to_force` (`thrust.6502:11655`) walks the level's object list up to the `$FF` terminator, using its own SMC sites (`well_load_obj_type`, `well_load_obj_pos_x/_y/_y_ext`, `well_load_radius`, `well_load_strength`) patched in `initialise_level_pointers` (`thrust.6502:7318-7348`). For each object of type `OBJECT_gravity_well` that is not disabled and has a non-zero radius:
 
-Cost estimate: each well = ~50 cycles. With 4 wells per level the total is well under a scanline.
+1. Save radius, strength and the well's world position into `well_*_save` scratch bytes.
+2. Run the debris emit gate (see the debris plan). This happens whether or not the ship is in range.
+3. `dy = obj_Y − midpoint_ypos` as a 16-bit subtract; skip the well if the result is outside −128..+127.
+4. `dx = obj_X − midpoint_xpos_INT` as an 8-bit subtract (world X wraps, so two's complement gives the signed difference).
+5. `r = 2·|dx| + |dy|`; skip if either the doubling or the add overflows 8 bits, or if `r ≥ radius`.
+6. `pull = hi(strength * (radius − r))` via `multiply_signed_8x8`. Skip if the high byte is zero.
+7. Add `sign(dy) * pull` to `force_vectory_FRAC/INT` and `sign(dx) * pull` to `force_vectorx_FRAC/INT`, each as a sign-extended 16-bit add. The full `pull` is applied to each axis; there is no per-axis split.
 
-## Math summary
+## Maths
 
-- Inside-radius test: `(|dx| + |dy|) < radius`, all 8-bit unsigned after taking abs.
-- Pull magnitude: `(radius − r)` shifted into Q0.7 against `strength`. One 8×8 multiply (`multiply_signed_a_by_b` or whichever the codebase already exposes — see existing uses near `thrust.6502:4106-4120`).
-- Direction: `sign(dx)` and `sign(dy)` derived from the original signed differences (preserve before taking abs).
-- Centre case (`dx == 0 && dy == 0`): `r = 0`, ramp is at maximum, but the per-axis sign factors are both zero, so the force contribution is zero. No divide-by-zero to handle. The ship just sits there until the constant gravity kicks it back into motion — fine.
+- Region: `2·|dx| + |dy| < radius`. Reach is `radius` world Y units vertically and `radius/2` world X units horizontally, which are the same distance on screen.
+- Magnitude: `hi(strength * (radius − r))`, in 1/256ths of `force_vector`. Strength 60 at radius 40 gives at most `hi(60 * 40) = 9`; the maximum possible is `hi(127 * 127) = 63`. Small negative products floor to −1 rather than 0, so a repulsor always pushes slightly inside its radius.
+- Direction: the sign of each axis difference, applied at full magnitude. Two consequences of this:
+  - On the diagonals the combined pull is about √2 stronger than on the axes.
+  - A zero difference counts as positive (`BPL`), so a ship exactly level with or exactly above/below the centre is still pushed in +X or +Y on that axis, and at the exact centre it is pushed down-right. Both points are listed as follow-ups in `ideas.md` (per-axis scaling, centre-case symmetry).
+
+## Cost
+
+`multiply_signed_8x8` is about 220-380 cycles (8 shift-and-add iterations). Per gravity tick:
+
+- each non-well object in the list: ~25 cycles to test and skip;
+- each well with the ship out of range: ~100 cycles plus any debris emit;
+- each well with the ship in range: ~450 cycles plus any debris emit.
+
+With a handful of wells this is well under 1% of the 60,000-cycle game frame. The debris emit is the larger cost; see the debris plan.
 
 ## Editor support (`tools/level_editor.py`)
 
-Mirror the laser-endpoint drag handle work (see `level_editor.py:140-141`, `1274-1277`, `1366-1391`):
-
-1. **Sprite:** placeholder — a hollow circle drawn at the well centre with the radius rendered as a faint dotted ring, so the designer sees what they're authoring without needing a baked sprite. Real sprite can come later.
-2. **Model fields:** add `well_radius`, `well_strength` keys to each object dict, defaulting to `(40, +60)` for newly placed wells.
-3. **Radius drag handle:** a small filled circle at `(centre_x + radius, centre_y)`. Dragging it in screen space updates `well_radius` (clamped 0..127). Same `grab_dx/grab_dy` offset trick as the existing object drag.
-4. **Strength keys:** `[`/`]` to nudge `well_strength` ±1 with shift = ±10. Status bar shows `r=40 s=+60`.
-5. **Export/import:** emit `level_N_well_radius` and `level_N_well_strength` arrays alongside the laser ones (around `level_editor.py:563-566`). Loader reads them with default 0/0 if absent — back-compat with pre-feature exports.
-6. **Visual feedback:** during play-test mode (if any), the editor needn't simulate physics; just showing the radius is enough.
-
-## Suggested implementation order
-
-Each step is independently testable.
-
-1. **Asm: object type slot, padding in width/height/score/explosion tables, build flag.** Build SWRAM and non-SWRAM; CRC stays at `6389c446` for the latter.
-2. **Asm: per-level data arrays + lookup tables + `initialise_level_pointers` wiring + SMC sites.** Data is dummy-zeroed; runtime sees no wells. Build still passes.
-3. **Asm: `apply_gravity_wells_to_force` walk + ramp math + force add.** Hand-author one well in level 0 data, fly into it, confirm the ship gets pulled.
-4. **Editor: model fields + placement + radius drag + status bar.**
-5. **Editor: export/import.** Round-trip a level with a well, build, run, confirm in-game pull matches the editor circle.
-6. **Polish:** sprite, gravity-null variant (re-purpose negative strength or reserve a flag bit), mark the idea entry in `docs/ideas.md` as implemented.
+- Constants: `OBJECT_GRAVITY_WELL = 0x0D`, defaults `GRAVITY_WELL_DEFAULT_RADIUS = 40`, `GRAVITY_WELL_DEFAULT_STRENGTH = 60` for newly placed wells.
+- Model fields: `well_radius`, `well_strength` on the object dict. Export writes them into `level_N_obj_data_1` / `_2`. Import reads the `obj_data` arrays, falling back to the older `level_N_well_radius` / `level_N_well_strength` arrays if present.
+- Rendering: `_render_gravity_well` draws a centre dot and the diamond outline (`_well_screen_geometry` uses `r/2` world units on X and `r` on Y to match the game). The outline is blue for pull, red for push. The palette shows a pictogram, since the well has no sprite.
+- Selection: wells are picked by their centre dot (`_hit_test_well`), because the normal sprite hit test skips them.
+- Radius: drag the handle on the right-hand vertex (`_set_well_radius_from_screen`, clamped 0..127), or edit the Radius field in the properties panel.
+- Strength: `[` / `]` nudge by −1 / +1 (Shift = ±10), clamped −127..+127; also editable in the properties panel.
 
 ## Things to watch out for
 
-- **SWRAM RAM budget.** Two new 32-byte arrays per level × 6 levels = 384 bytes; two new lookup-table pairs = ~24 bytes. Recent commits have squeezed RAM headroom hard (per CLAUDE.md). If the build fails to link, candidates to trim: pack `radius` and `strength` into one byte (4 bits radius × 8 = 0..120, 4 bits signed strength); or restrict gravity wells to a subset of slots (e.g. max 4 per level) and use a parallel array indexed by well-id, not by object slot.
-- **Existing gravity interaction.** v1 *adds* to the gravity force vector. A well pulling upward against downward gravity will visibly lighten the ship before reversing — that is the intended "gravity field" feel. The `gravity-null` variant in v2 should *replace* `gravity_FRAC/SIGN` for the integration, which means moving the well loop *before* `add_gravity_to_force_vector` and giving it the option to skip the gravity add entirely. Plan now: do the simple add-only version, leave a TODO comment at the call site.
-- **Bullets/particles.** Out of scope. The `particles_update_and_draw` per-particle path (line 5799 per the ideas doc) is the natural place to hook in later, but it's a separate cost: 32 particles × N wells × per-frame math is non-trivial. v2 only.
-- **Pod.** Same story — pod physics has its own integrator; touching it is its own diff.
-- **Centre case:** documented above, no special-case code needed thanks to per-axis sign multiplication.
-- **Manhattan vs Euclidean asymmetry.** A well configured as r=40 reaches 40 px along axes but only ~28 px diagonally. Designers will need to know this; mention in the editor status bar tooltip.
-- **Sign of strength.** Reserving negatives for repulsors means the first cut should clamp `strength >= 0` in the editor and assert positive in the runtime — keeps v1 honest.
-- **`new_ship_xpos_INT` / `new_ship_ypos_INT` (`thrust.6502:303`/`319`)** are the right ship coords to read — they are the freshly integrated values used by the rest of the per-frame physics. Reading post-integration but pre-collision is correct.
+- **Radius ≤ 127.** See the data model. The properties-panel Radius field currently allows up to 255, which the runtime does not handle.
+- **Visual centre vs resting point.** The pull targets `midpoint_*`, not the ship sprite origin, so the ship settles slightly off the plotted well centre (and further off when towing the pod).
+- **Bullets, particles and the pod** are not pulled. Adding them means hooking `particles_update_and_draw` per particle per well, which is a separate cost.

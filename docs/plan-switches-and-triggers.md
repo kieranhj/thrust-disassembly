@@ -1,344 +1,304 @@
 # Plan: Editor-driven switches and triggers
 
-A per-level **wiring table** lets any switch fire a small set of actions against any object on the level, authored entirely from the editor. Replaces the hardcoded `door_switch_counter_A` write with a generic dispatcher; the original `level_3/4/5_door_logic` routines stay where they are and keep running on a legacy fallback path.
+**Status:** done, with follow-ups open. The wiring table, dispatcher, refractory, multi-trigger, `destroy`, `set_param` / `xor_param`, the `OBJ_flag_disabled` actions, the generic door object with `pulse_door`, all three door shapes and the migration of the original game's three doors are built. Not built: the floor/ceiling switch types from the original MVP (§3), editor warnings for half-wired entries (§8.4), and the §10 follow-ups marked open. Commits `796aebf` (Phase A) through `f463104`.
 
-Two-stage rollout:
+A per-level **wiring table** lets any door switch fire one or more actions against any object on the level, authored entirely in the editor. Under `_SWITCHES` the hardcoded `level_3/4/5_door_logic` routines are no longer called: the original doors are now `OBJECT_door` instances wired with `pulse_door`.
 
-- **MVP (sections 1–9 of this doc).** Four actions — `set_alive`, `clear_alive`, `toggle_alive`, `destroy` — plus a `none` slot. Two extra switch sprites for floor / ceiling mounting. Levels 3/4/5 keep working unchanged: switches with no wiring entry fall through to the legacy `door_switch_counter_A` write so the existing per-level door routines continue to drive them.
-- **Deferred follow-ups (§10).** Door object + `pulse_door` action, parameterised actions (`set_param` / `xor_param` / `cycle_param`), shape generators, migration of original game's three doors away from the legacy path, hostile-bullet activation. Sketched at the end so the wiring format and dispatcher are forward-compatible from day one.
+Builds on the sketch in [`docs/ideas.md`](ideas.md#switches--triggers-follow-ups).
 
-Builds on the sketch in [`docs/ideas.md`](ideas.md#configurable-switches-and-triggers).
+SWRAM-only behind `_SWITCHES` (`thrust.6502:45`). The non-SWRAM build still assembles and runs the legacy door routines, so the CRC `6389c446` is unaffected.
 
-SWRAM-only behind a new `_SWITCHES` build flag. Non-SWRAM canonical CRC `6389c446` stays anchored — the entire feature path is gated on the flag.
+## 1. Scope
 
-## 1. MVP scope
+As built:
 
-**Goals**
+- Any switch can target any object on the level, with up to 8 wiring entries per level shared across all switches. A switch with several entries fires them all, in slot order, on one hit ("multi-trigger").
+- Actions: `destroy`, `pulse_door`, `set_param`, `xor_param`, `set_disabled` / `clear_disabled` / `toggle_disabled`, plus the engine-only `set_alive` / `clear_alive` / `toggle_alive` (§5).
+- Switches are the existing wall types `$07` / `$08`.
+- The editor draws wiring lines from switch to targets.
+- Switch hits from the player's bullets only.
 
-- Any switch can target any object on the level. Multiple switches per level, each with independent state.
-- Action set covers: shoot-to-enable, shoot-to-disable, shoot-to-toggle, shoot-to-destroy-as-if-player-bullet.
-- Switches mountable on left wall, right wall, floor, or ceiling.
-- Editor renders wiring as visible lines from switch → target so puzzles are legible while authoring.
-- Original three doors keep working with zero migration: switches with no wiring entry fall through to the legacy `door_switch_counter_A` write, and `tick_door_logic` still drives the level-N door routines.
+Not in scope (see §10): hostile bullets triggering switches, predicates across switches ("fire only when all four are set"), cross-level wiring.
 
-**Non-goals (deferred — see §10)**
-
-- Door object type, `pulse_door` action, shape generators.
-- `set_param` / `xor_param` / `cycle_param` actions.
-- Re-authoring levels 3/4/5 wiring against the new system.
-- Hostile bullets activating switches. Bullet-vs-object inner loop stays player-only in v1; hostile activation drops in cleanly later as a per-wiring-entry flag.
-- Predicate combinations across switches ("fire only when all four are set"). Could be layered on later via a separate "logic gate" object type if needed.
-- Cross-level wiring or persistence across deaths. State resets on death like everything else.
+State is per level, not per life: wiring effects (destroyed or disabled targets, door state) persist across deaths, like destroyed guns in the original game, and reset at level start.
 
 ## 2. Build flag
 
-- `_SWITCHES = (_SWRAM_BUILD AND TRUE)` alongside the other feature flags near `thrust.6502:42`.
-- All new arrays, the per-switch state bytes, and the dispatcher are gated on this flag.
-- `tick_door_logic` runs unchanged. `handle_door_switch` (`thrust.6502:1947`) gains a gated dispatch *before* the existing `door_switch_counter_A = $FF` write — see §7.1.
+- `_SWITCHES = (_SWRAM_BUILD AND TRUE)`.
+- All new arrays, per-switch state, door state and the dispatcher are gated on it.
+- `handle_door_switch` (`thrust.6502:1971`) calls the dispatcher before the legacy `door_switch_counter_A = $FF` latch (§7.1).
+- `tick_door_logic` (`thrust.6502:3483`) still drains `door_switch_counter_A`, then `JMP tick_doors` instead of dispatching on `level_number` (§7.2).
 
-## 3. New object types
+## 3. Object types
 
-Two new switch sprites for floor / ceiling mounting. The dispatcher treats all four switch types identically — the type only determines the sprite and the AABB orientation:
+| Type  | Name                | Role |
+|-------|---------------------|------|
+| `$07` | `door_switch_right` | switch (existing) |
+| `$08` | `door_switch_left`  | switch (existing) |
+| `$11` | `OBJECT_door`       | door (new, §10.1) |
 
-| Type   | Name                  | Mount   | Status   |
-|--------|-----------------------|---------|----------|
-| `$07`  | `door_switch_right`   | wall    | existing |
-| `$08`  | `door_switch_left`    | wall    | existing |
-| `$12`  | `switch_ceiling`      | ceiling | new      |
-| `$13`  | `switch_floor`        | floor   | new      |
-
-The bullet-vs-switch hit predicate (currently filters to `$07`/`$08` in `handle_door_switch`'s caller) extends to accept `$12` / `$13`.
-
-No `door` object type and no other new types in MVP.
+The original MVP proposed ceiling/floor switches at `$12` / `$13`. They were not built: the bullet hit dispatch still matches only `$07` / `$08`, and the editor's wiring validation only accepts those types as switches.
 
 ## 4. Per-level wiring table
 
-A parallel array per level, one entry per **switch object** (not per object — keeps the table small). The switch's object index is the implicit key. A second small array indexes from object index → wiring entry, so the dispatcher can look up wiring for "switch object X" in O(1).
-
-**Wiring entry layout (4 bytes):**
-
-| Field             | Bytes | Used in MVP? | Meaning                                                  |
-|-------------------|-------|--------------|----------------------------------------------------------|
-| target_obj_index  | 1     | yes          | object index this switch acts on (`$FF` = no target)     |
-| action_code       | 1     | yes          | one of the action codes in §5                            |
-| arg_a             | 1     | reserved (0) | for `set_param` / `cycle_param` follow-ups (§10)         |
-| arg_b             | 1     | reserved (0) | as above                                                 |
-
-Same 4-byte layout as the full plan, so follow-up actions drop in without a format change. MVP entries always write `arg_a = arg_b = 0`.
-
-**Per-level emission** (added to `thrust_levels_export*.asm`):
+Five parallel byte arrays per level, indexed by wiring **slot** (0..7), emitted by the editor into `tools/output/thrust_levels_export2.asm`:
 
 ```
-.level_N_switch_obj_indices              ; one byte per switch object, $FF terminator
-        EQUB    <switch obj 0 index>, <switch obj 1 index>, ..., $FF
-
-.level_N_switch_wiring                   ; 4 bytes per switch object, parallel array
-        EQUB    target, action, $00, $00   ; entry 0
-        EQUB    target, action, $00, $00   ; entry 1
-        ...
+.level_N_switch_obj_indices   ; switch object index per slot, $FF terminator
+        EQUB    $09,$09,$09,$09,$FF
+.level_N_switch_target        ; target object index ($FF = no target)
+        EQUB    $05,$02,$06,$04,$FF
+.level_N_switch_action        ; action code (§5)
+        EQUB    $0A,$04,$0A,$0A,$00
+.level_N_switch_arg_a         ; action arg A
+        EQUB    $00,$00,$00,$00,$00
+.level_N_switch_arg_b         ; action arg B
+        EQUB    $00,$00,$00,$00,$00
 ```
 
-Per-level lookup tables `level_switch_obj_indices_lookup_LO/HI` and `level_switch_wiring_lookup_LO/HI` mirror the existing band/object tables; SMC-patched in `initialise_level_pointers` like the others.
+(Level 0's test wiring: switch 9 fires four entries.) The same switch index appears once per entry; entries are grouped by switch, sorted by switch index, and kept in the designer's order within a switch. Each array carries a terminator entry (`$FF` / `$FF` / `$00` / `$00` / `$00`).
 
-## 5. MVP action codes
+Pointer tables `level_switch_{obj_indices,target,action,arg_a,arg_b}_lookup_LO/HI` (`thrust.6502:11053`) are SMC-patched into the dispatcher's `LDA abs,Y` sites in `initialise_level_pointers`.
 
-Five codes in MVP, plus reserved space for the follow-ups in §10. Dispatched via a 16-bit jump table indexed by `action_code` — the table is sized for 16 entries from day one so adding follow-up actions later is just filling slots.
+## 5. Action codes
 
-| Code  | Name              | Effect                                                                                                  |
-|-------|-------------------|---------------------------------------------------------------------------------------------------------|
-| `$00` | `none`            | No-op. Wiring slot reserved but inactive. Useful for editor stubs / placeholders.                       |
-| `$01` | `set_alive`       | Set target's `OBJ_flag_alive` bit (activate).                                                           |
-| `$02` | `clear_alive`     | Clear target's `OBJ_flag_alive` bit (deactivate).                                                       |
-| `$03` | `toggle_alive`    | XOR target's `OBJ_flag_alive`. Re-shootable.                                                            |
-| `$04` | `destroy`         | Run the player-bullet destruction path against the target — explosion particles + score + alive cleared.|
-| `$05+`|                   | Reserved for follow-ups: `set_param`, `xor_param`, `cycle_param`, `pulse_door`. See §10.                |
+Dispatched through `action_jump_table` (`thrust.6502:12586`), 16 entries of (LO, HI), indexed by `action × 2`. On entry `X` = target object index and `action_arg_a` / `action_arg_b` are preloaded.
 
-**`destroy` semantics.** Enters via `destroy_object` with `X = target_obj_index`. The bullet-hit path normally reaches `destroy_object` with bullet-state ZP set up by the particle loop; verify what `destroy_object` actually reads beyond `X`, and wrap in a small adapter that zeroes / sets that ZP if needed so the dispatcher can call it cleanly from the switch hit context.
+| Code  | Name              | Editor | Effect |
+|-------|-------------------|--------|--------|
+| `$00` | `none`            | yes | No-op. Entry is skipped. |
+| `$01` | `set_alive`       | hidden | Set `OBJ_flag_alive`. |
+| `$02` | `clear_alive`     | hidden | Clear `OBJ_flag_alive` (object vanishes). |
+| `$03` | `toggle_alive`    | hidden | XOR `OBJ_flag_alive` (can revive a destroyed object). |
+| `$04` | `destroy`         | yes | If alive: clear alive, award `obj_type_score_value`, spawn explosion at the target. No-op if already dead. |
+| `$05` | `pulse_door`      | yes | Open/hold/close cycle on a door (§10.1). arg_a = hold frames, arg_b = close rate. |
+| `$06` | `set_param`       | yes | `obj_data_<arg_a>[X] = arg_b`. |
+| `$07` | `xor_param`       | yes | `obj_data_<arg_a>[X] ^= arg_b`. |
+| `$08` | `set_disabled`    | yes | Set `OBJ_flag_disabled`. |
+| `$09` | `clear_disabled`  | yes | Clear `OBJ_flag_disabled`. |
+| `$0A` | `toggle_disabled` | yes | XOR `OBJ_flag_disabled`. |
+| `$0B`-`$0F` | reserved    | — | Point at `action_none`. |
 
-## 6. Per-switch state
+`destroy` doesn't go through `destroy_object`. `action_destroy` has its own SMC reads of the target's position and type so it leaves `current_object` and `current_obj_*pos` intact for the bullet loop that called it.
 
-One byte per switch object, parallel-indexed to `level_switch_obj_indices`:
+`set_param` / `xor_param` ignore `arg_a >= 3` and set `OBJ_flag_laser_redraw_pending` on the target so a laser's beam is erased at its old endpoint before being redrawn (`d6b79c9`).
 
-- `$00` = idle. Switch is shootable.
-- `$01..$07` = refractory countdown. Decrements each frame; switch ignores hits while non-zero.
+The alive trio stays in the engine for compatibility but is hidden in the editor (`215938f`). It overlaps `destroy` and the disabled trio and makes objects vanish rather than go dormant, because `OBJ_flag_alive` gates both drawing and behaviour.
 
-Stored in `level_switch_state`, cleared on level start in `initialise_level_pointers` like all other per-level state. The refractory window prevents one bullet still inside the switch's AABB from re-firing the action across multiple frames.
+## 6. Per-switch refractory
 
-No per-switch latch state in MVP — all four actions are purely one-shot.
+`level_switch_state` (`thrust.6502:11141`): 8 bytes, one per wiring slot. `0` = idle; non-zero = refractory countdown.
 
-`door_switch_counter_A` and `door_switch_counter_B` are **not removed** in MVP. They keep driving the legacy door routines for any switch that has no wiring entry.
+- On a hit, the dispatcher checks the state of the **first** matching slot only. If it is non-zero the whole batch is skipped (the hit is still consumed). This stops a rapid double shot from half-firing a multi-entry switch.
+- Each matching slot is set to `$14` (20 frames, about 0.6 s at the ~33 Hz game frame rate) before its action runs.
+- `tick_switch_logic` decrements all 8 bytes once per frame. It is called from the main loop right after `tick_door_logic`.
+- Cleared at level start in `initialise_level_pointers`, not on death.
+
+The banner comment above the dispatcher still says "8 frames"; the value was raised to 20 in `d6b79c9`.
 
 ## 7. Engine changes
 
 ### 7.1 Switch hit handler with legacy fallback
 
-In `handle_door_switch` (`thrust.6502:1947`), before the existing `door_switch_counter_A = $FF` write, under `_SWITCHES`:
+The bullet loop (`thrust.6502:1929`) tests player bullet slots 3..0 against each live object. On a hit against a `$07` / `$08`, `handle_door_switch` calls `try_dispatch_switch_action`:
 
-1. Check the switch's `level_switch_state` byte. If non-zero, return (refractory).
-2. Reverse-lookup the switch's wiring entry via `level_switch_obj_indices`.
-3. **If no entry exists** for this switch object, or the entry has `action_code = $00 (none)` / `target_obj_index = $FF`: **fall through** to the legacy `door_switch_counter_A = $FF` write. Levels 3/4/5 keep working unchanged because their switches have no wiring entries.
-4. **If an entry exists** with a real action: read `target_obj_index` and `action_code`, dispatch into the action jump table, set `level_switch_state` to the refractory value (e.g. `$08`), and return *without* touching `door_switch_counter_A`. The wiring entry has fully consumed the switch hit.
+1. Walk `level_N_switch_obj_indices` from slot 0 until `$FF`, looking for `current_object`.
+2. On the first match, check refractory (§6).
+3. For each match: set refractory, skip the entry if `target = $FF` or `action = $00`, else load arg_a/arg_b and `JSR` through the jump table. The slot index lives in `tdsa_save_y` across the call because `action_destroy` clobbers Y.
+4. Return carry clear if any slot matched (hit consumed, legacy latch skipped), carry set if none (fall through to `door_switch_counter_A = $FF`).
 
-This means a level can mix wired and unwired switches — but in practice each switch is one or the other. Levels 3/4/5 stay 100% on the legacy path; new sandbox / puzzle levels use only wired switches.
+`spawn_hit_debris` runs in both cases.
 
-### 7.2 No new per-frame work
+### 7.2 Per-frame work
 
-All five MVP actions complete inline in the dispatcher. There's no `tick_doors` walker, no animation curves to advance — the action runs once and is done. `tick_door_logic` keeps its existing `level_number`-keyed dispatch and the three `level_N_door_logic` routines stay live.
+- `tick_switch_logic`: 8 decrements.
+- `tick_doors`: walks the object type list and calls `door_update_one` for each `OBJECT_door`, which advances its state machine (`door_advance_anim`) and writes its carve into `terrain_left_wall` / `terrain_right_wall` every frame, open or closed (§10.1).
 
-The only new per-frame cost is the `level_switch_state` decrement, which runs once per switch object — bounded by the per-level switch count (≤8). Cheap.
+Under `_SWITCHES` the legacy `level_3/4/5_door_logic` routines stay assembled but unreachable.
 
-### 7.3 SMC pointer setup at level start
+### 7.3 Level-start setup
 
-`initialise_level_pointers` already patches per-level SMC slots for objects, bands, etc. Add two more under `_SWITCHES`:
+`initialise_level_pointers`:
 
-```
-LDA  level_switch_obj_indices_lookup_LO,X / HI,X       → switch_indices_addr_*
-LDA  level_switch_wiring_lookup_LO,X      / HI,X       → switch_wiring_addr_*
-```
-
-Plus zero out `level_switch_state` for the new level.
+- patches the five wiring SMC sites (§4) and the per-type SMC sites used by `action_destroy`, the param actions and the door code;
+- zeroes `level_switch_state` and the five door state arrays;
+- after the original loop that sets `OBJ_flag_alive` on every object, clears alive on every `OBJECT_door` so doors start idle rather than mid-cycle.
 
 ### 7.4 Memory cost
 
-- Per-level wiring table: ≤8 switches × 4 bytes = 32 bytes
-- Per-level switch index list: ≤8 + terminator = 9 bytes
-- Switch state: ≤8 bytes
-- Action jump table: 16 entries × 2 bytes = 32 bytes (in code; oversized so follow-ups drop in)
-
-Total: ~50 bytes per level + ~32 bytes shared. Comfortably fits in SWRAM.
+- Wiring: 5 arrays × (entries + 1), at most 45 bytes per level.
+- Pointer tables: 5 × 12 bytes = 60 bytes.
+- `level_switch_state`: 8 bytes. Action jump table: 32 bytes.
+- Door state: 5 arrays × 32 bytes = 160 bytes, plus 14 scratch bytes.
 
 ## 8. Editor changes
 
-### 8.1 New switch sprites
+### 8.1 Switch types
 
-Author 12×8 sprites for `$12` (ceiling-mounted) and `$13` (floor-mounted) via `sprite_editor.py`. Sprite tables grow by two entries; the existing palette grid picks them up automatically once registered in `OBJECT_TYPE_NAMES`.
+No new switch sprites. `SCHEMA_DOOR_SWITCH` exposes X, Y and a Side enum (`$07` / `$08`).
 
 ### 8.2 Per-switch UI
 
-When the selected object is any switch type (`$07` / `$08` / `$12` / `$13`):
+Selecting a switch shows a list of wiring entries in the inspector. Each entry has:
 
-- Inspector schema gains two fields:
-  - `Action` (enum): `none` / `set_alive` / `clear_alive` / `toggle_alive` / `destroy`.
-  - `Target` (ref-pick, `target_kind="object"`): pick any object on the level. `$FF` = no target / disabled.
-- A thin wiring line is drawn from the switch sprite to the target object whenever the switch is selected or hovered. Action name floats near the line midpoint.
-- Re-uses the existing ref-pick widget (currently used for teleporter destination); only difference is `target_kind` over object indices instead of checkpoint indices.
+- `Action` (enum from `SWITCH_ACTION_VALUES`: none / destroy / pulse_door / set_param / xor_param / set_disabled / clear_disabled / toggle_disabled);
+- `Target` (`ref` field, `target_kind="object"`: click an object on the canvas). Self-targeting is allowed;
+- for `set_param` / `xor_param`, Slot and Value/Mask fields, with Slot labels drawn from `SWITCH_SLOT_LABELS` for the target's type (e.g. "Beam dx" for lasers, "Dest checkpoint" for teleporters);
+- for `pulse_door`, arg fields labelled "Hold frames" / "Close rate";
+- a Delete button. "+ Add wiring" appends an entry until the level has 8 in total.
+
+When a wired switch is selected, orange lines with arrowheads fan out to each target, with the action name near the midpoint.
 
 ### 8.3 Wiring data round-trip
 
-`LevelData` gains a `wiring` dict keyed by switch-object index → `{target, action, arg_a, arg_b}`. Import reads `level_N_switch_obj_indices` and `_switch_wiring`; export emits them sorted by switch object index.
+`LevelData.wiring` is `{switch_obj_index: [ {target, action, arg_a, arg_b}, ... ]}`. Import reads the five arrays and groups by switch index; files without them load with `wiring = {}`. Export flattens as in §4.
 
-Import is forward-compatible with files lacking the new arrays (older exports): `wiring` defaults to `{}`, all switches behave like legacy switches.
+### 8.4 Validation on export (`_check_wiring`)
 
-### 8.4 Validation pass on export
+Blocks export, with a dialog, on:
 
-Editor blocks the export with a status message on:
+- a target index that doesn't exist;
+- a target that is the pod (object 0, type `$05`);
+- `set_param` / `xor_param` with slot > 2;
+- `pulse_door` whose target isn't a door;
+- more than 8 entries in total on a level.
 
-- Wiring entry whose `target_obj_index` references a non-existent object.
-- Wiring entry whose target is the pod (object 0, type `$05`) — single-instance pod state isn't safe to alive-toggle.
-- Switch index list referencing a non-switch object (stale entry from a deleted switch is pruned automatically rather than blocked).
+Entries whose switch has been deleted or is no longer `$07` / `$08` are pruned silently. Placeholder entries (`action = none` or `target = $FF`) are exported and skipped by the engine. The planned warnings for half-wired entries were not built.
 
-Editor warns (does not block) on:
+## 9. Implementation history
 
-- Switch with `target ≠ $FF` and `action = none` (probably half-wired).
-- Switch with `target = $FF` and `action ≠ none` (action will never fire).
+| Commit | Step |
+|--------|------|
+| `796aebf` | Phase A: flag, empty per-level tables, refractory bytes. |
+| `7a96602` | Phase C: dispatcher with legacy fallback; alive trio + `destroy`. |
+| `9691185` | Phase B: editor wiring UX, export validation; `destroy` no-op on dead targets. |
+| `d6b79c9` | `set_param` / `xor_param`; arg_a/arg_b arrays; refractory 8 → 20 frames; laser redraw fix. |
+| `c988040` | Multi-trigger (several entries per switch). |
+| `215938f` | `OBJ_flag_disabled` actions; per-mine local tick; alive trio hidden in editor. |
+| `6988c13` | Doors D1: `OBJECT_door`, `pulse_door`, slot shape; engine level 3 migrated. |
+| `fad2e49` | Doors D2: notch_v; engine level 5 migrated; `pulse_door` re-latch. |
+| `d4c34f5`, `99e31f6` | Doors D3: flat_window with open direction; engine level 4 migrated. |
+| `1f7de98`, `f463104` | notch_v carves the matching recess in the opposite wall; peak-depth control dropped. |
+| `b60d354`, `5dd4f49`, `3a7c284` | Editor: door hit-testing, shape-accurate previews, drag-resize handles. |
 
-## 9. Implementation order (MVP)
+Engine `level_number` 3/4/5 are editor levels 4/5/6.
 
-Each step ends with the editor still launchable, level 3/4/5 still playable on legacy code, and the non-SWRAM CRC unchanged.
+## 10. Follow-ups
 
-1. **Build flag + scaffolding.** `_SWITCHES` flag; per-level empty `switch_obj_indices` / `switch_wiring` arrays + lookup tables; SMC patches in `initialise_level_pointers`; `level_switch_state` bytes. Exporter emits empty arrays for every level. Game still plays unchanged.
-2. **New switch sprites.** Author `$12` ceiling and `$13` floor sprites in `sprite_editor.py`. Register types in `OBJECT_TYPE_NAMES` and the bullet-vs-switch hit predicate. Place a `$12`/`$13` in a sandbox level and shoot it — should drive the same legacy `door_switch_counter_A` behaviour as `$07`/`$08` (which on a non-3/4/5 level is a no-op, fine for now).
-3. **Editor wiring UX.** `LevelData.wiring` dict; import/export round-trip; inspector `Action` enum + `Target` ref-pick fields; visible wiring line from switch to target. Round-trip a wired sandbox level through Ctrl+S / `--import` byte-identically.
-4. **Action dispatcher + alive actions.** Implement the dispatcher with legacy fallback (§7.1). Code `none`, `set_alive`, `clear_alive`, `toggle_alive`. Sandbox: switch toggles a turret on/off; alive=0 lasers stop drawing their beam.
-5. **`destroy` action.** Identify what `destroy_object` reads beyond `X = victim index`; wrap in an adapter that sets up that context from the dispatcher. Sandbox: switch destroys a generator from a safe vantage; explosion particles + score fire as if shot directly.
-6. **Acceptance tests.** Multi-switch sandbox level (two switches → two different objects, independent state). Cascade test: switch C clears switch B's alive (no recursion concerns since dispatcher only fires on bullet hit, not on alive transitions). Regression: levels 3/4/5 under both `_SWITCHES = FALSE` and `TRUE` — doors must still open via the legacy fallback.
-7. **Editor validation pass.** Dangling-target block, pod-target block, stale-switch-index prune.
-8. **Documentation update.** Move the [ideas.md](ideas.md#configurable-switches-and-triggers) "Configurable switches and triggers" entry into Completed; cross-reference this plan; explicitly call out the deferred follow-ups in §10. Hostile-bullet activation stays a separate idea entry for v2.
+| § | Item | Status |
+|---|------|--------|
+| 10.1 | Door object + `pulse_door` | done |
+| 10.2 | Shape generators | done (slot, notch_v, flat_window) |
+| 10.3 | Parameter actions | `set_param` / `xor_param` done; `cycle_param` open |
+| 10.4 | Cycle data pool | open |
+| 10.5 | Migrate the original three doors | done |
+| 10.6 | `OBJ_flag_disabled` | done |
+| 10.7 | Single-use switches | open |
+| 10.8 | Hostile bullets activate switches | open |
+| 10.9 | Authoring helpers for packed param values | partly: type-aware Slot labels exist; sub-field widgets for packed bytes do not |
+| 10.10 | `toggle_door` | open |
 
-## 10. Deferred follow-ups
+### 10.1 Door object type + `pulse_door` (done)
 
-Sketched here so the MVP wiring format and dispatcher are forward-compatible. None of this is in MVP scope.
+`OBJECT_door = $11`. No sprite: the main object loop skips doors before the alive test (`thrust.6502:1711`), so they are never plotted or shot. Per-instance data:
 
-### 10.1 Door object type + `pulse_door`
+| Slot | Meaning |
+|------|---------|
+| `obj_data_0` | bit 7 = side (0 = left wall, 1 = right wall); bit 6 = flat_window direction (0 = top-down, 1 = bottom-up); bits 0-1 = shape |
+| `obj_data_1` | width (rows; editor "Height", 1..32) |
+| `obj_data_2` | max carve depth (editor "Open depth", 1..127) |
+| `obj_pos_X`, `obj_pos_Y` | anchor: wall X when closed, top row of the door |
 
-A new object type `$11 door` for editor-placed door regions. Owns its own geometry and animation state:
+`OBJ_flag_alive` means "animating". Runtime state lives in five 32-byte arrays indexed by object, not in obj_data: `door_cursor` (current carve), `door_phase` (0 opening, 1 holding, 2 closing), `door_hold_phase`, `door_close_phase`, `door_close_rate`.
 
-- `obj_data_0` — animation cursor.
-- `obj_data_1` — shape descriptor byte.
-- `obj_data_2` — door width-in-rows (1..32).
-- `obj_pos_X`, `obj_pos_Y` — anchor (top-left) of the door region in the wall.
-- `level_obj_flags` bit 1 (`OBJ_flag_alive`) — re-purposed as "door is currently animating".
+`action_pulse_door` always re-seeds `door_hold_phase = arg_a` and `door_close_rate = arg_b`. Then:
 
-Sprite registration is a stub (zero-size mask) so the existing sprite-cache path no-ops cleanly. In editor-mode the door is rendered as a custom overlay.
+- idle door: set alive, zero cursor/phase/close_phase (start opening);
+- opening or holding: nothing more, so the hold window is extended (matches the original `counter_A = $FF` re-latch);
+- closing: set phase back to opening from the current cursor.
 
-`pulse_door` action (`action_code = $05`, say): writes into target door object's `level_obj_flags` (set `alive`) and `obj_data_0` (start cursor at 0). The door's own per-frame update finishes the work, reading `arg_a` (open hold frames) and `arg_b` (close rate) from the wiring entry.
+`door_advance_anim`: opening increments the cursor by one per frame up to its maximum (`max_carve` for slot/notch_v, `width` for flat_window); holding counts `door_hold_phase` down; closing decrements the cursor once every `close_rate + 1` frames and clears alive at 0.
 
-A new per-frame walker `tick_doors` advances each animating door's cursor and calls the matching shape generator; hooked into the same per-frame slot as `tick_door_logic`. Restoration of original terrain bytes uses a per-door scratch buffer (≤32 bytes per door) cached on first open.
+The carve is rewritten into the wall arrays every frame while the door's top row is on screen (same `< $F1` window test as `level_3_door_logic`), whether the door is open or closed. Closed doors keep their rows at the anchor X, so no terrain needs saving and restoring.
 
-### 10.2 Shape generators
+### 10.2 Shape generators (done)
 
-Door geometry varies enough across the original three levels that one parameterised shape doesn't cover all of them well. Carry a small **shape descriptor** byte (`obj_data_1`) that selects a generator routine:
-
-| Code  | Shape         | Geometry                                                                                    |
-|-------|---------------|---------------------------------------------------------------------------------------------|
-| `$00` | `slot`        | Constant X-offset in the wall for `width` rows. Equivalent to level 3.                     |
-| `$01` | `notch_v`     | V-notch — X decreases for `width/2` rows, then increases for `width/2` rows. Level 5.      |
-| `$02` | `flat_window` | Constant X-region open for `width` rows, animated by sweeping the open-X back and forth. Level 4. |
-
-Each generator takes Y in screen-space, `width`, and the door's animation cursor, and writes into `terrain_left_wall` or `terrain_right_wall` accordingly. Side (left vs right wall) is a bit in the shape descriptor (`$80`); the generator picks the wall array via SMC pointer.
-
-Window-Y guard: reuse the early-return-if-off-window pattern from `level_3_door_logic`.
+| Code | Shape | Geometry |
+|------|-------|----------|
+| `0` | `slot` | Every row carved to `anchor ∓ cursor`. |
+| `1` | `notch_v` | V-protrusion with a fixed ±1 X step per row (peak at width/2), pulled back by the cursor. A second pass carves the matching V-recess into the opposite wall at the anchor, so the cavern seals exactly when closed. |
+| `2` | `flat_window` | Rows open one at a time. The cursor counts open rows (0..width); open rows sit at `anchor ∓ max_carve`, the rest at the anchor. Bit 6 picks top-down or bottom-up. |
 
 ### 10.3 Parameter actions
 
-| Code  | Name              | Effect                                                                 | arg_a            | arg_b                |
-|-------|-------------------|------------------------------------------------------------------------|------------------|----------------------|
-| `$06` | `set_param`       | Write `arg_b` into target's slot indexed by `arg_a`.                   | slot index 0..2  | byte to write        |
-| `$07` | `xor_param`       | XOR target's slot byte with `arg_b`. Bit-flip a flag inside `gun_aim`. | slot index 0..2  | XOR mask             |
-| `$08` | `cycle_param`     | Step target's slot through the level's cycle-data pool.                | pool offset      | list length          |
+`set_param` (`$06`) and `xor_param` (`$07`) are done (§5). `cycle_param`, which steps a target's slot through an authored list, is open. Its earlier proposed code `$08` is now `set_disabled`; it would take one of `$0B`-`$0F`.
 
-`set_param` / `xor_param` cover most laser-puzzle uses (flip orientation, bump phase, swap duty). `cycle_param` covers ordering puzzles where each shot rotates a parameter through a list.
+### 10.4 Cycle data pool (open)
 
-### 10.4 Cycle data pool
+For `cycle_param`: a per-level `level_N_cycle_data` byte pool with a `level_cycle_data_lookup_LO/HI` pointer table. A wiring entry stores `arg_a` = offset into the pool and `arg_b` = list length. The exporter would rebuild the pool on each export and rewrite offsets.
 
-Cycle lists used by `cycle_param` live in a single shared per-level **cycle-data pool**:
+### 10.5 Migration of the original game's three doors (done)
 
-```
-.level_N_cycle_data
-        EQUB    <list 0 byte 0>, <list 0 byte 1>, ...
-        EQUB    <list 1 byte 0>, ...
-```
+Each original door is now a door object wired from the level's two original switches with `pulse_door`, `close_rate = 0` (one cursor step per frame):
 
-A wiring entry that uses `cycle_param` stores `arg_a` = offset into the pool, `arg_b` = list length. A second pointer table `level_cycle_data_lookup_LO/HI` is set up at level init.
+| Engine level | Editor level | Door(s) | Hold (`arg_a`) |
+|--------------|--------------|---------|----------------|
+| 3 | 4 | Two notch_v doors (objects `$0E` right wall, `$0F` left wall); each switch pulses both | `$F0` / `$E0` (240 / 224 frames, about 7.3 / 6.8 s) |
+| 4 | 5 | One flat_window door (object `$13`, left wall, top-down, width `$15`, depth `$0E`) | `$E0` (about 6.8 s) |
+| 5 | 6 | One notch_v door (object `$11`, left wall, width `$16`, depth `$16`) | `$DC` (220 frames, about 6.7 s) |
 
-Editor's export validation pass rebuilds the pool from scratch each export and rewrites all wiring entries' offsets to match — avoids stale offsets after deletes.
+Engine level 3's door was first migrated as a slot (`6988c13`) and later re-authored as notch_v in the editor (`f463104`). The goal was play-feel parity, not binary identity.
 
-### 10.5 Migration of original game's three doors
+The current export also carries test wiring on engine level 0 (switch 9) and engine level 3 (switches `$0C`, `$0D`).
 
-Re-author each level's door under the new system, then verify via play-test (binary identity is not the goal — the original counter-based animation is being replaced with object-based animation). Per level:
+### 10.6 Drawn-but-disabled object state (done)
 
-1. Add a `door` object at the world position currently hardcoded in the per-level routine. World Y from the `LDA #$xx / SBC window_ypos_INT` constants (level 3: `$0269`, level 4: `$0343`, level 5: `$0370`); X from the `terrain_left_wall` writes.
-2. Pick the matching shape: level 3 → `slot`, level 4 → `flat_window`, level 5 → `notch_v`.
-3. Set `width` from the loop count (`$0D`, `$15`, `$0F`).
-4. Wire each existing switch on the level (`$07` / `$08`) to the door with action `pulse_door`, tuning `arg_a` (hold frames) and `arg_b` (close rate) to feel similar to the original.
-5. Delete the per-level door routine references from the export pipeline.
+`OBJ_flag_disabled = $10` (bit 4 of `level_obj_flags`; bit 3 is `OBJ_flag_laser_redraw_pending`). The sprite still plots and bullets still collide; per-type behaviour stops:
 
-Acceptance: side-by-side play comparison against the original under SWRAM `_SWITCHES = TRUE`. Frame-count parity unnecessary; original feel is.
+- guns: `try_gun_fire` doesn't fire;
+- lasers: `update_one_laser_beam` takes the off-phase path, so a drawn beam is erased;
+- bobbing mines: no motion (the per-mine `bobbing_mine_local_tick` freezes, so the bob resumes where it left off) and no ship contact;
+- gravity wells: no pull and no debris;
+- teleporters: no warp latch (the debris fountain keeps running).
 
-### 10.6 Drawn-but-disabled object state (`OBJ_flag_disabled`)
+Actions `$08` / `$09` / `$0A` (§5). The editor badge for disabled targets was not built.
 
-`set_alive` / `clear_alive` / `toggle_alive` semantically mean "exists / is destroyed" — not "active / dormant". The per-object update loop tests `OBJ_flag_alive` at `thrust.6502:1806` and skips both the plot path *and* the per-type behaviour when the bit is clear, so a switch wired to clear a gun's alive bit makes the gun **vanish** rather than just stopping it firing. Confirmed in-emulator with the Phase C level-3 toggle test (2026-05-06).
+### 10.7 Single-use switches (open)
 
-A second consequence of conflating exists-with-active: a `toggle_alive` switch can **revive a destroyed object**. Player shoots the gun → alive bit clears → switch toggles → alive bit sets → gun is back, with no explosion or animation, just popping into existence. Sometimes a fun puzzle ingredient (a "respawn" switch); usually not what you wanted. Once `OBJ_flag_disabled` lands, this side-effect dissolves: `set_alive` would only ever re-attach an explicitly-deactivated object the *level* started disabled, while `clear_disabled` / `set_disabled` would be the natural pair for "freeze-thaw the gun".
+A per-wiring flag (in a free bit of `arg_a` / `arg_b` or a new byte) that makes the switch clear its own alive bit and spawn debris after the action fires. Editor: a "Single use" toggle, dashed wiring line. Note that the alive trio can already do this by wiring a switch to `clear_alive` itself, but the editor hides those actions.
 
-For shoot-to-disable puzzles (a turret freezes in place but is still visible, or a laser stops firing but the emitter sprite stays on the wall), introduce a separate flag bit:
+### 10.8 Hostile bullets activate switches (open)
 
-- New `OBJ_flag_disabled = $08` (or similar — first free bit in `level_obj_flags`).
-- Per-type update bodies test `OBJ_flag_disabled` *after* the existing `OBJ_flag_alive` gate. When set: skip the type-specific behaviour (gun fire, laser beam draw, mine bobbing, well pull) but still allow the plot / cull / collision-check path to run.
-- Three new actions, mirroring the alive trio: `set_disabled` ($05), `clear_disabled` ($06), `toggle_disabled` ($07). Drop into the existing 16-entry jump table.
-- Editor cue: dim the sprite or overlay a "disabled" badge in the editor when an object is referenced as a `*_disabled` action target, so the designer can read the puzzle visually.
+Drop or relax the player-only filter at `thrust.6502:1935-1936` (`LDA particles_type,X : BNE bullet_miss`) and walk all 32 particle slots instead of player slots 3..0. Gate with a per-wiring "accepts hostile fire" flag so existing puzzles aren't tripped by stray turret fire. See [ideas.md](ideas.md#hostile-bullets-activate-switches).
 
-Cheap to implement once we know which behaviours need gating per type — likely just guns ($00..$03), lasers ($09..$0C), and mines ($0E/$0F). Pod, fuel, generator, teleporter, gravity well don't have ongoing per-frame "behaviour" beyond rendering / collision, so they can ignore the bit.
+### 10.9 Authoring helpers for param-write values (partly done)
 
-### 10.7 Single-use switches (per-wiring "destroy after firing" flag)
+`set_param` / `xor_param` take a raw byte. Packed fields are hard to author:
 
-Some puzzle archetypes want a switch that fires *once* and then is consumed — a one-shot key for an irreversible state change. Right now every switch is freely re-shootable (refractory aside). Add a per-wiring flag that makes the switch destroy *itself* after the action fires.
+- gun `gun_aim`: base angle (bits 2-4) and spread (bits 0-1);
+- laser slot 0: phase (low nibble) and duty (high nibble);
+- `xor_param` masks have no cue for what each bit means.
 
-Implementation:
+Done: the Slot dropdown is labelled per target type (`SWITCH_SLOT_LABELS`). Open: a `(target_type, slot)` registry that shows the same sub-field widgets the base inspector uses (Phase/Duty, Base angle/Spread) and packs them into `arg_b`, plus labelled bit checkboxes for `xor_param` masks.
 
-- Repurpose one of the reserved wiring bytes (`arg_a` or `arg_b`) as a flags byte. Bit 0 (`SWITCH_FLAG_single_use`) means "after the action runs, clear the switch's own alive bit and spawn a debris puff".
-- Dispatcher's tail (just before the `CLC; RTS`) tests the flag, and if set: `LDX current_object; clear OBJ_flag_alive; spawn an explosion at the switch's screen position`. Reuses the existing `spawn_hit_debris` path or `create_explosion` directly.
-- Editor: a checkbox / toggle on the switch's inspector panel (`Single use`). When set, the wiring line draws as dashed instead of solid, and the action label appends "(once)".
-- Validation: a single-use switch with `action = none` is the same as a no-op; warn (don't block) on export.
+### 10.10 Door toggle trigger (open)
 
-Composes naturally with `pulse_door` (one-shot door opener: shoot → door pulses open → switch is gone) and with `cycle_param` (interesting puzzle: a single-use switch only consumes one cycle slot before vanishing, locking the cycle in a particular state).
-
-Cheap — one byte of state per wiring entry, ≤16 cycles in the dispatcher tail.
-
-### 10.8 Hostile bullets activate switches
-
-Drop the player-only filter at `thrust.6502:1911-1912` (or relax to also accept particle type `$03`), and walk all 32 particle slots instead of just the four player-bullet slots. Gate via a per-wiring-entry "accepts hostile fire" flag so existing puzzles aren't degenerated by stray turret bullets tripping switches. Combines with [field flips for routing bullets](ideas.md#configurable-switches-and-triggers) and the gravity-well [bullet pull](ideas.md#gravity-well-follow-ups) follow-up to enable turrets-defeat-themselves puzzles.
-
-### 10.9 Authoring helpers for param-write values
-
-`set_param` and `xor_param` take a raw byte as the value / mask. For numeric slots (well radius, mine amplitude, beam dx / dy) that's fine. For *packed* fields it's hostile to author against:
-
-- Gun `gun_aim` packs base angle (bits 2–4, ×4 step) and spread (bits 0–1, lookup-table index).
-- Laser `gun_aim` packs phase index (low nibble × 8 frames) and duty index (high nibble × 4 + 4 frames).
-- `xor_param` masks are bit patterns — `$80` to flip duty's high bit, `$03` to wipe spread, etc. — and there's no in-editor cue for what each bit *means* on the target type.
-
-The base inspector already has type-aware widgets for these fields (the laser inspector exposes Phase and Duty as separate enums; the gun inspector has Base angle and Spread). The natural fix is to surface the same widgets inside the wiring entry once Slot + Action are picked, replacing the raw Value byte field for known target-type / slot combos.
-
-Concretely, a small registry: given `(target_type, slot)`, return either a list of sub-fields (one per packed sub-component, each backed by a getter/setter that packs into `arg_b`) or `None` to fall back to the raw byte. For `xor_param` the same registry could expose a row of bit checkboxes for the mask, labelled with the sub-field names ("flip duty bit 3?", "flip orientation?").
-
-Cheap once the registry exists; the bulk of the work is enumerating which (type, slot) pairs benefit. Likely worth it before authoring any non-trivial puzzles, since "shoot the switch and the laser changes" only reads well if the designer can predict *how* it changes from the inspector.
-
-### 10.10 Door toggle trigger
-
-`pulse_door` runs a fixed open-hold-close cycle: the second shot during the hold window is ignored (the dispatcher's refractory + pulse_door's already-alive check both bail). That's the right shape for the original game's level-3/4/5 doors but limiting for puzzle authoring — a designer can't say "shoot once to open, shoot again to close on demand". Add a sibling action:
-
-- **`toggle_door`** ($0B or whichever next free slot). If the target door is closed (`alive == 0`): same as pulse_door — set alive, reset cursor/phase, seed timing args.
-- If alive and `phase < closing`: jump straight to closing phase (skip remaining hold, run the close path from current cursor).
-- If alive and already closing: no-op.
-
-A door wired with `toggle_door` then ignores `arg_a` (hold frames) — there's no hold phase; the door waits at full open until a second shot arrives. `arg_b` still controls close rate. Designers who want the auto-close back use `pulse_door`; designers who want player-controlled close use `toggle_door`.
-
-Engine cost is small: one more case in the action jump table, plus a check on `door_phase` inside the action handler to either start opening or fast-forward to closing. Editor-side it's a one-line addition to `SWITCH_ACTION_VALUES` plus a slot-label entry (`arg_a` becomes "(unused)", `arg_b` stays "Close rate").
+`toggle_door` (next free code in `$0B`-`$0F`): if the door is idle, open it as `pulse_door` does; if opening or holding, jump to closing; if closing, no-op. No hold phase, so `arg_a` is unused and `arg_b` is still the close rate. One jump-table entry plus a `door_phase` check; editor adds it to `SWITCH_ACTION_VALUES`.
 
 ## 11. Testing
 
-- **MVP smoke test:** new sandbox level with one switch wired to one turret via `toggle_alive`. Each shot toggles the turret on/off; refractory window prevents double-fire while the bullet is still inside the AABB.
-- **Multi-switch level:** two switches wired to two different objects. Independent state; one's refractory doesn't gate the other.
-- **Destroy test:** switch wired with `destroy` against a generator. Behaves identically to shooting the generator directly (same explosion particles, same score).
-- **Cascade test:** switch C clears switch B's alive. Verifies dispatcher doesn't recurse on alive transitions.
-- **Original level 3/4/5 regression:** play levels 3/4/5 under both `_SWITCHES = FALSE` and `_SWITCHES = TRUE`. Doors must still open identically because their switches have no wiring entries and fall through to the legacy path.
-- **CRC:** non-SWRAM build remains `6389c446` (whole `_SWITCHES` code path is gated). SWRAM build's CRC will move; that's expected.
+Recorded in commit messages: one switch toggling a gun on and off in-emulator (Phase C, level 3), and the three door migrations on engine levels 3/4/5. The level 0 test wiring (switch 9: `destroy` plus three `toggle_disabled` entries) exercises multi-trigger and the disabled actions.
+
+Still worth checking after changes:
+
+- two switches wired to different objects keep independent refractory;
+- a switch whose action clears another switch's alive bit doesn't recurse (alive changes don't trigger anything);
+- non-SWRAM CRC stays `6389c446`; the SWRAM CRC moves with every change.
 
 ## 12. Risks
 
-- **`destroy_object` reentrancy.** The routine normally runs in a bullet-hit context with bullet-state ZP set up by the particle loop. The dispatcher calls it from `handle_door_switch`, which has different ambient state. Mitigation: identify what `destroy_object` actually reads beyond `X = victim index` and wrap in a small adapter that synthesises the missing context. Test against alive=1 lasers, turrets, generators, mines, and gravity wells to make sure each destroys cleanly.
-- **Toggling alive on lasers mid-frame.** Lasers XOR-draw their beams each frame; clearing `alive` mid-frame must leave the beam erased rather than stuck on. Verify `tick_lasers` (or the laser draw routine) handles `alive=0` cleanly — the beam should be erased on the frame the toggle fires.
-- **Alive bit collisions with single-instance state.** Pod (object 0, type `$05`) has hardcoded single-instance state; alive-toggling it would desync the engine's pod tracking. Editor blocks pod as a wiring target. Generators and other unique single-instance objects are fine because they stay at their canonical index.
-- **Self-targeting.** Switch wired to itself with `clear_alive` removes itself after one shot — fine, designer's choice. Editor renders the wiring line as a small loop; dispatcher handles it without recursion concerns since alive transitions don't trigger anything.
-- **Refractory window leakage.** If the dispatcher sets `level_switch_state` before the action runs and the action longjmps out (e.g. `destroy` triggers explosion → frame end), the refractory might never decrement. Mitigation: set the state byte *after* the action returns.
-- **Save state across deaths.** Switch state and target alive bits both reset on level restart, exactly like other per-level state today. No persistence concerns.
+- **Alive bit on single-instance objects.** The pod (object 0) has hardcoded engine state; the editor blocks it as a target. The pod stand and generator also rewrite their own alive bit every frame (pod lifted, planet countdown blink), so alive actions on them won't stick.
+- **Alive vs disabled.** The hidden alive actions make objects vanish and `toggle_alive` can revive a destroyed object with no animation. Prefer `destroy` and the disabled trio.
+- **Objects handled before the alive gate.** Teleporters, gravity wells, doors (and mine motion) are processed before the per-object `OBJ_flag_alive` test, so alive actions don't switch them off. Use the disabled actions for teleporters, wells and mines; doors use alive to mean "animating".
+- **Self-targeting.** Allowed; a switch can disable or destroy itself.
+- **Persistence across deaths.** Wiring effects and door state persist across lives within a level (§1). A puzzle that relies on resetting on death would need extra work.
