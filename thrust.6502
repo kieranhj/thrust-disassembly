@@ -1522,23 +1522,72 @@ ORG     NATIVE_ADDR
         JMP     destroy_object
 
     .bullet_test_object
+        ; ------------------------------------------------------------
+        ; Player's bullet collision test against current object.
+        ;
+        ; Each object is represented by a simple axis-aligned
+        ; bounding box:
+        ;
+        ;     object_x <= bullet_x < object_x + object_width
+        ;     object_y <= bullet_y < object_y + object_height
+        ;
+        ; This simple rectangular collision detection is used instead of
+        ; pixel perfect collision detection, in this case, of testing
+        ; player bullets against enemy objects.
+        ; Even though the turret guns appear largely as diagonal sprites,
+        ; when sat on the landscape, they do very tightly fit into an 
+        ; AABB rectangle.
+        ; Notes:
+        ; Object positions are treated as the TOP-LEFT corner of the
+        ; object's bounding rectangle. Width and height are looked up
+        ; from per-object-type tables.
+        ; ------------------------------------------------------------
+
         LDX     object_type
+
+        ; Load bounding-box dimensions for this object type.
         LDA     obj_type_width,X
         STA     current_object_width
+
         LDA     obj_type_height,X
         STA     current_object_height
+
+        ; Load explosion and score properties for later.
         LDA     obj_type_explosion_particle,X
         STA     explosion_particle_type
+
         LDA     obj_type_score_value,X
         STA     score_value
+
+        ; Test all four player bullets.
         LDX     #$03
-        
+
     .bullet_test_loop
+
+        ; Skip inactive bullets.
         LDA     particles_lifetime,X
         BEQ     L0F61
 
+        ; Only test normal bullets (type 0).
         LDA     particles_type,X
         BNE     L0F61
+
+        ; --------------------------------------------------------
+        ; Horizontal bounding-box test.
+        ;
+        ; Compute:
+        ;
+        ;     bullet_x - object_x
+        ;
+        ; Reject if:
+        ;
+        ;     bullet_x < object_x
+        ;     bullet_x >= object_x + object_width
+        ;
+        ; therefore:
+        ;
+        ;     0 <= bullet_x - object_x < object_width
+        ; --------------------------------------------------------
 
         SEC
         LDA     particles_xpos_INT,X
@@ -1548,10 +1597,28 @@ ORG     NATIVE_ADDR
         CMP     current_object_width
         BCS     L0F61
 
+        ; --------------------------------------------------------
+        ; Vertical bounding-box test.
+        ;
+        ; Compute:
+        ;
+        ;     bullet_y - object_y
+        ;
+        ; Reject if:
+        ;
+        ;     bullet_y < object_y
+        ;     bullet_y >= object_y + object_height
+        ;
+        ; therefore:
+        ;
+        ;     0 <= bullet_y - object_y < object_height
+        ; --------------------------------------------------------
+
         SEC
         LDA     particles_ypos_INT,X
         SBC     current_obj_ypos_INT
         TAY
+
         LDA     particles_ypos_INT_HI,X
         SBC     current_obj_ypos_EXT
         BNE     L0F61
@@ -1559,10 +1626,18 @@ ORG     NATIVE_ADDR
         CPY     current_object_height
         BCS     L0F61
 
+        ; --------------------------------------------------------
+        ; Bullet hit confirmed.
+        ;
+        ; Clear bullet active flag.
+        ; --------------------------------------------------------
+
         LDA     particles_lifetime,X
         AND     #PARTICLE_flag
         STA     particles_lifetime,X
-        
+
+        ; Process special object types.
+
         LDA     object_type
         CMP     #OBJECT_door_switch_right
         BEQ     handle_door_switch
@@ -1689,50 +1764,148 @@ ORG     NATIVE_ADDR
         JMP     L1005
 
     .L0FB7
+        ; ------------------------------------------------------------
+        ; Fuel collection test.
+        ;
+        ; Requirements:
+        ;   - Player is NOT carrying a pod.
+        ;   - Object is a fuel canister.
+        ;   - Tractor beam button is pressed.
+        ;   - Fuel object is within the tractor-beam pickup region.
+        ;
+        ; Object coordinates represent the TOP-LEFT corner of each 
+        ; object's bounding box 
+        ;
+        ; Fuel canister sprite size:
+        ;     16 pixels wide
+        ;     14 pixels high
+        ;
+        ; Player coordinates are refer to the top-left of
+        ; the ship sprite, which has height and width 16*16 pixels 
+        ; when in its default vertical upward orientation.
+        ;
+        ; The resulting pickup region is slightly asymmetric in object
+        ; coordinates, but when sprite sizes are taken into account it
+        ; corresponds to a pickup area centred approximately over the
+        ; fuel canister, with a slight left bias matching observed
+        ; gameplay.
+        ; ------------------------------------------------------------
+
         LDA     pod_attached_flag_1
-        BNE     L0FB4
+        BNE     L0FB4                  ; cannot collect fuel while carrying pod
 
         LDA     object_type
         CMP     #OBJECT_fuel
-        BNE     L0FB4
+        BNE     L0FB4                  ; object must be fuel
 
         CMP     #OBJECT_generator
-        BEQ     L0FB4
+        BEQ     L0FB4                  ; defensive / unreachable check
 
         LDA     shield_tractor_pressed
-        BEQ     L0FB4
+        BEQ     L0FB4                  ; tractor beam must be active
+
+        ; ------------------------------------------------------------
+        ; Horizontal pickup test.
+        ;
+        ; Compute:
+        ;
+        ;     fuel_x - ship_x
+        ;
+        ; Continue only if:
+        ;
+        ;     1 <= (fuel_x - ship_x) <= 5
+        ;
+        ; where fuel_x is believed to be the LEFT edge of the fuel
+        ; collision box and ship_x is believed to be the ship origin.
+        ;
+        ; Given a 16-pixel-wide fuel sprite and a 21-pixel-wide ship
+        ; sprite, this corresponds to the ship visually overlapping
+        ; most of the fuel canister.
+        ;
+        ; Expressed in terms of sprite centres (assuming top-left
+        ; origins for both objects):
+        ;
+        ;     -2.5 <= shipCentreX - fuelCentreX <= 1.5
+        ;
+        ; giving a nearly centred pickup region with a slight bias
+        ; towards the left side of the fuel canister, consistent with
+        ; observed gameplay.
+        ; ------------------------------------------------------------
 
         LDA     current_obj_xpos_INT
         SEC
         SBC     player_xpos_INT
-        BEQ     L0FB4
+        BEQ     L0FB4                  ; reject Δx = 0
 
         CMP     #$06
-        BCS     L0FB4
+        BCS     L0FB4                  ; reject Δx >= 6
+
+        ; ------------------------------------------------------------
+        ; Vertical pickup test.
+        ;
+        ; Compute:
+        ;
+        ;     fuel_y - ship_y
+        ;
+        ; Continue only if:
+        ;
+        ;     0 <= (fuel_y - ship_y) <= 27
+        ;
+        ; where fuel_y is the TOP of the fuel sprite.
+        ;
+        ; This places the valid collection region mostly ABOVE the
+        ; fuel canister, matching the visual behaviour of the
+        ; downward-pointing tractor beam.
+        ;
+        ; Assuming top-left origins:
+        ;
+        ;     -23.5 <= shipCentreY - fuelCentreY <= 3.5
+        ;
+        ; so the ship may be substantially above the fuel canister
+        ; while still collecting it.
+        ; ------------------------------------------------------------
 
         LDA     current_obj_ypos_INT
         SBC     player_ypos_INT
         TAX
         LDA     current_obj_ypos_EXT
         SBC     player_ypos_INT_HI
-        BNE     L0FB4
+        BNE     L0FB4                  ; reject if high byte differs
 
         CPX     #$1C
-        BCS     L0FB4
+        BCS     L0FB4                  ; reject Δy >= 28
+
+        ; ------------------------------------------------------------
+        ; Fuel collection active this frame.
+        ; ------------------------------------------------------------
 
         LDA     #$01
         STA     collecting_fuel_flag
+
+        ; Increment tractor-beam dwell counter for this fuel canister.
+        ; Continuous tractor-beam contact is required before the fuel
+        ; object is actually collected.
+
         LDX     current_object
         LDY     obj_tractor_counter,X
         INY
         TYA
         STA     obj_tractor_counter,X
+
+        ; Fuel disappears after 26 collection ticks.
+
         CMP     #$1A
         BCC     L1005
+
+        ; ------------------------------------------------------------
+        ; Fuel fully collected.
+        ; Remove object, award score and play collection sound.
+        ; ------------------------------------------------------------
 
         LDA     level_obj_flags,X
         AND     #$FD
         STA     level_obj_flags,X
+
         LDA     #$30
         JSR     accumulate_score_A
 
@@ -3939,8 +4112,6 @@ ORG     NATIVE_ADDR
 ;      - After thrust and gravity, linear drag is applied:
 ;          * Horizontal drag:  velocityX -= velocityX >> 6   (63/64)
 ;          * Vertical drag:    velocityY -= velocityY >> 8   (255/256)
-;      - Different drag strengths are intentional and replicate the
-;        original game’s feel.
 ;
 ; Result:
 ;   - velocity_vectorx / velocity_vectory contain the updated linear velocity
@@ -5509,11 +5680,13 @@ ORG     NATIVE_ADDR
 }
 
 \ ******************************************************************************
-\ * Function: generate_stars_to_start
+\ * Function: animate_ship_flying_text_banner
 \ * Description: Draw ship sprite and animate star particles until counter wraps to zero
+\ * This routine animates the stars and during the "I love space"/"Physics is Fun"/"Support Hotol"
+\ * messages after completing levels 24,48 and 72 respectively.
 \ ******************************************************************************
 
-.generate_stars_to_start
+.animate_ship_flying_text_banner
 {
         LDA     #$08
         STA     plot_ship_sprite_number
@@ -9151,23 +9324,30 @@ ORG     NATIVE_ADDR
         LDA     #$00
         STA     midpoint_ypos_INT
         STA     midpoint_ypos_INT_HI
-        INC     total_levels_played
-        INC     level_number
+
+        INC     total_levels_played       ; counts every completed level forever
+
+        INC     level_number              ; mission within current 6-level cycle
         LDA     level_number
-        CMP     #$06                                    ; number of levels
+        CMP     #$06                      ; 6 levels per cycle:
+                                          ;   0-5  Normal
+                                          ;   6-11 Reverse gravity
+                                          ;   12-17 Invisible landscape
+                                          ;   18-23 Reverse gravity + invisible landscape
+                                          ; After every 6 levels, toggle one modifier.
         BNE     setup_next_mission
 
         LDA     #$00
-        STA     level_number                            ; reset level number to 0
+        STA     level_number              ; restart cycle at mission 0
 
         LDA     reverse_gravity_flag
         EOR     #$FF
-        STA     reverse_gravity_flag                    ; invert flag
+        STA     reverse_gravity_flag      ; toggle reverse gravity
         BNE     setup_reverse_gravity
 
         LDA     invisible_landscape_flag
         EOR     #$0F
-        STA     invisible_landscape_flag                ; invert lower 4 bits of flag
+        STA     invisible_landscape_flag  ; toggle invisible landscape
 
     .setup_reverse_gravity
         LDA     reverse_gravity_flag
@@ -9176,10 +9356,13 @@ ORG     NATIVE_ADDR
         LDA     reverse_gravity_msg_shown
         BNE     setup_invisible_landscape
 
+        ; First reached after 6 completed levels.
+        ; (Subsequent visits skip because reverse_gravity_msg_shown is set.)
+
         JSR     clear_screen_and_init
         JSR     write_reverse_gravity
 
-        LDY     #$96                                    
+        LDY     #$96                        ; reused as both timeout and flag value
         STY     reverse_gravity_msg_shown
         JSR     wait_time_out_Y
 
@@ -9192,39 +9375,74 @@ ORG     NATIVE_ADDR
         LDA     invisible_landscape_msg_shown
         BNE     setup_clear_screen
 
+        ; First reached after 12 completed levels:
+        ;   level 0-5   normal
+        ;   level 6-11  reverse gravity
+        ;   level 12-17 invisible landscape
+
         JSR     clear_screen_and_init
         JSR     write_invisible_landscape
 
-        LDY     #$96                                    ; why $96?  Just timeout value recycled as flag!
-        STY     invisible_landscape_msg_shown
-        JSR     wait_time_out_Y
+        LDY     #$96
+        STY     invisible_landscape_msg_shown   ; reused as both timeout and flag value
+                                                ; Any non-zero value would work here.
+                                                ; $96 is reused because it is already
+                                                ; being loaded into Y as the timeout
+                                                ; parameter for wait_time_out_Y.
+        JSR     wait_time_out_Y        
 
     .setup_clear_screen
+
         INC     extra_string_counter
-        LDA     extra_string_counter                    ; number of attempts at level?
+
+        ; Trigger a special banner only every fourth 6-level cycle.
+        ;
+        ; Each cycle = 6 levels
+        ; Counter increments once per completed cycle
+        ;
+        ; Cycle 1 = 6  levels
+        ; Cycle 2 = 12 levels
+        ; Cycle 3 = 18 levels
+        ; Cycle 4 = 24 levels --> first banner
+        ; Cycle 8 = 48 levels --> second banner
+        ; Cycle 12 = 72 levels --> third banner
+
+        LDA     extra_string_counter
         AND     #$03
         BNE     setup_next_mission
 
         JSR     clear_screen_and_init
 
         LDX     extra_string_index
+
+        ; There are only three special messages.
+        ;
+        ; extra_string_index = 0  -> shown after 24 levels
+        ; extra_string_index = 1  -> shown after 48 levels
+        ; extra_string_index = 2  -> shown after 72 levels
+        ;
+        ; Once index reaches 2 it remains there permanently.
+
         CPX     #$02
         BEQ     skip_inc_extra_string_index
 
         INC     extra_string_index
-        
+
     .skip_inc_extra_string_index
+
         LDA     #HI(end_of_level_messages)
         STA     plot_string_ptr+1
+
         LDA     extra_string_ptrs,X
         TAX
-        JSR     write_message
 
-        JSR     generate_stars_to_start                    ; generate star field and scroll window
+        JSR     write_message             ; display special banner message
+
+        JSR     animate_ship_flying_text_banner
 
         LDY     #$50
         JSR     wait_time_out_Y
-
+        
     .setup_next_mission
         SED                                                ; set decimal mode
         CLC
@@ -9238,7 +9456,12 @@ ORG     NATIVE_ADDR
         CPX     #$03            
         BCC     setup_level                                ; mission_number less than 3
 
-        INC     level_hostile_gun_probability            ; increment level_hostile_gun_probability
+        INC     level_hostile_gun_probability ; hostility rises by 1 each mission from mission 3 onwards:
+                                               ;   missions 3-6   -> 2..5
+                                               ;   missions 7-12  -> 6..11
+                                               ;   missions 13-18 -> 12..17
+                                               ;   missions 19-24 -> 18..23
+                                               ;   mission 36+    -> 35 (capped)
         LDA     level_hostile_gun_probability
         CMP     #$23
         BCC     setup_level
@@ -9249,6 +9472,9 @@ ORG     NATIVE_ADDR
     .setup_level
         CLC
         ADC     planet_destroyed_hostile_gun_modifier    ; level_hostile_gun_probability + planet_destroyed_hostile_gun_modifier
+                                                         ; this awards an extra +8 hostility in the case that the player
+                                                         ; destroyed the previous planet without escaping with orb.
+                                                         ; So this punishes player for not completing the previous mission.
         STA     hostile_gun_shoot_probability            ; store at hostile_gun_shoot_probability
 
         LDA     #$00
