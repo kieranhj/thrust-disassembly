@@ -253,7 +253,7 @@ X is FRAC/INT; Y uses whole units only (midpoint INT/INT_HI minus `midpoint_delt
 
 ### Tractor Beam (`do_pod_tractor_beam`, `thrust.6502:5233`)
 
-Called (via `update_pod_tractor_beam`) while the shield/tractor key is held and no death countdown is running. `get_distance_ship_to_pod_tractor` returns an approximate distance, `min + 2 × max` of |dy| and |dx × 4| in window coordinates, saturating at $FF:
+Called (via `update_pod_tractor_beam`) while the shield/tractor key is held and no death countdown is running. `get_distance_ship_to_pod_tractor` returns an approximate distance, `min + 3 × max` of |dy| and |dx × 4| in window coordinates, saturating at $FF:
 
 1. Distance < `TRACTOR_BEAM_ACTIVATE_DIST` ($75): `tractor_beam_started_flag` is set and the beam line is drawn.
 2. Distance >= `TRACTOR_BEAM_ATTACH_DIST` ($84): `attach_pod_to_ship` is called, which attaches only if `tractor_beam_started_flag` is already set.
@@ -271,7 +271,7 @@ So the pod is picked up when the ship, having first come within $75 with the bea
 
 4. **Target vector** = ship − midpoint, X scaled ×4 and Y ×2 to match the scaled tether vectors.
 
-5. **Angle search**: 7 passes, each testing 3 candidate angles. The step starts at $0A.AB (32/3 angle units) and halves each pass; after each pass the best angle (smallest `min + 2 × max` error between `calculate_attached_pod_vector` and the target) is kept and the start is rewound by half the new step. This is an atan2 done by search, yielding `angle_ship_to_pod` and `tether_angle_FRAC`.
+5. **Angle search**: 7 passes, each testing 3 candidate angles. The step starts at $0A.AB (32/3 angle units) and halves each pass; after each pass the best angle (smallest `min + 3 × max` error between `calculate_attached_pod_vector` and the target) is kept and the start is rewound by half the new step. This is an atan2 done by search, yielding `angle_ship_to_pod` and `tether_angle_FRAC`.
 
 6. **Initial angular velocity** from the cross product of force and displacement:
    ```

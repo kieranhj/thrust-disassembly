@@ -245,7 +245,7 @@ The pod is erased if it was drawn last frame and drawn only while tethered.
 
 ### Algorithm
 
-The tether is a Bresenham line (`draw_line`, `thrust.6502:8269`) plotted with XOR in colour 3 (`pixel_masks_1` ANDed with `plot_line_pixels_byte` = `level_line_pixels_byte` = `$FF`). `draw_ship_line_and_pod` erases the old line before the ship and pod are drawn and draws the new one after. The same routine draws the fuel pickup beams (with `plot_line_pixels_byte` = `$0F`).
+The tether is a Bresenham line (`draw_line`, `thrust.6502:8269`) plotted with XOR using `pixel_masks_1` ANDed with `plot_line_pixels_byte` = `level_line_pixels_byte`: `LANDSCAPE_COLOUR_BYTE` `$F0` (colour 2), or `$FF` (colour 3) once `invisible_landscape_flag` is set. `draw_ship_line_and_pod` erases the old line before the ship and pod are drawn and draws the new one after. The same routine draws the fuel pickup beams (with `plot_line_pixels_byte` = `$0F`).
 
 ### Per-Pixel Cost
 
