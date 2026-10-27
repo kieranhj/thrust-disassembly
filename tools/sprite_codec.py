@@ -47,7 +47,10 @@ OBJECT_NAMES = [
     "teleporter",                       # $10: one-way warp pad
 ]
 
-# Char-column widths from obj_type_width.
+# Sprite canvas widths in char columns (4 pixels each). These match the
+# engine's obj_type_width (thrust.6502) except gravity_well: its sprite is
+# 4x4 px (1 column) and is never plotted, while obj_type_width gives it $04
+# as a bullet-collision box. The codec needs the sprite width, not the box.
 OBJECT_WIDTH_CHARS = {
     "gun_up_right":            5,
     "gun_down_right":          5,
@@ -517,10 +520,14 @@ def _self_test(source_path: str) -> int:
             return 1
     print("OK   mode1 byte codec round-trips for all 256 values")
 
-    # Per-sprite round-trip.
+    # Per-sprite round-trip. Sprites absent from the file (the original
+    # game's file has only the first 9) are skipped, not failed.
     bad = 0
     for name in OBJECT_NAMES:
         spr = sprites[name]
+        if not spr.orig_stream_a:
+            print(f"SKIP {name}: not in this file")
+            continue
         sa_new, sb_new = assembled_bytes(spr)
         if sa_new != spr.orig_stream_a:
             bad += 1
@@ -543,11 +550,10 @@ if __name__ == '__main__':
     import sys
     here = os.path.dirname(os.path.abspath(__file__))
     repo = os.path.dirname(here)
-    # Try each in order: export file, extracted inline, then full source.
+    # SWRAM build's sprite file, else the original game's (9 sprites).
     candidates = [
         os.path.join(repo, 'tools', 'output', 'object_sprites.asm'),
-        os.path.join(repo, 'obj_sprite_data.6502'),
-        os.path.join(repo, 'thrust.6502'),
+        os.path.join(repo, 'thrust1', 'obj_sprite_data.asm'),
     ]
     if len(sys.argv) > 1:
         path = sys.argv[1]
