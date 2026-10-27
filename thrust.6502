@@ -4588,6 +4588,9 @@ ENDIF
 
         JSR     OSRDCH                    ; read character from input stream
 
+IF _FRIENDLY_KEYS
+        AND     #$DF                    ; fold case: 'o' as well as 'O', CAPS LOCK on or off
+ENDIF
         CMP     #KEY_UNPAUSE            ; unpause key
         BNE     pause_loop
 
