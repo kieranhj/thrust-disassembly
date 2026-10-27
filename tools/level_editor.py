@@ -37,7 +37,10 @@ from pathlib import Path
 import numpy as np
 import pygame
 
-root = Tk()
+# Created in main(), before pygame starts: making the Tk root first stops a
+# PyGame crash on macOS. Kept at module level so it lives as long as the app.
+# Not created at import time, so the module can be imported headless (tests).
+root = None
 
 # Import shared data and decoders from the visualisation tool
 sys.path.insert(0, str(Path(__file__).parent))
@@ -5325,6 +5328,7 @@ class Editor:
 # ---------------------------------------------------------------------------
 
 def main():
+    global root
     import argparse
     parser = argparse.ArgumentParser(description="Thrust Level Editor")
     parser.add_argument("--level", type=int, choices=range(1, 7), default=1,
@@ -5332,6 +5336,8 @@ def main():
     parser.add_argument("--import", dest="import_path", type=str, default=None,
                         help="Import level data from an exported .asm file")
     args = parser.parse_args()
+
+    root = Tk()
 
     editor = Editor(start_level=args.level - 1, import_path=args.import_path)
     editor.run()
