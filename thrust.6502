@@ -3354,11 +3354,21 @@ IF _NO_WRAP_UNDERGROUND
         CMP     no_wrap_y_INT
         BCC     do_wrap_check           ; player LO < threshold LO: above, do wrap
     .do_left_hand_clamp
-        LDA     window_xpos_INT
+        \ window_scroll_x is next frame's step (applied at 1a). Only a leftward
+        \ step is limited, and only so far that window_xpos lands on 3: zeroing
+        \ any step once xpos < 3 left the window unable to scroll right again.
+        LDA     window_scroll_x
+        BPL     no_lh_clamp                            ; not scrolling left
+        CLC
+        ADC     window_xpos_INT                        ; xpos after the step
+        BCC     lh_clamp                               ; would pass 0
         CMP     #$3
-        BCS     no_lh_clamp
-        LDA     #0
-        STA     window_scroll_x                        ; clamp: don't scroll below xpos=3
+        BCS     no_lh_clamp                            ; stays at 3 or more
+    .lh_clamp
+        LDA     #$3
+        SEC
+        SBC     window_xpos_INT
+        STA     window_scroll_x                        ; step to xpos = 3 exactly
     .no_lh_clamp
         JMP     return
 
