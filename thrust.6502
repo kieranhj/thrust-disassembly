@@ -7651,7 +7651,11 @@ IF _SWITCHES
         BPL     init_door_clear_alive_loop
 ENDIF
 
+IF _SWRAM_BUILD
+        LDX     #LEVEL_MAX_OBJECTS                      ; the counter array has a slot per object
+ELSE
         LDX     #$0B
+ENDIF
         
     .initialise_obj_tractor_counter
         LDA     #$00
