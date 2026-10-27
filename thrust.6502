@@ -156,7 +156,7 @@ NUM_ANGLES                          = 32        ; number of discrete ship/tether
 ANGLE_MASK                          = NUM_ANGLES - 1 ; bitmask for angle wrapping (0-31)
 ANGLE_DOWN                          = $10       ; ship angle pointing straight down
 
-PIXEL_COLUMN_MASK                   = $03       ; pixel column mask (4 pixels per MODE 5 byte)
+PIXEL_COLUMN_MASK                   = $03       ; pixel column mask (4 pixels per byte, MODE 1 ULA)
 SCREEN_ADDR_HI_OFFSET               = $38       ; high byte offset for screen address calculation
 LANDSCAPE_COLOUR_BYTE               = $F0       ; pixel byte for terrain lines (colour 2)
 OBJECT_COLOUR_BYTE                  = $FF       ; pixel byte for object colour (logical 3)
@@ -342,7 +342,7 @@ pixel_column_index                  = $0074     ; pixel column (0-3) within scre
 obj_screen_y                        = $0074     ; object Y position relative to window
 
 pod_sprite_ptr_HI                   = $0075     ; hi byte of pod sprite data source address
-plot_ship_pixel_column              = $0075     ; sub-character X pixel offset (0-3) in MODE 5
+plot_ship_pixel_column              = $0075     ; sub-character X pixel offset (0-3), 4 pixels per byte
 delta_x_shifted                     = $0075     ; ship-to-midpoint X delta, shifted left 2 bits
 new_ship_ypos_INT_HI                = $0075     ; high byte of newly calculated ship Y position
 draw_line_delta_major               = $0075     ; Bresenham major axis delta
@@ -357,7 +357,7 @@ score_value                         = $0076     ; points awarded for destroying 
 delta_y_frac                        = $0076     ; fractional Y displacement intermediate
 draw_line_delta_minor               = $0076     ; Bresenham minor axis delta
 obj_scraddr_y_lo                    = $0076     ; screen addr low byte from Y row calc
-pod_pixel_column                    = $0076     ; pixel column offset (0-3) within MODE 5 byte
+pod_pixel_column                    = $0076     ; pixel column offset (0-3) within a screen byte
 
 terrain_draw_addr_HI                = $0077     ; stores HI byte of address to draw landscape at
 plot_pod_sprite_at_ptr              = $0077     ; screen addr ptr for pod sprite XOR plotting
@@ -934,7 +934,7 @@ ENDIF
         LDA     #$00
         STA     terrain_draw_table_index            ; cursor into cached-X tables (per scanline)
 
-        LDA     #$49                                ; $49 = 73 visible half-res scanlines
+        LDA     #$49                                ; first visible row is $49 rows below terrain_window_y_index (111 rows are drawn)
         CLC
         ADC     terrain_window_y_index
         STA     terrain_draw_wall_index             ; cursor into wall arrays (starts at top of window)
@@ -3501,6 +3501,9 @@ ELSE
 ENDIF
 }
 
+\ The original game's per-level door routines. Under _SWITCHES the generic door
+\ object (tick_doors) replaces them and they are not assembled.
+IF NOT(_SWITCHES)
 .level_5_door_logic
 {
         JMP     do_level_5_door_logic
@@ -3700,6 +3703,7 @@ ENDIF
 
         RTS
 }
+ENDIF   ; NOT(_SWITCHES)
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -6421,7 +6425,10 @@ ENDIF
 \ *                    empty) and generator (while recharging). The per-type
 \ *                    update branches short-circuit when this bit is clear.
 \ *
-\ *   bits 2-7         unused.
+\ *   bit 2  $04       OBJ_flag_laser_beam_drawn (SWRAM): beam XOR-plotted, erase next.
+\ *   bit 3  $08       OBJ_flag_laser_redraw_pending (SWRAM): geometry changed by set_param.
+\ *   bit 4  $10       OBJ_flag_disabled (SWRAM): drawn, but per-type behaviour off.
+\ *   bits 5-7         unused.
 \ *
 \ * Special case: update_pod_tractor_beam reads level_obj_flags (no ,X -
 \ * hardcoded index 0) and tests that both OBJ_flag_drawn and OBJ_flag_alive
@@ -6947,8 +6954,8 @@ ENDIF
 
 IF _LAST_USED_CHECKPOINT
         \\ Active-checkpoint model: respawn at the index tracked across deaths
-        \\ by update_active_checkpoint (per-frame advance scan, teleporter
-        \\ writes, pod-pickup snap). The historical height-based scan and the
+        \\ by update_active_checkpoint (per-frame scan both ways, teleporter
+        \\ writes). The historical height-based scan and the
         \\ pod-flag direction flip below it are bypassed entirely — the
         \\ direction-of-travel logic now lives in the per-frame scan.
         LDY     active_checkpoint_index
@@ -11374,7 +11381,8 @@ IF _TIMED_LASER
 \ * Params: obj_screen_x, obj_screen_y (sprite cell), object_type (orientation)
 \ * Returns: none (XOR-plots in hostile bullet colour; clobbers A/X/Y)
 \ * Description: Builds Bresenham start/end coordinates from the sprite centre
-\ *   and the per-orientation (dx, dy) table, then tail-calls draw_line. Called
+\ *   and the instance's dx, dy (obj_data slots 1/2, via laser_dx_temp/laser_dy_temp),
+\ *   clipped to the playfield, then tail-calls draw_line. Called
 \ *   for both draw and erase — draw_line's deterministic endpoint swap means
 \ *   passing the same inputs twice XORs the same pixels.
 \ *
@@ -11650,7 +11658,7 @@ IF _GRAVITY_WELL
 \ Constants. Lifetime is a power of 2 to make the velocity computation a shift.
 \ With lifetime 16 and offset = ±radius, peak speed = ±radius/16 world units/frame.
 WELL_DEBRIS_LIFETIME      = $10
-WELL_DEBRIS_SPAWN_MASK    = $01          ; emit one particle every 8 ticks per well
+WELL_DEBRIS_SPAWN_MASK    = $01          ; emit when (tick EOR slot) AND mask = 0: alternate gravity ticks
 
 \ ******************************************************************************
 \ * Function: apply_gravity_wells_to_force
@@ -11733,7 +11741,7 @@ WELL_DEBRIS_SPAWN_MASK    = $01          ; emit one particle every 8 ticks per w
         \\ ticks. Runs whether the ship is in range or not (position marker).
         LDA     level_tick_counter
         EOR     current_object
-        AND     #$01
+        AND     #WELL_DEBRIS_SPAWN_MASK
         BNE     well_emit_skip
         JSR     well_emit_debris_particle
     .well_emit_skip
@@ -12478,14 +12486,14 @@ IF _SWITCHES
 \ *
 \ * On a switch bullet-hit, handle_door_switch calls try_dispatch_switch_action.
 \ * If the switch's object index appears in the per-level switch_obj_indices
-\ * list, the dispatcher fires the wired action (set/clear/toggle alive, or
-\ * destroy) against the target object and returns carry CLEAR — the caller
+\ * list, the dispatcher fires each wired entry's action (action_jump_table:
+\ * alive, destroy, pulse_door, set/xor param, disabled) against its target and returns carry CLEAR — the caller
 \ * suppresses the legacy door_switch_counter_A latch. Switches not in the
 \ * list return carry SET, falling through to the original counter path so
 \ * levels 3/4/5 doors keep working unchanged.
 \ *
-\ * Refractory: each switch has one byte in level_switch_state. Set to 8
-\ * frames on dispatch; tick_switch_logic decrements each frame. Subsequent
+\ * Refractory: each switch has one byte in level_switch_state. Set to $14
+\ * (20 frames, ~0.6 s at 33 Hz) on dispatch; tick_switch_logic decrements each frame. Subsequent
 \ * hits while non-zero are consumed (carry CLEAR) without re-firing.
 \ ******************************************************************************
 
@@ -12606,7 +12614,7 @@ IF _SWITCHES
 \\ }
 
 \\ Action jump table: interleaved (LO, HI) pairs indexed by action_code × 2.
-\\ Slots $05, $0B..$0F reserved for follow-up actions (pulse_door / cycle_param);
+\\ Slots $0B..$0F are reserved for follow-up actions (e.g. cycle_param);
 \\ they currently point at action_none so future builds can drop them in by
 \\ replacing entries without touching the dispatcher.
 .action_jump_table
@@ -13455,14 +13463,15 @@ IF _BOBBING_MINES
 \ ******************************************************************************
 \ * Bobbing mines
 \ *
-\ * Mine Y position bobs along a sine curve with per-instance phase and
-\ * amplitude. obj_data slots:
-\ *   slot 0 = phase byte (added to vsync_count, masked to ANGLE_MASK)
+\ * A mine bobs along a sine curve with per-instance phase and amplitude:
+\ * $0E in Y, $0F (bobbing_mine_horizontal) in X. obj_data slots:
+\ *   slot 0 = phase byte (added to the per-mine bobbing_mine_local_tick)
 \ *   slot 1 = signed amplitude byte (peak-to-peak ≈ 2*amp pixels)
 \ *   slot 2 = previous frame's signed offset (state; starts at 0)
 \ *
 \ * level_obj_pos_Y / _EXT track the live displayed Y. Each frame the routine
-\ * computes new_offset = (sin(phase + vsync_count) * amp) >> 7, applies
+\ * computes new_offset = (sin(phase + local_tick) * amp) >> 7 from the
+\ * 256-entry bobbing_mine_sin_table, applies
 \ * (new_offset - prev_offset) as a 16-bit signed delta to the live Y, and
 \ * writes new_offset back to slot 2.
 \ ******************************************************************************
