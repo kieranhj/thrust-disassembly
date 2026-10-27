@@ -51,3 +51,4 @@ compile.txt
 
 # Build output (build.ps1)
 build/
+.claude/worktrees/

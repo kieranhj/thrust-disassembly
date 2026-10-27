@@ -1,0 +1,1 @@
+{"mcpServers":{"jsbeeb":{"type":"stdio","command":"npx","args":["-y","jsbeeb-mcp@4.3.0"]}}}

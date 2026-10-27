@@ -10,7 +10,7 @@
 #
 # beebasm: $env:BEEBASM, else beebasm.exe in the repo root (pinned at 1.11).
 # Emulators: $env:B2 / $env:BEEBJIT, else the paths below.
-param([switch]$Run, [switch]$Orig, [switch]$Beebjit)
+param([switch]$Run, [switch]$Orig, [switch]$Beebjit, [switch]$Smoke, [switch]$Flags)
 
 $ErrorActionPreference = 'Stop'
 if ($args) { throw "build.ps1: unknown argument(s): $args" }
@@ -40,7 +40,7 @@ function Get-Crc32([string]$path) {
     return ('{0:x8}' -f ($crc -bxor [uint32]::MaxValue))
 }
 
-function Invoke-Build([string]$name, [int]$swram) {
+function Invoke-Build([string]$name, [int]$swram, [string[]]$defines = @()) {
     $ssd    = Join-Path $build "$name.ssd"
     $log    = Join-Path $build "$name.txt"
     $labels = Join-Path $build "$name.labels"
@@ -48,7 +48,8 @@ function Invoke-Build([string]$name, [int]$swram) {
     # beebasm resolves INCLUDEs relative to the working directory
     Push-Location $root
     try {
-        & $beebasm -i thrust.6502 -do $ssd -boot Thrust -v -d -labels $labels -D "_SWRAM_BUILD=$swram" *> $log
+        $defs = @('-D', "_SWRAM_BUILD=$swram") + ($defines | ForEach-Object { '-D', $_ })
+        & $beebasm -i thrust.6502 -do $ssd -boot Thrust -v -d -labels $labels @defs *> $log
         $code = $LASTEXITCODE
     } finally { Pop-Location }
     if ($code -ne 0 -or -not (Test-Path $ssd)) {
@@ -69,6 +70,28 @@ Write-Host "thrust.ssd       $swramGot  (SWRAM)"
 # headroom: the payload travels inside the Thrust file (docs/review-2026-10.md, section 4).
 Get-Content (Join-Path $build 'thrust.txt') | Select-String -Pattern 'FREE=' -SimpleMatch | ForEach-Object { Write-Host "  $_" }
 if ($origGot -ne $OrigCrc) { throw "original build CRC ${origGot} != ${OrigCrc} - the original game's binary has changed" }
+
+if ($Flags) {
+    # Each feature must assemble without the others (CLAUDE.md, "Build flags"). The teleporter's
+    # prerequisites can only go with it.
+    $sets = @(
+        @('_UNROLL_TERRAIN=0'), @('_FRIENDLY_KEYS=0'), @('_THRUST_PARTICLES=0'), @('_NO_WRAP_UNDERGROUND=0'),
+        @('_DEBUG_FRAME_TIME=0'), @('_DEBUG_RASTERS=-1'), @('_TIMED_LASER=0'), @('_Y_BANDS=0'),
+        @('_BOBBING_MINES=0'), @('_TELEPORTER=0'), @('_SWITCHES=0'),
+        @('_GRAVITY_WELL=0', '_TELEPORTER=0'), @('_LAST_USED_CHECKPOINT=0', '_TELEPORTER=0')
+    )
+    foreach ($set in $sets) {
+        $null = Invoke-Build 'flagtest' -1 $set
+        Write-Host "  builds with $($set -join ' ')"
+    }
+    Remove-Item -ErrorAction SilentlyContinue (Join-Path $build 'flagtest.*')
+}
+
+if ($Smoke) {
+    & node (Join-Path $root 'tools\smoke.mjs') $swramSsd $origSsd > (Join-Path $build 'smoke.json')
+    if ($LASTEXITCODE -ne 0) { throw "smoke test failed (exit $LASTEXITCODE), see build/smoke.json" }
+    Write-Host "smoke: both discs play all six levels"
+}
 
 if ($Run) {
     $disc = if ($Orig) { $origSsd } else { $swramSsd }
