@@ -59,9 +59,8 @@ from sprite_codec import (
 
 
 REPO = HERE.parent
-THRUST_SRC = REPO / 'thrust.6502'
 DEFAULT_EXPORT_FILE = REPO / 'tools' / 'output' / 'object_sprites.asm'
-OBJ_SPRITE_DATA_FILE = REPO / 'obj_sprite_data.6502'  # non-SWRAM inline copy
+OBJ_SPRITE_DATA_FILE = REPO / 'thrust1' / 'obj_sprite_data.asm'  # original game's 9 sprites
 SPRITES_DIR = REPO / 'tools' / 'sprites'
 
 # ---------------------------------------------------------------------------
@@ -116,15 +115,15 @@ class Editor:
         self.font_small = pygame.font.SysFont("consolas", 12)
         self.font_big = pygame.font.SysFont("consolas", 18, bold=True)
 
-        # Prefer the external export file if it exists; otherwise try the
-        # extracted inline file, then fall back to thrust.6502 itself.
-        candidates = [DEFAULT_EXPORT_FILE, OBJ_SPRITE_DATA_FILE, THRUST_SRC]
+        # Prefer the external export file if it exists; otherwise start from
+        # the original game's sprites (the new types come up blank).
+        candidates = [DEFAULT_EXPORT_FILE, OBJ_SPRITE_DATA_FILE]
         source_path = next((p for p in candidates if p.exists()), candidates[0])
         self.sprites = load_sprites_from_file(str(source_path))
-        # Remember the export destination — but never let it default to
-        # thrust.6502 (don't want Ctrl+S to overwrite it). If we bootstrapped
-        # from thrust.6502, the save dialog defaults to DEFAULT_EXPORT_FILE.
-        if source_path == THRUST_SRC:
+        # Remember the export destination — but never let it default to the
+        # original game's sprite file (Ctrl+S must not overwrite it). If we
+        # bootstrapped from it, the save dialog defaults to DEFAULT_EXPORT_FILE.
+        if source_path != DEFAULT_EXPORT_FILE:
             self.last_file_path = str(DEFAULT_EXPORT_FILE)
         else:
             self.last_file_path = str(source_path)

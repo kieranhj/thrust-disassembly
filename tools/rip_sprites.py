@@ -1,16 +1,18 @@
 """Rip all sprites from Thrust (BBC Micro) source as PNGs.
 
-Reads sprite data from thrust.6502 and renders each sprite to a transparent PNG.
+Reads the ship, shield and pod sprites from thrust.6502 and the object sprites
+from thrust1/obj_sprite_data.asm (or --objects FILE, e.g. the SWRAM build's
+tools/output/object_sprites.asm), and renders each to a transparent PNG.
 Also generates a combined sprite sheet.
 
 Sprite types:
   - Ship: 17 rotation frames (single-stream, per-pixel wireframe, colour 3)
   - Shield: 1 frame (single-stream, per-pixel wireframe, colour 1)
   - Pod: 1 frame (single-stream, per-pixel wireframe, colour 3)
-  - Objects: 9 types (two-stream, full-byte patterns, multi-colour)
+  - Objects: every type in the objects file (two-stream, full-byte, multi-colour)
 
 Usage:
-    python tools/rip_sprites.py [--scale N] [--out DIR]
+    python tools/rip_sprites.py [--scale N] [--out DIR] [--objects FILE]
 """
 
 import argparse
@@ -317,6 +319,8 @@ def main():
     parser.add_argument("--scale", type=int, default=4, help="Scale factor for sprite sheet (default: 4)")
     parser.add_argument("--out", default="tools/sprites", help="Output directory (default: tools/sprites)")
     parser.add_argument("--source", default="thrust.6502", help="Source file (default: thrust.6502)")
+    parser.add_argument("--objects", default="thrust1/obj_sprite_data.asm",
+                        help="Object sprite file (default: thrust1/obj_sprite_data.asm)")
     args = parser.parse_args()
 
     # Resolve paths relative to repo root
@@ -329,6 +333,9 @@ def main():
 
     print(f"Reading source: {source_path}")
     source = parse_source(source_path)
+    objects_path = os.path.join(repo_root, args.objects)
+    print(f"Reading object sprites: {objects_path}")
+    objects_source = parse_source(objects_path)
 
     all_sprites = []  # (name, image) for sprite sheet
 
@@ -362,25 +369,19 @@ def main():
     all_sprites.append(("pod", img))
     print(f"  pod: {img.width}x{img.height} ({len(pixels)} pixels)")
 
-    # --- Object sprites (9 types, two-stream) ---
-    object_names = [
-        "gun_up_right",
-        "gun_down_right",
-        "gun_up_left",
-        "gun_down_left",
-        "fuel",
-        "pod_stand",
-        "generator",
-        "door_switch_right",
-        "door_switch_left",
-    ]
+    # --- Object sprites (two-stream); types missing from the file are skipped ---
+    sys.path.insert(0, script_dir)
+    from sprite_codec import OBJECT_NAMES as object_names
 
     print("Decoding object sprites...")
     for obj_name in object_names:
         label_a = f"obj_sprite_data_A_{obj_name}"
         label_b = f"obj_sprite_data_B_{obj_name}"
-        stream_a = extract_label_data(source, label_a)
-        stream_b = extract_label_data(source, label_b)
+        try:
+            stream_a = extract_label_data(objects_source, label_a)
+            stream_b = extract_label_data(objects_source, label_b)
+        except ValueError:
+            continue
         entries = decode_two_stream_sprite(stream_a, stream_b)
         img, ox, oy = render_two_stream(entries)
         img.save(os.path.join(out_dir, f"{obj_name}.png"))
