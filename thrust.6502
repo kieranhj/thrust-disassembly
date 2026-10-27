@@ -10792,14 +10792,64 @@ SWRAM_BANK      = 4
 SPRITE_BANK     = 5
 SWRAM_ADDR      = &8000
 
+SWRAM_PROBE_ADDR = &8008         ; past a ROM header's entry points; in the &480 scratch
+
 .copy_up_swram
 {
+IF _FAST_SPRITES
+        \ _FAST_SPRITES pages SPRITE_BANK and SWRAM_BANK by number, so keep them fixed.
         SET_RAM_BANK    SWRAM_BANK
-
-\ Forget any ROM the MOS found in this bank at the last BREAK: the bank is about to be
-\ overwritten, and from &8480 only, so a stale header at &8000 could survive.
         LDA     #$00
         STA     MOS_ROM_TYPE_TABLE+SWRAM_BANK
+ELSE
+\ Find a sideways RAM bank rather than assume bank 4: a Model B's board is jumpered to
+\ whichever slots its owner chose. Try 4-15 then 0-3 (bank 4 first, so a machine with RAM
+\ there behaves as before), skip any bank the MOS registered a ROM in at BREAK (a real ROM,
+\ or a ROM image loaded into RAM: overwriting a live filing system would hang the machine),
+\ and call a bank RAM only if two complementary values both read back, so an empty socket's
+\ floating bus cannot pass. The bank number is left in &F4, which the MOS restores after its
+\ own paging, so nothing else in the game needs to know it.
+        SEI                                     ; nothing may page a ROM in under us
+        LDX     #SWRAM_BANK
+    .probe_bank
+        LDA     MOS_ROM_TYPE_TABLE,X
+        BNE     probe_next                      ; the MOS found a ROM here: leave it alone
+        STX     &FE30
+        LDA     #$A5
+        STA     SWRAM_PROBE_ADDR
+        CMP     SWRAM_PROBE_ADDR
+        BNE     probe_next
+        LDA     #$5A
+        STA     SWRAM_PROBE_ADDR
+        CMP     SWRAM_PROBE_ADDR
+        BEQ     probe_found
+    .probe_next
+        INX
+        TXA
+        AND     #$0F
+        TAX
+        CPX     #SWRAM_BANK
+        BNE     probe_bank
+
+        LDA     &F4                             ; none: page back the MOS's bank, say why, stop
+        STA     &FE30
+        CLI
+        LDX     #0
+    .no_swram_print
+        LDA     no_swram_message,X
+        BEQ     no_swram_halt
+        JSR     OSASCI
+        INX
+        BNE     no_swram_print
+    .no_swram_halt
+        JMP     no_swram_halt
+
+    .probe_found
+        STX     &F4                             ; keep it paged: the MOS restores &F4
+        LDA     #$00
+        STA     MOS_ROM_TYPE_TABLE,X            ; and never offers it a service call
+        CLI
+ENDIF
 
 \ Relocate new data & code block to SWRAM.
 
@@ -10828,6 +10878,12 @@ SWRAM_ADDR      = &8000
         BNE     relocate
 
         JMP     main_entry                ; jump to entry
+
+IF NOT(_FAST_SPRITES)
+.no_swram_message
+        EQUS    13, "Thrust Next needs 16K of sideways RAM", 13
+        EQUS    "in a bank with no ROM in it.", 13, 0
+ENDIF
 }
 ENDIF
 
