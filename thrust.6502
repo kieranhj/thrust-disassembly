@@ -122,25 +122,17 @@ OBJECT_pod_stand                    = $5        ; pod on its stand
 OBJECT_generator                    = $6        ; reactor/generator
 OBJECT_door_switch_right            = $7        ; door switch (right side)
 OBJECT_door_switch_left             = $8        ; door switch (left side)
-IF _TIMED_LASER
+\ Thrust Next types (SWRAM only), defined whichever features are on: the per-type
+\ tables are indexed by them.
 OBJECT_laser_turret_up_right        = $9        ; laser turret facing up-right (SWRAM only)
 OBJECT_laser_turret_down_right      = $A        ; laser turret facing down-right (SWRAM only)
 OBJECT_laser_turret_up_left         = $B        ; laser turret facing up-left (SWRAM only)
 OBJECT_laser_turret_down_left       = $C        ; laser turret facing down-left (SWRAM only)
-ENDIF
-IF _GRAVITY_WELL
 OBJECT_gravity_well                 = $D        ; gravity well: radial pull on ship inside radius (SWRAM only)
-ENDIF
-IF _BOBBING_MINES
 OBJECT_bobbing_mine                 = $E        ; bobbing mine: vertical sine-wave hazard, destroyed by bullets (SWRAM only)
 OBJECT_bobbing_mine_horizontal      = $F        ; bobbing mine: horizontal sine-wave hazard (SWRAM only)
-ENDIF
-IF _TELEPORTER
 OBJECT_teleporter                   = $10       ; teleporter pad: warps player to a checkpoint (SWRAM only)
-ENDIF
-IF _SWITCHES
 OBJECT_door                         = $11       ; door: carves a hole into terrain when pulsed by a wired switch (SWRAM only)
-ENDIF
 
 OBJ_flag_drawn                      = $01       ; level_obj_flags bit 0: sprite was XOR-plotted (needs erase before redraw)
 OBJ_flag_alive                      = $02       ; level_obj_flags bit 1: object is active (update + draw + collide)
@@ -1432,68 +1424,57 @@ ENDIF
 
 .obj_type_width
         EQUB    $05,$05,$05,$05,$04,$05,$05,$02,$02
-IF _TIMED_LASER
+IF _SWRAM_BUILD
+        \ Thrust Next types, indexed by type number whichever features are on
+        \ (an entry for a type whose feature is off is never read).
         EQUB    $05,$05,$05,$05                  ; [9..C] laser_turret orientations
-ENDIF
-IF _GRAVITY_WELL
         EQUB    $04                              ; [D] gravity_well (small AABB; non-collidable)
-ENDIF
-IF _BOBBING_MINES
         EQUB    $03                              ; [E] bobbing_mine (12 px wide)
         EQUB    $03                              ; [F] bobbing_mine_horizontal
-ENDIF
-IF _TELEPORTER
         EQUB    $03                              ; [10] teleporter (placeholder)
+        EQUB    $00                              ; [11] door (not plotted)
+        ASSERT P% - obj_type_width = OBJECT_door + 1
 ENDIF
 
 .obj_type_height
         EQUB    $08,$08,$08,$08,$0A,$08,$0A,$08,$08
-IF _TIMED_LASER
+IF _SWRAM_BUILD
         EQUB    $08,$08,$08,$08                  ; [9..C] laser_turret orientations
-ENDIF
-IF _GRAVITY_WELL
         EQUB    $04                              ; [D] gravity_well
-ENDIF
-IF _BOBBING_MINES
         EQUB    $0C                              ; [E] bobbing_mine (12 rows tall)
         EQUB    $0C                              ; [F] bobbing_mine_horizontal
-ENDIF
-IF _TELEPORTER
         EQUB    $08                              ; [10] teleporter (placeholder)
+        EQUB    $00                              ; [11] door (not plotted)
+        ASSERT P% - obj_type_height = OBJECT_door + 1
 ENDIF
 
+\ Explosion and score are read when an object is destroyed: by a bullet, by
+\ the planet's destruction, or by a switch's destroy action, which can name
+\ any object, so every type needs an entry.
 .obj_type_explosion_particle
         EQUB    $02,$02,$02,$02,$01                ; only guns and fuel can be destroyed
-IF _TIMED_LASER
+IF _SWRAM_BUILD
         EQUB    $00,$00,$00,$00                  ; pad [5..8] (not destructible)
         EQUB    $02,$02,$02,$02                  ; [9..C] laser_turret orientations
-ENDIF
-IF _GRAVITY_WELL
         EQUB    $00                              ; [D] gravity_well (not destructible)
-ENDIF
-IF _BOBBING_MINES
         EQUB    $02                              ; [E] bobbing_mine (destructible by bullets)
         EQUB    $02                              ; [F] bobbing_mine_horizontal
-ENDIF
-IF _TELEPORTER
         EQUB    $00                              ; [10] teleporter (not destructible)
+        EQUB    $00                              ; [11] door (not destructible)
+        ASSERT P% - obj_type_explosion_particle = OBJECT_door + 1
 ENDIF
 
 .obj_type_score_value                            ; only guns and fuel can be destroyed
         EQUB    $75,$75,$75,$75,$15
-IF _TIMED_LASER
+IF _SWRAM_BUILD
         EQUB    $00,$00,$00,$00                  ; pad [5..8]
         EQUB    $A0,$A0,$A0,$A0                  ; [9..C] laser_turret orientations
-ENDIF
-IF _GRAVITY_WELL
         EQUB    $00                              ; [D] gravity_well
-ENDIF
-IF _BOBBING_MINES
         EQUB    $50                              ; [E] bobbing_mine
         EQUB    $50                              ; [F] bobbing_mine_horizontal
-ENDIF
-IF _TELEPORTER
         EQUB    $00                              ; [10] teleporter
+        EQUB    $00                              ; [11] door
+        ASSERT P% - obj_type_score_value = OBJECT_door + 1
 ENDIF
 
 \ ******************************************************************************
@@ -2348,18 +2329,13 @@ ENDIF
 
 .object_type_cull_size_table
         EQUB    $44,$44,$44,$44,$45,$45,$44,$47,$47
-IF _TIMED_LASER
+IF _SWRAM_BUILD
         EQUB    $44,$44,$44,$44                  ; [9..C] laser_turret orientations (5 chars wide like guns)
-ENDIF
-IF _GRAVITY_WELL
         EQUB    $44                              ; [D] gravity_well (no sprite yet; cull width borrowed from guns)
-ENDIF
-IF _BOBBING_MINES
         EQUB    $44                              ; [E] bobbing_mine
         EQUB    $44                              ; [F] bobbing_mine_horizontal
-ENDIF
-IF _TELEPORTER
         EQUB    $44                              ; [10] teleporter
+        ASSERT P% - object_type_cull_size_table = OBJECT_teleporter + 1   ; doors are never culled here
 ENDIF
 
 \ ******************************************************************************
