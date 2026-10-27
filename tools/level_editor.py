@@ -5,7 +5,11 @@ Allows viewing and editing of terrain wall data and object placements
 for all 6 levels. Edited levels can be exported as BeebAsm assembly.
 
 Usage:
-    python tools/level_editor.py [--level N] [--import FILE]
+    python tools/level_editor.py [--level N] [--import FILE | --original]
+
+Opens tools/output/thrust_levels_export2.asm (the levels the SWRAM build
+includes) unless --import names another file; --original starts from the
+original game's levels.
 
 Controls:
     1-6         Switch level
@@ -96,6 +100,23 @@ TOOLBAR_H = 40
 STATUS_H = 24
 VIEWPORT_Y = TOOLBAR_H
 VIEWPORT_H = WINDOW_H - TOOLBAR_H - STATUS_H
+
+# Level file the SWRAM build INCLUDEs (thrust.6502). The editor opens and
+# saves this by default.
+DEFAULT_LEVELS_FILE = Path(__file__).resolve().parent / "output" / "thrust_levels_export2.asm"
+
+# thrust.6502 LEVEL_MAX_OBJECTS is the highest object index; every per-object
+# array in the engine has LEVEL_MAX_OBJECTS+1 entries.
+LEVEL_MAX_OBJECTS = 0x1F
+LEVEL_OBJECT_CAP = LEVEL_MAX_OBJECTS + 1
+
+
+def object_count_problems(levels):
+    """Export-check messages for levels with more objects than the engine holds."""
+    return [f"L{lv.level_num + 1}: {len(lv.objects)} objects; the engine holds "
+            f"at most {LEVEL_OBJECT_CAP}"
+            for lv in levels if len(lv.objects) > LEVEL_OBJECT_CAP]
+
 
 FPS = 60
 ASPECT = 2.0  # 1 world X unit displays 2x wider than 1 world Y unit
@@ -1190,7 +1211,7 @@ SCHEMA_GRAVITY_WELL = [
           min=0, max=0xFFFF, step=1, shift_step=32),
     Field("well_radius", "Radius", "byte",
           getter=_g("well_radius"), setter=_s("well_radius"),
-          min=0, max=255, step=1, shift_step=10),
+          min=0, max=127, step=1, shift_step=10),   # engine limit (plan-gravity-well.md)
     Field("well_strength", "Strength", "signed_byte",
           getter=_g("well_strength"), setter=_s("well_strength"),
           min=-127, max=127, step=1, shift_step=10,
@@ -1296,8 +1317,8 @@ SWITCH_SLOT_LABELS = {
     0x04: ("(unused)",        "(unused)",  "(unused)"),  # fuel
     0x05: ("(unused)",        "(unused)",  "(unused)"),  # pod (blocked anyway)
     0x06: ("(unused)",        "(unused)",  "(unused)"),  # generator
-    0x07: ("(unused)",        "(unused)",  "(unused)"),  # door switch L
-    0x08: ("(unused)",        "(unused)",  "(unused)"),  # door switch R
+    0x07: ("(unused)",        "(unused)",  "(unused)"),  # door_switch_right (on left wall)
+    0x08: ("(unused)",        "(unused)",  "(unused)"),  # door_switch_left (on right wall)
     0x09: ("phase/duty",      "Beam dx",   "Beam dy"),
     0x0A: ("phase/duty",      "Beam dx",   "Beam dy"),
     0x0B: ("phase/duty",      "Beam dx",   "Beam dy"),
@@ -1865,7 +1886,7 @@ class UndoManager:
 # ---------------------------------------------------------------------------
 
 class Editor:
-    def __init__(self, start_level=0, import_path=None):
+    def __init__(self, start_level=0, import_path=None, original=False):
         pygame.init()
         pygame.display.set_caption("Thrust Level Editor")
         self.screen = pygame.display.set_mode((WINDOW_W, WINDOW_H), pygame.RESIZABLE)
@@ -1874,12 +1895,15 @@ class Editor:
         self.font_small = pygame.font.SysFont("consolas", 12)
 
         self.last_file_path = None  # last imported/exported file path
+        if import_path is None and not original and DEFAULT_LEVELS_FILE.exists():
+            import_path = DEFAULT_LEVELS_FILE
         if import_path:
             self.levels = import_beebasm(import_path)
             self.last_file_path = str(Path(import_path).resolve())
             print(f"Imported level data from {import_path}")
         else:
             self.levels = [LevelData.from_game_data(i) for i in range(6)]
+            print("Showing the original game's levels (no file loaded)")
         self.current_level = start_level
         self.camera = Camera()
         self.sprite_cache = SpriteCache()
@@ -1943,10 +1967,6 @@ class Editor:
         self.ref_pick_field = None         # field id expecting a canvas pick
         self.ref_pick_target = None
         self.ref_pick_level = None
-        # Legacy obj_menu state (kept briefly for compatibility)
-        self.show_obj_menu = False
-        self.obj_menu_pos = (0, 0)
-        self.obj_menu_world = (0, 0)
 
         # Centre view on level
         self._centre_on_level()
@@ -3201,41 +3221,6 @@ class Editor:
         if export_x <= mx < export_x + 90:
             self._export()
 
-    def _handle_obj_menu_click(self, mx, my):
-        """Handle clicks on the object creation popup menu."""
-        menu_x, menu_y = self.obj_menu_pos
-        menu_w, menu_h = 160, len(OBJECT_TYPE_NAMES) * 22 + 4
-
-        if not (menu_x <= mx < menu_x + menu_w and menu_y <= my < menu_y + menu_h):
-            self.show_obj_menu = False
-            return
-
-        idx = (my - menu_y - 2) // 22
-        types = sorted(OBJECT_TYPE_NAMES.keys())
-        if 0 <= idx < len(types):
-            obj_type = types[idx]
-            self.undo.save(self.level)
-            wx, wy = self.obj_menu_world
-            is_well = obj_type == OBJECT_GRAVITY_WELL
-            is_mine = obj_type in BOBBING_MINE_TYPES
-            is_teleporter = obj_type == OBJECT_TELEPORTER
-            is_door = obj_type == OBJECT_DOOR
-            self.level.objects.append({"x": wx, "y": wy, "type": obj_type,
-                                        "gun_aim": 0x00,
-                                        "laser_dx": LASER_BEAM_DX_PIXELS.get(obj_type, 0),
-                                        "laser_dy": LASER_BEAM_DY_ROWS.get(obj_type, 0),
-                                        "well_radius": GRAVITY_WELL_DEFAULT_RADIUS if is_well else 0,
-                                        "well_strength": GRAVITY_WELL_DEFAULT_STRENGTH if is_well else 0,
-                                        "mine_phase": BOBBING_MINE_DEFAULT_PHASE if is_mine else 0,
-                                        "mine_amp": BOBBING_MINE_DEFAULT_AMP if is_mine else 0,
-                                        "teleport_dest": TELEPORTER_DEFAULT_DEST if is_teleporter else 0,
-                                        "door_shape": 0, "door_side": 0, "door_open_dir": 0,
-                                        "door_width": 8 if is_door else 1,
-                                        "door_max_carve": 8 if is_door else 1})
-            self.level.dirty = True
-            self.selected_object = len(self.level.objects) - 1
-        self.show_obj_menu = False
-
     def _drain_input_events(self):
         """Clear buffered pygame input events after a modal tk dialog so that
         clicks/keys the user mashed while the dialog was up don't re-trigger
@@ -3287,9 +3272,12 @@ class Editor:
         pod (object 0, type $05) — the pod uses single-instance engine
         state that isn't safe to alive-toggle or destroy.
 
+        Also blocks levels with more than LEVEL_OBJECT_CAP objects, and
+        destroy actions aimed at a door.
+
         Returns True to proceed, False to abort.
         """
-        problems = []
+        problems = object_count_problems(self.levels)
         for lv in self.levels:
             if not lv.wiring:
                 continue
@@ -3320,6 +3308,10 @@ class Editor:
                         arg_a = entry.get("arg_a", 0)
                         if arg_a > 2:
                             problems.append(f"{label}: slot {arg_a} out of range (must be 0..2)")
+                    if action == 4 and lv.objects[target]["type"] == OBJECT_DOOR:
+                        # Engine per-type explosion/score tables stop at $10.
+                        problems.append(
+                            f"{label}: destroy can't target a door (#{target}); use pulse_door")
                     if action == 5 and lv.objects[target]["type"] != OBJECT_DOOR:
                         problems.append(
                             f"{label}: pulse_door target #{target} is not a door object")
@@ -3335,8 +3327,8 @@ class Editor:
             root = tk.Tk()
             root.withdraw()
             messagebox.showerror(
-                "Wiring validation failed",
-                "Cannot export — fix these wiring problems first:\n\n  " +
+                "Export check failed",
+                "Cannot export — fix these problems first:\n\n  " +
                 "\n  ".join(problems),
             )
             root.destroy(); self._drain_input_events()
@@ -3408,7 +3400,7 @@ class Editor:
         if self.last_file_path:
             default_path = Path(self.last_file_path)
         else:
-            default_path = Path("tools/output/thrust_levels_export.asm").resolve()
+            default_path = DEFAULT_LEVELS_FILE
         root = tk.Tk()
         root.withdraw()
         path = filedialog.asksaveasfilename(
@@ -3428,7 +3420,7 @@ class Editor:
         if self.last_file_path:
             default_path = Path(self.last_file_path)
         else:
-            default_path = Path("tools/output/thrust_levels_export.asm").resolve()
+            default_path = DEFAULT_LEVELS_FILE
         root = tk.Tk()
         root.withdraw()
         path = filedialog.askopenfilename(
@@ -4542,7 +4534,10 @@ class Editor:
         elif self.palette_armed_type is not None:
             name = OBJECT_TYPE_NAMES.get(self.palette_armed_type,
                                          f"${self.palette_armed_type:02X}")
-            hint = f"Placing: {name} — click to drop (Shift = keep armed), right-click/Esc to cancel"
+            if len(lv.objects) >= LEVEL_OBJECT_CAP:
+                hint = f"Level full ({LEVEL_OBJECT_CAP} objects max) — delete one to place {name}"
+            else:
+                hint = f"Placing: {name} — click to drop (Shift = keep armed), right-click/Esc to cancel"
         elif self.line_start:
             side, r, x = self.line_start
             hint = f"Line: {side} from row {r} x={x} — click to set end"
@@ -4570,31 +4565,6 @@ class Editor:
         if hint:
             txt_hint = self.font_small.render(hint, True, (200, 200, 100))
             screen.blit(txt_hint, (vw - txt_hint.get_width() - 10, sh - STATUS_H + 5))
-
-    def _render_obj_menu(self):
-        """Draw the object creation popup menu."""
-        screen = self.screen
-        mx, my = self.obj_menu_pos
-        types = sorted(OBJECT_TYPE_NAMES.keys())
-        menu_w, menu_h = 160, len(types) * 22 + 4
-
-        # Background
-        surf = pygame.Surface((menu_w, menu_h), pygame.SRCALPHA)
-        surf.fill((40, 40, 50, 230))
-        screen.blit(surf, (mx, my))
-        pygame.draw.rect(screen, (100, 100, 120), (mx, my, menu_w, menu_h), 1)
-
-        # Items
-        mouse_x, mouse_y = pygame.mouse.get_pos()
-        for i, t in enumerate(types):
-            iy = my + 2 + i * 22
-            # Hover highlight
-            if mx <= mouse_x < mx + menu_w and iy <= mouse_y < iy + 22:
-                pygame.draw.rect(screen, (60, 60, 80), (mx + 1, iy, menu_w - 2, 22))
-
-            name = OBJECT_TYPE_NAMES[t]
-            txt = self.font_small.render(name, True, COL_TOOLBAR_TEXT)
-            screen.blit(txt, (mx + 8, iy + 3))
 
     # -------------------------------------------------------------------
     # Inspector pane
@@ -5203,6 +5173,10 @@ class Editor:
         obj_type = self.palette_armed_type
         if obj_type is None:
             return
+        if len(self.level.objects) >= LEVEL_OBJECT_CAP:
+            print(f"Level {self.level.level_num + 1} is full: "
+                  f"{LEVEL_OBJECT_CAP} objects is the engine's maximum")
+            return
         is_well = obj_type == OBJECT_GRAVITY_WELL
         is_mine = obj_type in BOBBING_MINE_TYPES
         is_tp = obj_type == OBJECT_TELEPORTER
@@ -5334,12 +5308,18 @@ def main():
     parser.add_argument("--level", type=int, choices=range(1, 7), default=1,
                         help="Starting level (1-6)")
     parser.add_argument("--import", dest="import_path", type=str, default=None,
-                        help="Import level data from an exported .asm file")
+                        help="Import level data from an exported .asm file "
+                             "(default: tools/output/thrust_levels_export2.asm, "
+                             "the file the SWRAM build includes)")
+    parser.add_argument("--original", action="store_true",
+                        help="Start from the original game's levels instead "
+                             "of the default file")
     args = parser.parse_args()
 
     root = Tk()
 
-    editor = Editor(start_level=args.level - 1, import_path=args.import_path)
+    editor = Editor(start_level=args.level - 1, import_path=args.import_path,
+                    original=args.original)
     editor.run()
 
 

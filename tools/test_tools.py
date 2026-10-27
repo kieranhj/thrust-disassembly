@@ -66,6 +66,12 @@ class LevelRoundTrip(unittest.TestCase):
                 self.assertEqual(_comparable(builtin[n]), _comparable(imported[n]))
         self.assertEqual(le.export_beebasm(builtin), le.export_beebasm(imported))
 
+    def test_levels_within_object_cap(self):
+        levels = le.import_beebasm(LEVELS_EXPORT)
+        self.assertEqual(le.object_count_problems(levels), [])
+        levels[0].objects.extend([dict(levels[0].objects[-1])] * le.LEVEL_OBJECT_CAP)
+        self.assertEqual(len(le.object_count_problems(levels)), 1)
+
 
 class SpriteCodec(unittest.TestCase):
     def test_mode1_byte_codec(self):
