@@ -10926,7 +10926,7 @@ IF _THRUST_PARTICLES
         STA     particles_dy_INT,X
         ROL     A       ; sign into C
         ROR     particles_dy_INT,X
-        ROR     particles_dy_FRAC
+        ROR     particles_dy_FRAC,X
 
         ; Particle params.
         LDA     particles_lifetime,X
