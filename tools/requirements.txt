@@ -1,0 +1,6 @@
+# Python packages for tools/ (Python 3.10+; tkinter comes with Python).
+#   pip install -r tools/requirements.txt
+pygame>=2.5        # level_editor.py, sprite_editor.py
+numpy>=1.24        # level_editor.py, visualise_levels.py
+matplotlib>=3.7    # visualise_levels.py (imported by level_editor.py)
+Pillow>=10.0       # rip_sprites.py, sprite_editor.py (PNG import/export)
