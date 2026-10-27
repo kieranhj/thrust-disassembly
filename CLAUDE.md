@@ -1,28 +1,43 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code in this repository.
 
-## Project Overview
+## Project
 
-Disassembly and annotated source of **Thrust** (BBC Micro) by Jeremey C. Smith. The source was reverse-engineered by Kieran HJ Connell using BeebDis, and compiles with **BeebAsm**. The single source file `thrust.asm` (~10k lines of 6502 assembly) produces a bootable `.ssd` disc image.
+Annotated disassembly of **Thrust** (BBC Micro, Jeremy C. Smith, 1986), reverse-engineered by Kieran HJ Connell with BeebDis, assembled with **BeebAsm 1.11** (`beebasm.exe` in the repo root). One source tree builds two games:
+
+- **The original**, byte-identical to the released game. `master` holds only this.
+- **Thrust Next**, the enhanced sideways RAM build on this branch line: new objects, switches, doors, teleporters and editor-authored levels. Feature work is indexed in `docs/ideas.md`.
+
+Files: `thrust.6502` (~14k lines, everything), `app_init.asm` (boot, relocation, CRTC/ULA, IRQ install), `thrust1/` (level data, object sprites, MODE 7 instructions, status bar), `tools/` (Python level/sprite editors), `docs/` (references, plans, `bugs.md`).
 
 ## Build
 
 ```
-beebasm.exe -i thrust.asm -do thrust.ssd -boot Thrust -v
+.\build.ps1             both discs into build/; fails unless the original is CRC32 6389c446
+.\build.ps1 -Run        ...and launch b2 on the SWRAM disc (-Beebjit, -Orig for the original)
 ```
 
-The `make.bat` script runs this (expects `beebasm.exe` at `..\..\Bin\beebasm.exe`) and verifies the output CRC32 against `6389c446` using `crc32dos.exe`.
+`make.bat` / `run.bat` wrap these. Outputs in `build/` (gitignored): `thrust-orig.ssd`, `thrust.ssd`, a log (`*.txt`) and a label dump (`*.labels`) per build. The script prints the build's RAM-free reports.
 
-To run in an emulator: `run.bat` launches the `.ssd` in BeebEm.
+**The CRC is the regression test for the original game's behaviour.** A build that moves `thrust-orig.ssd` off `6389c446` fails. Every Thrust Next change must sit behind a flag that is false when `_SWRAM_BUILD` is false.
 
-## Assembly Conventions
+## Build flags (`thrust.6502:30-50`)
 
-- **Assembler:** BeebAsm syntax (backslash `\` comments, `$` hex prefix, `&` also used for hex, `=` for constants, `EQUB`/`EQUW`/`EQUS` for data).
-- **Fixed-point arithmetic:** Most calculations use Q7.8. Y-axis values use Q10.8 (worlds are several screens deep). Some X physics use Q7.16 for extra precision.
-- **Naming suffixes:** `_LO`/`_HI` = low/high byte of 16-bit values. `_FRAC`/`_INT` = fractional/integer parts of fixed-point. `_FRAC_LO` = extra low-precision byte. `_INT_HI` = extra high byte.
-- **Memory map:** Code relocates from load address `$1A00` to execution address `$0A60`. Key regions: zero page for variables, pages `$300-$5FF` for terrain data, pages `$600-$7BF` for particle system, page `$7C0+` for sound, page `$880+` for trig lookup tables, screen at `$3C80`.
+All use `=?`, so `-D NAME=0|-1` overrides any of them without editing the source. `_SWRAM_BUILD` selects the game; the others default to `(_SWRAM_BUILD AND TRUE|FALSE)`. Debug: `_DEBUG_RASTERS`, `_DEBUG_FRAME_TIME`. Engine: `_UNROLL_TERRAIN`, `_FAST_SPRITES` (off, unfinished), `_NO_WRAP_UNDERGROUND`, `_THRUST_PARTICLES`, `_FRIENDLY_KEYS`. Features: `_TIMED_LASER`, `_GRAVITY_WELL`, `_Y_BANDS`, `_BOBBING_MINES`, `_TELEPORTER`, `_LAST_USED_CHECKPOINT`, `_SWITCHES`. `_OBJ_DATA_SLOTS` is derived. `_TELEPORTER` requires `_GRAVITY_WELL` and `_LAST_USED_CHECKPOINT` (asserted). Each feature flag can be turned off on its own (the teleporter's two prerequisites only with it) and the build still assembles; keep it that way.
 
-## Build Verification
+## Conventions
 
-A correct **non-SWRAM** build (`_SWRAM_BUILD = FALSE` at `thrust.6502:30`) must produce a `.ssd` file with CRC32 `6389c446`. This CRC anchors the original-game gameplay logic (physics, ship handling) — any change that alters this binary risks an unintentional gameplay regression. The default build is SWRAM-enabled and will produce a different CRC; toggle `_SWRAM_BUILD = FALSE` to verify the canonical CRC.
+- BeebAsm syntax: `\` comments, `$` or `&` hex, `EQUB`/`EQUW`/`EQUS`.
+- Fixed point: mostly Q7.8; Y is Q10.8 (worlds are several screens deep); some X physics Q7.16.
+- Suffixes: `_LO`/`_HI` bytes of a 16-bit value; `_FRAC`/`_INT` fixed-point parts; `_FRAC_LO` extra low byte; `_INT_HI` extra high byte.
+- Memory: loads at `$1A00`, relocates to `$0A60`. Zero page for variables, `$300-$5FF` terrain, `$600-$7BF` particles, `$7C0+` sound, `$880+` trig tables, screen at `$3C80` (MODE 1 ULA, 72-column CRTC). Thrust Next: sideways RAM bank 4 at `$8000` (code and level data, appended to the `Thrust` file and copied up at boot); bank 5 reserved for `_FAST_SPRITES`. Main RAM is nearly full in both builds.
+- Timing: the game frame is at least 3 cs (~33 Hz), gated on the OS clock, not 50 Hz vsync. Scrolling is software: everything on screen is XOR-redrawn each frame.
+- Prefer labels to line numbers in docs; line numbers drift.
+
+## Where things are
+
+- `PLAN.md`: what is left to do, in order.
+- `docs/bugs.md`: known defects and stale comments.
+- `docs/review-2026-10.md`: the October 2026 review against `..\beeb-port-kit`, with evidence for each `PLAN.md` item.
+- `docs/plan-*.md`: as-built designs of each feature, with status lines.

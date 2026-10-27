@@ -1,1 +1,1 @@
-"C:\Program Files (x86)\BeebEm\beebem.exe" thrust.ssd
+@pwsh -NoProfile -File "%~dp0build.ps1" -Run %*

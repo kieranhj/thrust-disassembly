@@ -27,22 +27,27 @@
 \ *****************************************************************************
 \ *****************************************************************************
 
-_SWRAM_BUILD         = TRUE
+_SWRAM_BUILD         =? TRUE                ; build.ps1 passes -D _SWRAM_BUILD=0 or -1
 
-_DEBUG_RASTERS       = (_SWRAM_BUILD AND FALSE)   ; Raster timing
-_DEBUG_FRAME_TIME    = (_SWRAM_BUILD AND TRUE)    ; Show frame time in status bar
-_UNROLL_TERRAIN      = (_SWRAM_BUILD AND TRUE)    ; Faster terrain plotting
-_FRIENDLY_KEYS       = (_SWRAM_BUILD AND TRUE)    ; Emulator friendly key map
-_THRUST_PARTICLES    = (_SWRAM_BUILD AND TRUE)    ; Generate thrust particles
-_FAST_SPRITES        = (_SWRAM_BUILD AND FALSE)   ; Pre-baked two-stream ship sprites
-_NO_WRAP_UNDERGROUND = (_SWRAM_BUILD AND TRUE)    ; Skip X wrap when below surface
-_TIMED_LASER         = (_SWRAM_BUILD AND TRUE)    ; Timed laser turret enemy ($09)
-_GRAVITY_WELL        = (_SWRAM_BUILD AND TRUE)    ; Gravity well object ($0D)
-_Y_BANDS             = (_SWRAM_BUILD AND TRUE)    ; Y-banded per-level parameter overrides (gravity)
-_BOBBING_MINES       = (_SWRAM_BUILD AND TRUE)    ; Bobbing mine hazard object ($0E)
-_TELEPORTER          = (_SWRAM_BUILD AND TRUE)    ; One-way teleporter pad object ($10)
-_LAST_USED_CHECKPOINT = (_SWRAM_BUILD AND TRUE)   ; Track active checkpoint across deaths
-_SWITCHES            = (_SWRAM_BUILD AND TRUE)    ; Editor-driven switches & triggers (wiring table)
+_DEBUG_RASTERS       =? (_SWRAM_BUILD AND FALSE)   ; Raster timing
+_DEBUG_FRAME_TIME    =? (_SWRAM_BUILD AND TRUE)    ; Show frame time in status bar
+_UNROLL_TERRAIN      =? (_SWRAM_BUILD AND TRUE)    ; Faster terrain plotting
+_FRIENDLY_KEYS       =? (_SWRAM_BUILD AND TRUE)    ; Emulator friendly key map
+_THRUST_PARTICLES    =? (_SWRAM_BUILD AND TRUE)    ; Generate thrust particles
+_FAST_SPRITES        =? (_SWRAM_BUILD AND FALSE)   ; Pre-baked two-stream ship sprites
+_NO_WRAP_UNDERGROUND =? (_SWRAM_BUILD AND TRUE)    ; Skip X wrap when below surface
+_TIMED_LASER         =? (_SWRAM_BUILD AND TRUE)    ; Timed laser turret enemy ($09)
+_GRAVITY_WELL        =? (_SWRAM_BUILD AND TRUE)    ; Gravity well object ($0D)
+_Y_BANDS             =? (_SWRAM_BUILD AND TRUE)    ; Y-banded per-level parameter overrides (gravity)
+_BOBBING_MINES       =? (_SWRAM_BUILD AND TRUE)    ; Bobbing mine hazard object ($0E)
+_TELEPORTER          =? (_SWRAM_BUILD AND TRUE)    ; One-way teleporter pad object ($10)
+_LAST_USED_CHECKPOINT =? (_SWRAM_BUILD AND TRUE)   ; Track active checkpoint across deaths
+_SWITCHES            =? (_SWRAM_BUILD AND TRUE)    ; Editor-driven switches & triggers (wiring table)
+\ Derived: per-object obj_data slots 1/2 (laser dx/dy, well radius/strength, mine amplitude, door params)
+_OBJ_DATA_SLOTS      = _TIMED_LASER OR _GRAVITY_WELL OR _BOBBING_MINES OR _TELEPORTER OR _SWITCHES
+
+\ The teleporter reuses the gravity well's debris emitter and writes the last-used checkpoint
+ASSERT (NOT(_TELEPORTER)) OR (_GRAVITY_WELL AND _LAST_USED_CHECKPOINT)
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -10218,7 +10223,7 @@ SET_BG_COL PAL_black
         CMP     #$03
         BCC     loop                      ; wait minimum 0.03s
 
-        IF _SWRAM_BUILD
+        IF _DEBUG_FRAME_TIME
         STA     debug_frame_time_cs
         ENDIF
 
@@ -10960,6 +10965,9 @@ IF _TIMED_LASER
 .laser_save_end_x       EQUB $00            ; saved end_x (zp draw_line_end_x at $8A aliases multiply_result_hi)
 .laser_save_end_y       EQUB $00            ; saved end_y (zp draw_line_end_y at $8B aliases multiply_operand_b)
 
+ENDIF   ; _TIMED_LASER
+
+IF _OBJ_DATA_SLOTS
 \ Per-level lookup tables for obj_data slots 1 and 2. Lives in SWRAM (native
 \ RAM is too tight in the SWRAM build to hold these alongside the existing
 \ level_*_lookup_LO/HI tables). Slot 1 carries laser_dx_pixels for laser
@@ -10986,6 +10994,7 @@ IF _TIMED_LASER
         EQUB    LO(level_3_obj_data_2), HI(level_3_obj_data_2)
         EQUB    LO(level_4_obj_data_2), HI(level_4_obj_data_2)
         EQUB    LO(level_5_obj_data_2), HI(level_5_obj_data_2)
+ENDIF   ; _OBJ_DATA_SLOTS
 
 IF _Y_BANDS
 \\ Per-level Y-band parameter overrides. Three parallel arrays per level
@@ -11101,6 +11110,7 @@ IF _SWITCHES
         EQUB    LO(level_5_switch_arg_b), HI(level_5_switch_arg_b)
 ENDIF
 
+IF _TIMED_LASER
 \ Per-object cached screen coords for the laser beam: when
 \ OBJ_flag_laser_beam_drawn is set in level_obj_flags[X], these hold the
 \ obj_screen_x/obj_screen_y from the frame the beam was XOR-drawn so
@@ -11133,6 +11143,7 @@ ENDIF
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
 
+ENDIF   ; _TIMED_LASER
 IF _SWITCHES
 \\ Per-switch refractory state, parallel-indexed to level_N_switch_obj_indices.
 \\ $00 = idle (switch is shootable). Non-zero = refractory countdown.
@@ -11141,6 +11152,7 @@ IF _SWITCHES
 .level_switch_state
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
 ENDIF
+IF _TIMED_LASER
 
 \ ******************************************************************************
 \ * Function: update_all_laser_beams
@@ -13485,6 +13497,7 @@ IF _BOBBING_MINES
 \   door_hold_phase:  frames remaining at full open
 \   door_close_phase: frames-until-next-close-step countdown
 \   door_close_rate:  constant from pulse_door's arg_b; reloads close_phase
+ENDIF   ; _BOBBING_MINES (door state below is not part of it)
 IF _SWITCHES
 .door_cursor
         EQUB $00,$00,$00,$00,$00,$00,$00,$00
@@ -13537,6 +13550,7 @@ IF _SWITCHES
 .door_open_fill_temp     EQUB $00
 .door_closed_fill_temp   EQUB $00
 ENDIF
+IF _BOBBING_MINES
 
 .update_bobbing_mine
 \\ {

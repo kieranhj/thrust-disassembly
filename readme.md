@@ -19,7 +19,13 @@ Notes
 
 Build
 =
-> beebasm.exe -i thrust.6502 -do thrust.ssd -boot Thrust -v
+> .\build.ps1
+
+Builds `build/thrust-orig.ssd` (the original game, checked against CRC32 `6389c446`) and
+`build/thrust.ssd` (the enhanced sideways RAM build). `.\build.ps1 -Run` launches b2.
+
+The original alone, by hand:
+> beebasm.exe -i thrust.6502 -do thrust.ssd -boot Thrust -v -D _SWRAM_BUILD=0
 
 Details
 =

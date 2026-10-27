@@ -1,4 +1,22 @@
 {
     "version": "2.0.0",
-    "tasks": []
+    "tasks": [
+        {
+            "label": "build",
+            "type": "shell",
+            "command": "pwsh -NoProfile -File ${workspaceFolder}/build.ps1",
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": {
+                "owner": "beebasm",
+                "fileLocation": ["relative", "${workspaceFolder}"],
+                "pattern": { "regexp": "^(.+?):(\d+): error: (.*)$", "file": 1, "line": 2, "message": 3 }
+            }
+        },
+        {
+            "label": "build and run (b2)",
+            "type": "shell",
+            "command": "pwsh -NoProfile -File ${workspaceFolder}/build.ps1 -Run",
+            "problemMatcher": []
+        }
+    ]
 }

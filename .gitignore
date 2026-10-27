@@ -48,3 +48,6 @@ Temporary Items
 compile.txt
 .claude/settings.local.json
 *.pyc
+
+# Build output (build.ps1)
+build/
