@@ -10040,8 +10040,12 @@ SET_BG_COL PAL_black
 
 .show_landscape
 {
+IF _Y_BANDS
+        LDA     band_target_landscape_colour            ; the current band's colour (or the level's)
+ELSE
         LDY     level_number
         LDA     level_landscape_colour,Y
+ENDIF
         LDY     #$02
         JMP     palette_set_colour_Y_to_A
 }
@@ -12446,9 +12450,18 @@ IF _Y_BANDS
         CMP     band_current_active_index
         BEQ     update_band_colours_done
         STA     band_current_active_index
+        \\ On an invisible-landscape level the terrain stays black unless the
+        \\ shield is held (hide_landscape); setting colour 2 here would show it
+        \\ until the next frame's hide_landscape.
+        LDA     invisible_landscape_flag
+        BEQ     update_band_set_landscape
+        LDA     shield_tractor_pressed
+        BEQ     update_band_skip_landscape
+.update_band_set_landscape
         LDA     band_target_landscape_colour
         LDY     #$02
         JSR     palette_set_colour_Y_to_A
+.update_band_skip_landscape
         LDA     band_target_object_colour
         LDY     #$03
         JSR     palette_set_colour_Y_to_A
