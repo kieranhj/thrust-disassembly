@@ -48,6 +48,7 @@ root = None
 
 # Import shared data and decoders from the visualisation tool
 sys.path.insert(0, str(Path(__file__).parent))
+import engine_consts
 from visualise_levels import (
     TERRAIN_DATA, OBJECT_DATA, SPRITE_DATA, OBJECT_TYPE_NAMES,
     BBC_COLOURS, LEVEL_LANDSCAPE_COLOUR, LEVEL_OBJECT_COLOUR,
@@ -107,8 +108,8 @@ DEFAULT_LEVELS_FILE = Path(__file__).resolve().parent / "output" / "thrust_level
 
 # thrust.6502 LEVEL_MAX_OBJECTS is the highest object index; every per-object
 # array in the engine has LEVEL_MAX_OBJECTS+1 entries.
-LEVEL_MAX_OBJECTS = 0x1F
-LEVEL_OBJECT_CAP = LEVEL_MAX_OBJECTS + 1
+LEVEL_MAX_OBJECTS = engine_consts.LEVEL_MAX_OBJECTS
+LEVEL_OBJECT_CAP = engine_consts.LEVEL_OBJECT_CAP
 
 
 def object_count_problems(levels):
@@ -193,7 +194,7 @@ COL_LASER_BEAM       = (255, 110, 50)
 # Gravity well object ($0D, SWRAM-only). Per-instance (radius, strength)
 # stored as world-coord-unit Manhattan radius and signed Q0.7-ish strength.
 # See docs/plan-gravity-well.md.
-OBJECT_GRAVITY_WELL  = 0x0D
+OBJECT_GRAVITY_WELL  = engine_consts.OBJECT_TYPES["gravity_well"]
 GRAVITY_WELL_DEFAULT_RADIUS   = 40   # world-coord units; 0 = inactive
 GRAVITY_WELL_DEFAULT_STRENGTH = 60   # signed (-127..127)
 GRAVITY_WELL_CENTRE_RADIUS    = 6    # screen-px radius of centre dot (also click area)
@@ -207,8 +208,8 @@ COL_GRAVITY_WELL_RING = (140, 160, 255, 110)  # diamond outline (translucent)
 # Position bobs along a sine curve with per-instance phase (slot 0) and
 # signed amplitude (slot 1). Slot 2 is the runtime previous-offset; always
 # 0 in level data.
-OBJECT_BOBBING_MINE             = 0x0E
-OBJECT_BOBBING_MINE_HORIZONTAL  = 0x0F
+OBJECT_BOBBING_MINE             = engine_consts.OBJECT_TYPES["bobbing_mine"]
+OBJECT_BOBBING_MINE_HORIZONTAL  = engine_consts.OBJECT_TYPES["bobbing_mine_horizontal"]
 BOBBING_MINE_TYPES = frozenset({OBJECT_BOBBING_MINE,
                                 OBJECT_BOBBING_MINE_HORIZONTAL})
 BOBBING_MINE_DEFAULT_PHASE = 0
@@ -218,7 +219,7 @@ COL_BOBBING_MINE_RANGE = (255, 220, 80, 110)  # amplitude indicator (translucent
 
 # Teleporter pads ($10, SWRAM-only). One-way warp to a level checkpoint.
 # Slot 0 = destination checkpoint index (0-based). Slots 1/2 reserved.
-OBJECT_TELEPORTER       = 0x10
+OBJECT_TELEPORTER       = engine_consts.OBJECT_TYPES["teleporter"]
 TELEPORTER_DEFAULT_DEST = 0
 COL_TELEPORTER          = (120, 220, 255)
 COL_TELEPORTER_WIRE     = (120, 220, 255, 180)  # selected->dest line
@@ -227,7 +228,7 @@ COL_SWITCH_WIRE         = (255, 200, 100, 180)  # switch->target wiring line (or
 # Doors ($11, SWRAM-only). Carve a region of terrain when pulsed by a wired
 # switch. Slot 0: bit 7 = side (0=left wall, 1=right wall), low bits = shape.
 # Slot 1: width in rows. Slot 2: max carve depth.
-OBJECT_DOOR             = 0x11
+OBJECT_DOOR             = engine_consts.OBJECT_TYPES["door"]
 DOOR_SHAPE_VALUES = [
     ("slot",        0),
     ("notch_v",     1),

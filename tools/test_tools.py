@@ -21,8 +21,10 @@ sys.path.insert(0, str(TOOLS))
 
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 
+import engine_consts as ec  # noqa: E402
 import level_editor as le  # noqa: E402
 import sprite_codec as sc  # noqa: E402
+import visualise_levels as vl  # noqa: E402
 
 LEVELS_EXPORT = REPO / "tools" / "output" / "thrust_levels_export2.asm"
 LEVELS_ORIGINAL = REPO / "thrust1" / "level_data.asm"
@@ -71,6 +73,25 @@ class LevelRoundTrip(unittest.TestCase):
         self.assertEqual(le.object_count_problems(levels), [])
         levels[0].objects.extend([dict(levels[0].objects[-1])] * le.LEVEL_OBJECT_CAP)
         self.assertEqual(len(le.object_count_problems(levels)), 1)
+
+
+class EngineConsts(unittest.TestCase):
+    """Hand-copied object tables in the tools agree with thrust.6502."""
+
+    def test_parsed_values(self):
+        self.assertEqual(ec.LEVEL_OBJECT_CAP, 32)
+        self.assertEqual(ec.OBJECT_TYPES["gun_up_right"], 0x00)
+        self.assertEqual(ec.OBJECT_TYPES["door"], 0x11)
+        self.assertEqual(sorted(ec.OBJECT_NAMES), list(range(len(ec.OBJECT_NAMES))))
+
+    def test_editor_type_names_cover_engine_types(self):
+        self.assertEqual(sorted(vl.OBJECT_TYPE_NAMES), sorted(ec.OBJECT_NAMES))
+
+    def test_sprite_codec_names_match_engine(self):
+        # Every type with a sprite, in type order; the door has none.
+        expected = [ec.OBJECT_NAMES[t] for t in sorted(ec.OBJECT_NAMES)
+                    if t != ec.OBJECT_TYPES["door"]]
+        self.assertEqual(sc.OBJECT_NAMES, expected)
 
 
 class SpriteCodec(unittest.TestCase):
