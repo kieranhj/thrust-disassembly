@@ -12914,9 +12914,22 @@ IF _SWITCHES
 .door_y_same_page
         LDA     door_screen_y_temp
         CMP     #$F1                                     ; same threshold as level_3 routine
+        BCS     door_y_off
+        \\ The renderers write width rows from screen_y into the 256-row wall
+        \\ ring; a door whose last row would pass row 255 would wrap into the
+        \\ rows above the window. Width 0 would loop 256 times.
+        LDX     door_width_temp
+        BEQ     door_y_off
+        DEX
+        TXA
+        CLC
+        ADC     door_screen_y_temp
+        LDX     door_save_x
         BCC     door_y_on_screen
+.door_y_off
         JMP     door_off_screen
 .door_y_on_screen
+        LDA     door_screen_y_temp
 
         \\ On-screen. Wall array index = screen_y + terrain_window_y_index.
         CLC
@@ -13256,8 +13269,11 @@ IF _SWITCHES
         LDA     door_max_carve_temp
     .open_compare
         CMP     door_cursor,X
-        BNE     open_inc
-        \\ Cursor at max — start holding next frame.
+        BEQ     open_hold
+        BCS     open_inc                                 ; max > cursor: keep opening
+        \\ Cursor at (or, if set_param lowered the max mid-open, past) max:
+        \\ start holding next frame; closing brings the cursor back down.
+    .open_hold
         LDA     #$01
         STA     door_phase,X
         RTS
