@@ -11399,6 +11399,12 @@ IF _TIMED_LASER
 \ *   axis-aligned beams once profiling justifies it.
 \ ******************************************************************************
 
+\ draw_line row of the playfield's top line: calculate_pixels_ptr maps row y to
+\ $3800 + (y DIV 8) * SCREEN_CHAR_ROW_BYTES, so rows 16-31 are the status bar at
+\ SCREEN_BASE_ADDR and rows 0-15 land on code below it.
+LASER_TOP_Y = 16 + SCREEN_STATUS_ROWS * 8
+ASSERT SCREEN_BASE_ADDR = (SCREEN_ADDR_HI_OFFSET * 256) + 2 * SCREEN_CHAR_ROW_BYTES
+
 .draw_laser_beam_at_obj_screen
 \\ {
         \\ Per-instance dx, dy come from laser_dx_temp / laser_dy_temp (loaded
@@ -11460,7 +11466,12 @@ IF _TIMED_LASER
         CLC
         ADC     #1
         STA     laser_abs_dy
-        LDA     draw_line_start_y                                     ; range_y = start_y
+        LDA     draw_line_start_y                                     ; range_y = start_y - LASER_TOP_Y
+        SEC                                                           ; (rows above the playfield are the status
+        SBC     #LASER_TOP_Y                                          ; bar and, below y=16, code at $3800-$3C7F)
+        BCS     laser_range_y_up_ok
+        JMP     laser_barrel_off_screen
+    .laser_range_y_up_ok
         STA     laser_range_y
 
     .laser_test_clip
