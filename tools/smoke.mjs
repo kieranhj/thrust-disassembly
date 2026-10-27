@@ -2,6 +2,7 @@
 //
 //   node tools/smoke.mjs                 both discs (build/thrust.ssd, build/thrust-orig.ssd)
 //   node tools/smoke.mjs build/thrust.ssd [--frames N] [--shots]
+//   SMOKE_MODEL=Master node tools/smoke.mjs     on a Master 128 (default B-DFS1.2)
 //
 // For each disc: SHIFT+BREAK on a Model B (jsbeeb's B has RAM in sideways bank 4), wait for the
 // instructions page, press SPACE. Then for each level 0-5: stop at start_new_level, set
@@ -68,7 +69,7 @@ for (const disc of discs) {
     const TICK = need(L, "tick_loop"), START = need(L, "start_new_level"), LEVEL = need(L, "level_number");
     const name = basename(disc, ".ssd");
 
-    const m = new MachineSession("B-DFS1.2");
+    const m = new MachineSession(process.env.SMOKE_MODEL || "B-DFS1.2");
     await m.initialise();
     await m.boot();
     m.loadDisc(disc);
