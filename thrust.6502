@@ -12158,6 +12158,13 @@ TELEPORTER_CENTRE_Y_OFFSET  = $04          ; pixel rows
         BNE     no_contact
         LDA     pod_lifted_flag
         BNE     no_contact
+        \\ Not while the ship is dying (the warp would skip the death and keep
+        \\ the life), and not during the reactor countdown (level_reset would
+        \\ set planet_countdown_timer back to $FF and cancel it). Both idle at $FF.
+        LDA     pod_destroying_player_timer
+        BPL     no_contact
+        LDA     planet_countdown_timer
+        BPL     no_contact
 
         \\ 16-bit dy = pad_y - player_y. Pad position lives in well_obj_*_save
         \\ (populated by teleporter_emit_debris just above this call site).
