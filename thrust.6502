@@ -10787,6 +10787,7 @@ INCLUDE "app_init.asm"
 \ ******************************************************************************
 
 IF _SWRAM_BUILD
+MOS_ROM_TYPE_TABLE = &02A1     ; the MOS's per-bank ROM type bytes (0 = no ROM), MOS 1.20 and 3.20
 SWRAM_BANK      = 4
 SPRITE_BANK     = 5
 SWRAM_ADDR      = &8000
@@ -10795,15 +10796,20 @@ SWRAM_ADDR      = &8000
 {
         SET_RAM_BANK    SWRAM_BANK
 
+\ Forget any ROM the MOS found in this bank at the last BREAK: the bank is about to be
+\ overwritten, and from &8480 only, so a stale header at &8000 could survive.
+        LDA     #$00
+        STA     MOS_ROM_TYPE_TABLE+SWRAM_BANK
+
 \ Relocate new data & code block to SWRAM.
 
         LDA     #LO(SWRAM_RELOC_START+OFFSET)
         STA     boot_read_ptr
         LDA     #HI(SWRAM_RELOC_START+OFFSET)
         STA     boot_read_ptr+1
-        LDA     #LO(SWRAM_ADDR)
+        LDA     #LO(SWRAM_DATA_ADDR)
         STA     boot_write_ptr
-        LDA     #HI(SWRAM_ADDR)
+        LDA     #HI(SWRAM_DATA_ADDR)
         STA     boot_write_ptr+1
         LDX     #SWRAM_PAGES
         
@@ -10848,6 +10854,7 @@ GUARD SWRAM_ADDR+&8000-(NATIVE_END+OFFSET)
 ; as sprites are deliberately drawn into ROM
 ; address space to avoid culling...
 skip &480
+.SWRAM_DATA_ADDR                            ; first byte copied up from the Thrust file
 
 \ ******************************************************************************
 \ * Modified level data. Potentially larger than original so requires SWRAM.
@@ -13912,16 +13919,23 @@ ENDIF
 \ ******************************************************************************
 \ ******************************************************************************
 
-SWRAM_SIZE      = P%-SWRAM_ADDR
+\ Only the data from SWRAM_DATA_ADDR is carried in the Thrust file: the &480 bytes below it
+\ are the off-screen sprite scratch and need no initial contents.
+SWRAM_SIZE      = P%-SWRAM_DATA_ADDR
 SWRAM_PAGES     = HI(SWRAM_SIZE+&FF)
+SWRAM_LOAD_END  = NATIVE_END+OFFSET+SWRAM_SIZE      ; end of the Thrust file in memory
 
 PRINT "~~~~~~~~~~"
 PRINT "SWRAM BANK"
 PRINT "~~~~~~~~~~"
 PRINT "TOTAL SIZE=", ~SWRAM_SIZE, "bytes (", ~SWRAM_PAGES, " pages)"
-PRINT "COPYBLOCK FROM=", ~SWRAM_ADDR, " TO=", ~SWRAM_RELOC_START, " SIZE=", ~SWRAM_SIZE, " bytes (", ~SWRAM_PAGES, " pages)"
-COPYBLOCK SWRAM_ADDR, P%, SWRAM_RELOC_START
-PRINT "SWRAM BANK RAM BYTES FREE=", ~(&4000-SWRAM_SIZE)
+PRINT "COPYBLOCK FROM=", ~SWRAM_DATA_ADDR, " TO=", ~SWRAM_RELOC_START, " SIZE=", ~SWRAM_SIZE, " bytes (", ~SWRAM_PAGES, " pages)"
+COPYBLOCK SWRAM_DATA_ADDR, P%, SWRAM_RELOC_START
+\ The bank has room to &C000, but the payload travels inside the Thrust file, which loads at
+\ LOAD_ADDR and must end below the MODE 7 screen at &7C00 that is still up during the load.
+PRINT "SWRAM BANK RAM BYTES FREE=", ~(&C000-P%)
+PRINT "THRUST FILE LOAD HEADROOM FREE=", ~(&7C00-SWRAM_LOAD_END), " bytes (below MODE 7 at &7C00)"
+ASSERT SWRAM_LOAD_END <= &7C00
 PRINT "~~~~~~~~~~"
 
 ELSE

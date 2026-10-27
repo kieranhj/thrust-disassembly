@@ -91,6 +91,9 @@ if ($Smoke) {
     & node (Join-Path $root 'tools\smoke.mjs') $swramSsd $origSsd > (Join-Path $build 'smoke.json')
     if ($LASTEXITCODE -ne 0) { throw "smoke test failed (exit $LASTEXITCODE), see build/smoke.json" }
     Write-Host "smoke: both discs play all six levels"
+    & node (Join-Path $root 'tools\check_laser_clip.mjs') $swramSsd > (Join-Path $build 'check_laser_clip.json')
+    if ($LASTEXITCODE -ne 0) { throw "laser clip check failed (exit $LASTEXITCODE), see build/check_laser_clip.json" }
+    Write-Host "check_laser_clip: no beam pixels below the screen"
 }
 
 if ($Run) {
