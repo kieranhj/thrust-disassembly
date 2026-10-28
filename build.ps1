@@ -3,6 +3,11 @@
 #   .\build.ps1             assemble both discs; fail unless the original's CRC32 is 6389c446
 #   .\build.ps1 -Run        ...then launch b2 on the SWRAM disc (-Beebjit for beebjit)
 #   .\build.ps1 -Run -Orig  ...launch the original disc instead
+#   .\build.ps1 -Smoke      ...then boot both discs in jsbeeb and play every level (tools/smoke.mjs),
+#                           and run tools/check_laser_clip.mjs
+#   .\build.ps1 -Flags      ...then build the SWRAM game with each feature flag off in turn
+#   .\build.ps1 -Release    the SWRAM disc for other people: debug display off (asserted in the
+#                           source) and an INFO file on the disc naming the commit and the flags
 #
 # Both discs come from the same source: thrust.6502 line 30 is `_SWRAM_BUILD =? TRUE`, and this
 # script passes -D _SWRAM_BUILD=0 / -1 on every build. The original's CRC32 anchors the game's
@@ -10,7 +15,7 @@
 #
 # beebasm: $env:BEEBASM, else beebasm.exe in the repo root (pinned at 1.11).
 # Emulators: $env:B2 / $env:BEEBJIT, else the paths below.
-param([switch]$Run, [switch]$Orig, [switch]$Beebjit, [switch]$Smoke, [switch]$Flags)
+param([switch]$Run, [switch]$Orig, [switch]$Beebjit, [switch]$Smoke, [switch]$Flags, [switch]$Release)
 
 $ErrorActionPreference = 'Stop'
 if ($args) { throw "build.ps1: unknown argument(s): $args" }
@@ -60,7 +65,23 @@ function Invoke-Build([string]$name, [int]$swram, [string[]]$defines = @()) {
 }
 
 $origSsd  = Invoke-Build 'thrust-orig' 0
-$swramSsd = Invoke-Build 'thrust' -1
+if ($Release) {
+    # INFO, *TYPE-able on the disc: which commit, whether the tree was clean, and every flag's
+    # value (names without underscores, which MODE 7 shows as dashes). The values come from the build's own FLAG lines, so assemble once to read them
+    # (with a placeholder INFO for PUTTEXT), then again with the real file.
+    $infoPath = Join-Path $build 'INFO.txt'
+    [IO.File]::WriteAllText($infoPath, "`r")
+    $null = Invoke-Build 'thrust' -1 @('_RELEASE=-1')
+    $flagLines = Get-Content (Join-Path $build 'thrust.txt') | Where-Object { $_ -match '^FLAG (_[A-Z_]+) +(-?\d+)' } |
+                 ForEach-Object { $null = $_ -match '^FLAG (_[A-Z_]+) +(-?\d+)'; '  {0,-22} {1}' -f $Matches[1].TrimStart('_').Replace('_', ' '), $(if ($Matches[2] -ne '0') { 'on' } else { 'off' }) }
+    $commit = (& git -C $root rev-parse --short HEAD) 2>$null
+    $dirty  = if ((& git -C $root status --porcelain) 2>$null) { ' + edits' } else { '' }
+    $info = @('Thrust Next', "Built $(Get-Date -Format 'yyyy-MM-dd HH:mm') from $commit$dirty", 'Flags:') + $flagLines
+    [IO.File]::WriteAllText($infoPath, ($info -join "`r") + "`r")     # BBC text files end lines with CR
+    $swramSsd = Invoke-Build 'thrust' -1 @('_RELEASE=-1')
+} else {
+    $swramSsd = Invoke-Build 'thrust' -1
+}
 
 $origGot  = Get-Crc32 $origSsd
 $swramGot = Get-Crc32 $swramSsd

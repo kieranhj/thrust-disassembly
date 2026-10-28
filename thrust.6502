@@ -28,9 +28,10 @@
 \ *****************************************************************************
 
 _SWRAM_BUILD         =? TRUE                ; build.ps1 passes -D _SWRAM_BUILD=0 or -1
+_RELEASE             =? FALSE               ; build.ps1 -Release: the build for other people
 
 _DEBUG_RASTERS       =? (_SWRAM_BUILD AND FALSE)   ; Raster timing
-_DEBUG_FRAME_TIME    =? (_SWRAM_BUILD AND TRUE)    ; Show frame time in status bar
+_DEBUG_FRAME_TIME    =? (_SWRAM_BUILD AND NOT(_RELEASE))   ; Show frame time in status bar
 _UNROLL_TERRAIN      =? (_SWRAM_BUILD AND TRUE)    ; Faster terrain plotting
 _FRIENDLY_KEYS       =? (_SWRAM_BUILD AND TRUE)    ; Emulator friendly key map
 _THRUST_PARTICLES    =? (_SWRAM_BUILD AND TRUE)    ; Generate thrust particles
@@ -43,6 +44,24 @@ _BOBBING_MINES       =? (_SWRAM_BUILD AND TRUE)    ; Bobbing mine hazard object 
 _TELEPORTER          =? (_SWRAM_BUILD AND TRUE)    ; One-way teleporter pad object ($10)
 _LAST_USED_CHECKPOINT =? (_SWRAM_BUILD AND TRUE)   ; Track active checkpoint across deaths
 _SWITCHES            =? (_SWRAM_BUILD AND TRUE)    ; Editor-driven switches & triggers (wiring table)
+\ One line per flag in the build log; build.ps1 -Release copies them into INFO.
+PRINT "FLAG _SWRAM_BUILD ", _SWRAM_BUILD
+PRINT "FLAG _RELEASE ", _RELEASE
+PRINT "FLAG _DEBUG_RASTERS ", _DEBUG_RASTERS
+PRINT "FLAG _DEBUG_FRAME_TIME ", _DEBUG_FRAME_TIME
+PRINT "FLAG _UNROLL_TERRAIN ", _UNROLL_TERRAIN
+PRINT "FLAG _FRIENDLY_KEYS ", _FRIENDLY_KEYS
+PRINT "FLAG _THRUST_PARTICLES ", _THRUST_PARTICLES
+PRINT "FLAG _FAST_SPRITES ", _FAST_SPRITES
+PRINT "FLAG _NO_WRAP_UNDERGROUND ", _NO_WRAP_UNDERGROUND
+PRINT "FLAG _TIMED_LASER ", _TIMED_LASER
+PRINT "FLAG _GRAVITY_WELL ", _GRAVITY_WELL
+PRINT "FLAG _Y_BANDS ", _Y_BANDS
+PRINT "FLAG _BOBBING_MINES ", _BOBBING_MINES
+PRINT "FLAG _TELEPORTER ", _TELEPORTER
+PRINT "FLAG _LAST_USED_CHECKPOINT ", _LAST_USED_CHECKPOINT
+PRINT "FLAG _SWITCHES ", _SWITCHES
+
 \ Derived: per-object obj_data slots 1/2 (laser dx/dy, well radius/strength, mine amplitude, door params)
 _OBJ_DATA_SLOTS      = _TIMED_LASER OR _GRAVITY_WELL OR _BOBBING_MINES OR _TELEPORTER OR _SWITCHES
 
@@ -57,6 +76,12 @@ ASSERT (NOT(_TELEPORTER)) OR (_GRAVITY_WELL AND _LAST_USED_CHECKPOINT)
 
 INITIAL_LEVEL                       = $01       ; staring level
 INITIAL_CHECKPOINT                  = $00       ; testing: spawn at this checkpoint on level start (0 = top)
+
+\ A release build carries no debug display and starts where the game starts.
+IF _RELEASE
+ASSERT NOT(_DEBUG_RASTERS) AND NOT(_DEBUG_FRAME_TIME)
+ASSERT INITIAL_LEVEL = $01 AND INITIAL_CHECKPOINT = $00
+ENDIF
 INITIAL_LIVES                       = $04       ; starting number of lives
 INITIAL_FUEL                        = $10       ; starting fuel value (BCD 1000)
 
@@ -14084,6 +14109,9 @@ ENDIF
 \ ******************************************************************************
 
 SAVE "Thrust", NATIVE_START, NATIVE_END+SWRAM_SIZE, RELOC_START+OFFSET, LOAD_ADDR
+IF _RELEASE AND _SWRAM_BUILD
+PUTTEXT "build/INFO.txt", "INFO", 0         ; written by build.ps1 -Release: flags and commit
+ENDIF
 
 \ ******************************************************************************
 \ ******************************************************************************
