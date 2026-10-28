@@ -9450,6 +9450,9 @@ ENDIF ; _SWRAM_BUILD=FALSE
 
 .start_new_level
 {
+IF _SWRAM_BUILD
+        JSR     level_objects_restore                   ; undo last visit's switch and mine changes
+ENDIF
         LDA     #$00
         STA     midpoint_ypos_INT
         STA     midpoint_ypos_INT_HI
@@ -10877,6 +10880,7 @@ ENDIF
         DEX
         BNE     relocate
 
+        JSR     level_objects_save        ; pristine copy of the level object arrays
         JMP     main_entry                ; jump to entry
 
 IF NOT(_FAST_SPRITES)
@@ -10923,6 +10927,79 @@ INCLUDE "tools/output/thrust_levels_export2.asm"
 \ ******************************************************************************
 
 INCLUDE "tools/output/object_sprites.asm"
+
+\ ******************************************************************************
+\ * Level object arrays: snapshot at boot, restore at every new level.
+\ *
+\ * The levels live in sideways RAM and are copied up once at boot, but play
+\ * changes them in place: set_param / xor_param rewrite obj_data, and bobbing
+\ * mines move by rewriting their positions. Without a restore those changes
+\ * carried into the next visit and the next game. level_objects_save copies
+\ * the six levels' object arrays (pos X/Y/Y_EXT, type, obj_data 0-2) into the
+\ * free bank space after the payload; level_objects_restore copies them back.
+\ * Exact byte count: the pages after the block hold self-modified code.
+\ ******************************************************************************
+
+LEVEL_OBJ_BLOCK       = level_0_obj_pos_X
+LEVEL_OBJ_BLOCK_SIZE  = level_gravity_FRAC_table - level_0_obj_pos_X
+ASSERT level_5_obj_data_2 > level_0_obj_pos_X AND level_5_obj_data_2 < level_gravity_FRAC_table
+
+.level_objects_save
+{
+        LDA     #LO(LEVEL_OBJ_BLOCK)
+        LDX     #HI(LEVEL_OBJ_BLOCK)
+        LDY     #LO(level_obj_pristine)
+        STY     lo_copy_dst+1
+        LDY     #HI(level_obj_pristine)
+        JMP     level_objects_copy
+}
+
+.level_objects_restore
+{
+        LDA     #LO(level_obj_pristine)
+        LDX     #HI(level_obj_pristine)
+        LDY     #LO(LEVEL_OBJ_BLOCK)
+        STY     lo_copy_dst+1
+        LDY     #HI(LEVEL_OBJ_BLOCK)
+}
+\ Fall through!
+
+\ A:X = source, lo_copy_dst+1 / Y = destination low / high. Copies LEVEL_OBJ_BLOCK_SIZE bytes.
+.level_objects_copy
+{
+        STA     lo_copy_src+1
+        STX     lo_copy_src+2
+        STY     lo_copy_dst+2
+        LDA     #HI(LEVEL_OBJ_BLOCK_SIZE)
+        STA     lo_copy_pages
+        LDX     #$00
+        LDA     lo_copy_pages
+        BEQ     last_part
+    .page_loop
+        JSR     copy_byte
+        INX
+        BNE     page_loop
+        INC     lo_copy_src+2
+        INC     lo_copy_dst+2
+        DEC     lo_copy_pages
+        BNE     page_loop
+    .last_part
+IF LO(LEVEL_OBJ_BLOCK_SIZE) <> 0
+    .rest_loop
+        JSR     copy_byte
+        INX
+        CPX     #LO(LEVEL_OBJ_BLOCK_SIZE)
+        BNE     rest_loop
+ENDIF
+        RTS
+    .copy_byte
+}
+.lo_copy_src
+        LDA     $FFFF,X                                 ; **SELF-MODIFIED CODE**
+.lo_copy_dst
+        STA     $FFFF,X                                 ; **SELF-MODIFIED CODE**
+        RTS
+.lo_copy_pages  EQUB $00
 
 \ ******************************************************************************
 \ ******************************************************************************
@@ -13978,6 +14055,8 @@ ENDIF
 \ Only the data from SWRAM_DATA_ADDR is carried in the Thrust file: the &480 bytes below it
 \ are the off-screen sprite scratch and need no initial contents.
 SWRAM_SIZE      = P%-SWRAM_DATA_ADDR
+.level_obj_pristine                                 ; not in the file: filled by level_objects_save
+ASSERT level_obj_pristine + LEVEL_OBJ_BLOCK_SIZE <= &C000
 SWRAM_PAGES     = HI(SWRAM_SIZE+&FF)
 SWRAM_LOAD_END  = NATIVE_END+OFFSET+SWRAM_SIZE      ; end of the Thrust file in memory
 
@@ -13989,7 +14068,7 @@ PRINT "COPYBLOCK FROM=", ~SWRAM_DATA_ADDR, " TO=", ~SWRAM_RELOC_START, " SIZE=",
 COPYBLOCK SWRAM_DATA_ADDR, P%, SWRAM_RELOC_START
 \ The bank has room to &C000, but the payload travels inside the Thrust file, which loads at
 \ LOAD_ADDR and must end below the MODE 7 screen at &7C00 that is still up during the load.
-PRINT "SWRAM BANK RAM BYTES FREE=", ~(&C000-P%)
+PRINT "SWRAM BANK RAM BYTES FREE=", ~(&C000-(level_obj_pristine+LEVEL_OBJ_BLOCK_SIZE)), " (after the level object snapshot)"
 PRINT "THRUST FILE LOAD HEADROOM FREE=", ~(&7C00-SWRAM_LOAD_END), " bytes (below MODE 7 at &7C00)"
 ASSERT SWRAM_LOAD_END <= &7C00
 PRINT "~~~~~~~~~~"
