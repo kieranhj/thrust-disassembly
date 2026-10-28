@@ -20,7 +20,7 @@ As built:
 
 Not in scope (see §10): hostile bullets triggering switches, predicates across switches ("fire only when all four are set"), cross-level wiring.
 
-State is per level, not per life: wiring effects (destroyed or disabled targets, door state) persist across deaths, like destroyed guns in the original game, and reset at level start.
+State is per level, not per life: wiring effects (destroyed or disabled targets, door state) persist across deaths, like destroyed guns in the original game, and reset at level start. `set_param` / `xor_param` rewrite the level's `obj_data` in sideways RAM, so `start_new_level` restores the six levels' object arrays from a snapshot taken at boot (`level_objects_restore`); deaths go through `level_retry` and keep the changes.
 
 ## 2. Build flag
 
@@ -219,7 +219,7 @@ Engine `level_number` 3/4/5 are editor levels 4/5/6.
 
 `door_advance_anim`: opening increments the cursor by one per frame up to its maximum (`max_carve` for slot/notch_v, `width` for flat_window); holding counts `door_hold_phase` down; closing decrements the cursor once every `close_rate + 1` frames and clears alive at 0.
 
-The carve is rewritten into the wall arrays every frame while the door's top row is on screen (same `< $F1` window test as `level_3_door_logic`), whether the door is open or closed. Closed doors keep their rows at the anchor X, so no terrain needs saving and restoring.
+The carve is rewritten into the wall arrays every frame while the door's top row is on screen (same `< $F1` window test as `level_3_door_logic`, plus: the door's last row must stay inside the 256-row wall ring, and width 0 draws nothing), whether the door is open or closed. Closed doors keep their rows at the anchor X, so no terrain needs saving and restoring.
 
 ### 10.2 Shape generators (done)
 

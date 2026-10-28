@@ -10,7 +10,7 @@ SWRAM-only behind `_TELEPORTER` (`thrust.6502:43`); the non-SWRAM CRC `6389c446`
 
 - `_TELEPORTER = (_SWRAM_BUILD AND TRUE)`.
 - `OBJECT_teleporter = $10`, the slot after the bobbing-mine pair `$0E`/`$0F`. (`$11` is `OBJECT_door`, see [plan-switches-and-triggers.md](plan-switches-and-triggers.md).)
-- `IF _TELEPORTER` entries in the per-type tables: `obj_type_width` `$03`, `obj_type_height` `$08` (both placeholders), `obj_type_explosion_particle` `$00`, `obj_type_score_value` `$00`, `object_type_cull_size_table` `$44`.
+- Entries in the per-type tables (emitted under `_SWRAM_BUILD`, so they stay at index `$10` whichever features are on): `obj_type_width` `$03`, `obj_type_height` `$08` (both placeholders), `obj_type_explosion_particle` `$00`, `obj_type_score_value` `$00`, `object_type_cull_size_table` `$44`.
 
 The pad is handled in `update_and_draw_all_objects` *before* the `OBJ_flag_alive` test, sprite selection and bullet collision, then jumps to `next_object`. Consequences:
 
@@ -46,6 +46,8 @@ In the per-object loop (`thrust.6502:1698`):
 
 - the pad has `OBJ_flag_disabled` set;
 - `pod_tethered_flag` or `pod_lifted_flag` is non-zero (pod guard, §5);
+- `pod_destroying_player_timer` is running (the ship is dying: warping would skip the death and keep the life);
+- `planet_countdown_timer` is running (`level_reset` would set it back to `$FF` and cancel the reactor countdown; carrying the countdown through the warp is the alternative, see `docs/decisions.md`);
 - `|pad_y - player_ypos| >= 8` pixels (16-bit compare);
 - `|pad_x - player_xpos_INT| >= 5` chars.
 

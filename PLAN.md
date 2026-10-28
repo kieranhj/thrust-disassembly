@@ -1,68 +1,42 @@
 # Plan
 
-**What is left to do, in order.** Evidence for each item is in [docs/review-2026-10.md](docs/review-2026-10.md) (section numbers in brackets); defects are in [docs/bugs.md](docs/bugs.md); feature ideas in [docs/ideas.md](docs/ideas.md). When an item lands, tick it here with the commit; when a phase is done, collapse it to one line. Keep this file short.
+**What is left to do, in order.** Choices are in [docs/decisions.md](docs/decisions.md), defects in [docs/bugs.md](docs/bugs.md), feature ideas in [docs/ideas.md](docs/ideas.md); [docs/review-2026-10.md](docs/review-2026-10.md) is the review this plan started from (section numbers in brackets). When an item lands, delete its line here; the commit says what changed. Keep this file short.
 
-**Rule for every phase:** `.\build.ps1` must pass (original CRC `6389c446`). Engine changes go behind an SWRAM flag.
+**Every change:** `.\build.ps1 -Smoke` must pass (original CRC `6389c446`, both discs play all six levels, the laser clip check). Engine changes go behind an SWRAM flag; `-Flags` checks each can be turned off.
 
-## Where it stands (2026-10-27, branch `restart/build-fixes` from `wip/experiments`)
+## Where it stands (2026-10-28, branch `restart/build-fixes`)
 
-Thrust Next plays with all features on. Nothing has been checked in an emulator since the review; there are no automated tests. Main RAM has `&1A8` bytes free in the SWRAM build, and the SWRAM payload's real headroom is ~`&A02`.
+- **Build:** `build.ps1` builds both discs from one source and fails on a CRC change; `-Smoke`, `-Flags`, `-Release` (INFO file), `-Run` (b2/beebjit).
+- **Tests:** `tools/test_tools.py` (level and sprite round-trips, engine constants); `tools/smoke.mjs` (jsbeeb, both discs, all levels, Model B or Master); `tools/check_laser_clip.mjs`; `tools/frametime.mjs` (frame-length histogram: demo, idle or scripted flight).
+- **Fixed since the review:** every bug in review section 2 except 2.6's full workspace (the data restore is done), the underground X clamp, all stale comments, the editor's file/cap/radius issues, broken sprite tools.
+- **Memory:** main RAM `&26E` free (was `&1A8`), load headroom `&A44`, bank `&1C84`. The bank is probed, not assumed.
+- **Not checked by a person:** nothing on this branch has been played by KC or run on b2/beebjit/real hardware. Everything was checked in jsbeeb.
 
-## 1. A build that checks itself
+## 1. Waiting on KC
 
-- [x] `build.ps1` builds both discs from one source (`_SWRAM_BUILD =? TRUE`, `-D`), stops on beebasm errors, and fails unless the original is `6389c446`; it writes label dumps and prints the RAM reports [1.1]
-- [x] Every build flag uses `=?`, so any can be overridden with `-D` [1.1]
-- [x] `_DEBUG_FRAME_TIME` store gated on its own flag [1.2]
-- [x] Feature flags independent: obj_data lookups under derived `_OBJ_DATA_SLOTS`, door state and `level_switch_state` moved out of the mine and laser blocks, teleporter prerequisites asserted. SWRAM binary unchanged (`84a9e5f1`) [1.3]
-- [x] `thrust.ssd` and `crc32dos.exe` untracked, `build/` ignored, `make.bat`/`run.bat` wrap `build.ps1`, `run.bat` uses b2, VS Code build task, `CLAUDE.md` and `readme.md` rewritten [1.4]
-- [ ] Repo `memory/` duplicates two user-level memory notes: KC to decide whether to keep it [1.4]
+- [ ] Play `build\thrust.ssd` (`.\build.ps1 -Run`) and the original (`-Run -Orig`) on b2 or real hardware: the fixes touch lasers, doors, bands, teleporters, the underground scroll and the boot (bank probe)
+- [ ] Decisions 3 (teleporter during the countdown), 8 (`_FAST_SPRITES`), 9 (copy protection), 10 (frame-gate remainder)
+- [ ] Merge `restart/build-fixes` into `wip/experiments` (or replace it)
+- [ ] Repo `memory/` duplicates two user-level memory notes: keep or delete
 
-## 2. Tests
+## 2. Frame rate
 
-- [ ] `tools/test_tools.py`: level round-trip, `from_game_data` vs `level_data.asm`, sprite codec round-trip; move `Tk()` out of import time first [6.1]
-- [ ] Smoke test with jsbeeb (node, kit `template/tools/harness.mjs`): boot both discs, reach the main loop on all six levels. Convert the label dump to `<disc>.symbols.json`. Add `.mcp.json` (kit template) for interactive use [7]
-- [ ] Optional check in `build.ps1`: build with each feature flag off in turn [1.3]
-
-## 3. Small bugs (SWRAM only, one commit each)
-
-- [ ] Thrust particle `ROR particles_dy_FRAC` missing `,X` [2.1]
-- [ ] Fuel tractor counters cleared for 12 slots, not 32 [2.2]
-- [ ] Teleporter: refuse while dying or during the reactor countdown [2.3]
-- [ ] Clip up-facing laser beams to the playfield [2.4]
-- [ ] Per-type tables missing door ($11) entries; `ASSERT` table lengths; editor blocks invalid destroy targets [2.7]
-- [ ] Door on-screen test, zero width, `open_compare` [2.8]
-- [ ] Bands vs invisible landscape [2.9]
-- [ ] Unpause needs CAPS LOCK with `_FRIENDLY_KEYS` [2.10]
-- [ ] Editor: cap objects at `LEVEL_MAX_OBJECTS`; default to `export2.asm`, delete the stale export [2.11, 2.12]
-- [ ] Stale comments and dead code listed in `docs/bugs.md`
-
-## 4. Frame rate (measure before and after with kit `beeb-frame-drops`, against the 3 cs gate)
-
-- [ ] Carry the frame-gate remainder instead of zeroing the clock [3.1]
-- [ ] MOS keyboard scan off during play (OSBYTE `&B2`) [3.2]
-- [ ] Debris emitter: shifts instead of multiplies; skip off-screen; fix parity bias [3.3]
-- [ ] Per-type object index lists [3.4]
+- [ ] Laser beam redraw: a dedicated plotter (`docs/brief-loader-memory.md` §5). The one measured cause of dropped frames in Thrust Next
+- [ ] Decision 10 (frame-gate remainder), played side by side
+- [ ] Debris emitter: shifts instead of multiplies, skip off-screen, parity bias [3.3]. No measured cost yet; do it when a level with many wells shows one
 - [ ] Mask the MOS vsync event [3.5]
 
-## 5. Loader and memory (one brief: `docs/brief-loader-memory.md`, to write)
+## 3. Loader and memory (`docs/brief-loader-memory.md`)
 
-- [ ] Probe for sideways RAM instead of hard-coding banks 4/5 (kit `lib/swram_probe.6502`) [2.5]
-- [ ] Load the bank as its own file (kit `lib/loader.6502`) [4.2]; stop copying the `skip &480` [4.3]
-- [ ] Per-level object workspace in SWRAM; restores level data each game [4.1, 2.6]
-- [ ] Move native-RAM `IF` bodies into SWRAM; `IF NOT _SWITCHES` round the legacy doors [4.4]
-- [ ] Generated memory map from the label dump [4.5]
+- [ ] Load the bank as its own file (§1): the load headroom is the binding limit for new content
+- [ ] Per-level object workspace (§2)
+- [ ] Native-RAM `IF` bodies into the bank (§3)
+- [ ] Generated memory map (§4)
 
-## 6. Release
+## 4. Release
 
-- [ ] `RELEASE` flag: asserts debug flags off and `INITIAL_LEVEL`/`INITIAL_CHECKPOINT` at defaults; `INFO` build stamp (kit `lib/boot_stamp.6502`) [7]
-- [ ] Publish a WIP of both discs (`publish-wip`) [7]
-
-## Decisions for KC
-
-- [ ] `_FAST_SPRITES`: finish it with phase 5's bank loader, or delete it and `generate_ship_streams.py` [5]
-- [ ] Remove the copy protection check from the SWRAM build [5]
-- [ ] Start `docs/decisions.md` (numbered log of each deviation from the original) [7]
+- [ ] Publish a WIP of both discs (`publish-wip` skill) once KC has played the branch
 
 ## Later
 
-Replace MOS sound with kit `sfx50` [3.6]; relocation proof against the original (PORTING §2.1c) [7]; split `level_editor.py`, one source for engine constants, drop hard-coded level copies [6.3-6.5].
+Replace MOS sound with the kit's `sfx50` [3.6]; relocation proof against the original (kit PORTING §2.1c) [7]; split `level_editor.py`, read sprite sizes from the label dump [6.3-6.5]; `sprite_editor.py` importable headless.

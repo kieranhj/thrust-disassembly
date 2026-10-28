@@ -268,9 +268,10 @@ Door terrain (`tick_doors`, SWRAM) and switch refractory timers
 | `gun_bullet_x_offset` / `gun_bullet_y_offset` | Gun bullet spawn offset (4 entries) | `thrust.6502:2272` |
 | `gun_spread_mask_table` | Spread width LUT (4 entries) | `thrust.6502:2278` |
 
-In the SWRAM build, `obj_type_explosion_particle` and `obj_type_score_value`
-are padded with zeros for `$05..$08` inside the `_TIMED_LASER` block, so the
-later entries only line up while `_TIMED_LASER` is enabled.
+In the SWRAM build each per-type table carries every Thrust Next type under
+`_SWRAM_BUILD` (whichever features are on), up to `OBJECT_door` (`$11`), and
+ends with an `ASSERT` on its length; `object_type_cull_size_table` stops at
+`OBJECT_teleporter` because doors are never culled through it.
 
 ## Adding a New Object Type
 

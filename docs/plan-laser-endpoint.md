@@ -38,7 +38,7 @@ Orientation defaults, used for new lasers, for the reset key and for old exports
 
 2. **Beam geometry.** `draw_laser_beam_at_obj_screen` (`thrust.6502:11386`):
    - Start X = `(obj_screen_x + gun_bullet_x_offset[type − $09]) · 4`, in pixels; the beam is skipped if the barrel is at character 64 or beyond. Start Y = `obj_screen_y + 2 · gun_bullet_y_offset[type − $09]`, in pixel rows.
-   - `range_x` = pixels to the screen edge in the dx direction (`255 − start_x` or `start_x`); `range_y` likewise for dy.
+   - `range_x` = pixels to the screen edge in the dx direction (`255 − start_x` or `start_x`); `range_y` likewise for dy, except that upwards it is `start_y − LASER_TOP_Y` (32, the playfield's top row: rows above it are the status bar and, below row 16, code at `$3800`). `tools/check_laser_clip.mjs` checks this.
    - If `|dx| ≤ range_x` and `|dy| ≤ range_y`, the end point is just `start + (dx, dy)`.
    - Otherwise the beam is parameterised by `t_q` in Q0.7 (127 ≈ full length). For each axis that overflows, `laser_divide_q7` computes `(range << 7) / |d|`, a 7-iteration shift-and-subtract; `t_q` is the minimum of those and 127. The end point is `start + hi(2 · d · t_q)` per axis via `multiply_signed_8x8`.
    - The draw coordinates `draw_line_start_x/y`, `end_x/y` (`$88..$8B`) alias the multiply's zero-page operands, so the clip path keeps the coordinates in `laser_save_*` scratch and copies them back afterwards (fixed in `997f831`).
