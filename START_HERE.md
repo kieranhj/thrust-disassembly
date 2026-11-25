@@ -31,7 +31,7 @@ remaster, in beebasm.
 
 ## Local changes
 - No uncommitted work before the 2026-11 tidy.
-- 2026-11-22: `build.ps1`'s fallback emulator paths updated from `OneDrive\BEEB\...` to `D:\tools\beeb\...` (uncommitted).
+- 2026-11-22: `build.ps1`'s fallback emulator paths updated from `OneDrive\Retro\BEEB\...` to `D:\tools\beeb\...` (uncommitted).
 - New, uncommitted: `Makefile`, `START_HERE.md`.
 - `wip/experiments`, `wip/fully-unrolled-terrain-draw`, `wip/new-comments` are older work branches (April and
   October 2026), already on origin; PLAN.md says to merge `restart/build-fixes` into `wip/experiments` or replace it.
