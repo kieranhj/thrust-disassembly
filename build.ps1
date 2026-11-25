@@ -122,7 +122,7 @@ if ($Run) {
     # b2: -0 FILE drive 0, -b auto-boot; the model and sideways RAM come from b2's own config.
     # beebjit: -autoboot, -swram N per bank (the SWRAM build uses banks 4 and 5).
     if ($Beebjit) {
-        $exe = if ($env:BEEBJIT) { $env:BEEBJIT } else { 'D:\tools\beeb\beebjit_win_0.9.5\beebjit.exe' }
+        $exe = if ($env:BEEBJIT) { $env:BEEBJIT } else { 'D:\tools\beeb\beebjit\beebjit.exe' }
         & $exe -0 $disc -autoboot -swram 4 -swram 5
     } else {
         $exe = if ($env:B2) { $env:B2 } else { 'D:\tools\beeb\b2\b2\b2.exe' }
