@@ -1,0 +1,25 @@
+load $A60 thrust5
+save thrust5.6502
+symbols labels.txt
+entry $3C80
+byte $cfb $17
+byte $d5b $21
+byte $10d7 $b
+byte $1127 $8
+byte $11e5 $36c
+byte $223f $5
+byte $254c $351
+byte $2a47 $6
+byte $334a $26B
+byte $3ae8 $c
+byte $3be9 $4
+byte $3e42 $84f
+byte $4729 $f09
+byte $233f $f
+byte $16aa $2
+byte $1adf $7
+byte $2f2f $2
+byte $31d4 $1
+byte $3233 $2
+byte $3c74 $4
+byte $1adf $14

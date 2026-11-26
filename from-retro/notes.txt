@@ -1,0 +1,231 @@
+Thrust disassembly notes
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Length = &3D6E
+Load at &1A00
+Standard entry point &5720
+Initial decrypt ends by branching to &56E6
+Cunning decryption routine appears to do this using BRKV so cannot insert a breakpoint in code.  Nice. :)
+This jumps to &56E3
+This jumps to &5633
+This appears to do genuine setup inc *FX calls
+Then jumps to &3C80
+Stores BRKV
+Checks OSBYTE still routed through OS
+Checks OS version
+Restores default vector table from OS
+Makes some OSBYTE calls
+Relocates &3D00 (15616 bytes) down to &A60
+Jump to &3C80 to start - this is address 
+
+Code that needs disassembling:
+
+Find out what is at these addresses:
+
+Screen starts at $3C80
+
+Some of the things that will need to be ticked:
+
+Draw level
+Draw ship
+Draw objects
+Draw bullets
+Input handling
+Enemy shooting logic
+Coutdown timer
+Ship physics
+Collision detection
+Custom door logic
+Ship appear / disappear animation
+Draw stars
+Reactor animation
+
+Landscape flashes through colour cycle when planet explodes...
+
+Bullets are going to need position x,y and direction x,y...
+
+Believe that x co-ordinate stored as 2 bytes - probably s7.8 ?
+Believe that y co-ordinates stored as 3 bytes - probably s15.8 ?
+This makes sense because there wouldn't be enough precision in just +/-127 in y for depth of levels
+Game is centred around going down rather than left to right!
+
+Screen is 72 characters wide - therefore 576 ($240) bytes per character row
+So $239 = 569 = one character row - 7 bytes
+Screen starts at $3C80 plus two character rows of status bar means sprite area is $4100
+
+Screen width is 72 * 4 = 288 pixels
+Address L036F is used in terrain data and is suspiciously 145 (=144+1) in size
+terrain_table_1 starts at index $11 = 17 which is two lines of status +1 clear line
+
+
+Ship requires position (x,y) velocity (dx,dy) acceleration / force (ax,ay)
+Pod requires position (x,y) velocity (dx,dy) acceleration / force (ax,ay)
+Bullets require position (x,y) velocity (dx,dy)
+
+Remember need to draw line between ship & pod - bresenham?
+Ship collisions, bullet collisions
+
+Must be a bounding box around the level?
+There is a clipping window that the screen draws inside the overall level
+This is moved to implement scrolling - how does redraw work with this?
+Presumably doesn't draw entire screen every frame - but if software scrolling then would need
+to update entire screen during screen scroll motion
+
+Where is the data for auto-play in demo mode?!  Solved!
+The explosion effects are probably implemented same as bullets but with shorter lifetimes & no hits..
+
+What is level reset data?
+I think this is respawn position data (and maybe screen x,y offset)
+E.g. level 0
+		$01 -> ypos_var_B_EXT_GUESS
+		$91	-> ypos_var_B_HI_GUESS
+		$56 -> xpos_var_A_HI_GUESS
+		$01 -> ypos_var_A_EXT_GUESS
+		$24 -> ypos_var_A_HI_GUESS
+		$6C -> xpos_var_B_HI_GUESS
+		
+		Suppose A is offset and B is player position?
+
+Two different player positions but with some delta between them
+pos_var_E and pos_var_F are related
+
+Terrain initialisation
+triples (A,X,Y)
+triple1 (0,255,0)				; left start X 0, count 255, table index 0
+triple2 (0,255,1)				; left start X 0, count 255, table index 1
+
+triple3 (255,255,0)				; right start X 255, count 255, table index 0
+triple4 (255,255,1)				; right start X 255, count 255, table index 1
+varA = 0
+sprite var B = window.y.HI + 1
+sprite var C = window.y.EXT + 2
+set process to fn_A2
+set data1_ptr to data_A
+set data2_ptr to data B
+call fn(triple1) - returns triple1.Y & triple1.X
+store A in terrain_data_1 at terrain varA index and overwrite triple1.
+do terrain fn_A2 starting at window.ypos.HI+1
+
+Level 0
+Window x pos initialises to $56
+Window y pos HI initialises to $24
+Window y pos EXT initialises to $1
+
+for level 0
+loop $24 inner then 2 outer
+
+triples (A,X,Y)
+triple1 (0,255,0)				; A=start X, X=count, Y=index
+window_y_index = 1
+
+terrain_fn_A2(A,X,Y)
+if( X == 0 )
+{
+	Y++
+	X = terrain_data_1[Y]		; 1 is the count?
+}
+A += terrain_data_2[Y]		; 2 is the X
+X--
+
+
+
+Note that terrain only consists of entire bytes so can only slope 4 pixels at a timer
+There are only 4 wall types: horizontal, vertical, slope left, slope right - must correspond to the terrain tables?
+
+draw_terrain
+Y is X column to start drawing, X is number of columns
+addrB.lo = Xcol * 8
+addrB.hi = Xcol * 8 + general_ptr_A_LO			; general_ptr_A_LO = HI byte of address of start of row?
+?addrB + player_var_F = &F0						; player_var_F = offset into character (y line)?
+
+index2 starts at 0
+index1 starts at $49 (73) + terrain_var_A
+
+start X column = CLAMP(terrain_data_1[terrain_table1_index], 0, 72)
+width columns = start X column - terrain_table_2[terrain_table2_index]
+table2[index 2] = start X
+
+start X column = CLAMP(terrain_data_2[terrain_table1_index], 0, 72)
+width columns = start X column - terrain_table_4[terrain_table2_index]
+table4[index 2] = start X
+
+storing the X column in the table means that nothing needs to get updated whilst the window is static
+only when the window coordinates change does anything need to be updated
+presume this is going to be an undraw and a draw since we are using EOR to the screen
+one pass will add / remove columns to left, the other will add remove/columns to right
+
+Level 0 terrain
+Horizontal across 0 / 255 boundary
+Down right slope for X lines
+Flat for fuel
+Down right slope for gun (12 lines)
+Flat for pod
+Vertical up to generator
+Flat for generator
+Up right slope back to boundary
+4x horizontal
+1x vertical
+2x down right slopes
+1x up right slope
+8x vertices to define landscape (not including boundary)
+
+.terrain_data_level_0_A
+        EQUB    $FF,$FF,$AB,$01,$0F,$01,$0C,$01,$FF
+.terrain_data_level_0_B
+		EQUB	$00,$00,$00,$55,$01,$15,$01,$19,$00
+vertical (A+=0 for count of &FF)
+vertical (A+=0 for count of &FF)
+vertical (A+=0 for count of &AB)
+horizontal (A+=&55 for count of 1)
+slope (A+=1 for count of &F)
+horizontal (A+=&15 for count of 1)
+slope (A+=1 for count of &C)
+horizontal (A+=&19 for count of 1)
+vertical (A+=0 for count of &FF)
+
+.terrain_data_level_0_C
+		EQUB	$FF,$FF,$AB,$01,$09,$01,$FF
+.terrain_data_level_0_D
+		EQUB	$00,$00,$00,$B7,$FF,$F1,$00
+vertical (A+=0 for count of &FF)
+vertical (A+=0 for count of &FF)
+vertical (A+=0 for count of &AB)
+horizontal (A+=&B7 for count of 1) or A-=$49 (-73)
+slope (A-=1) for count of &9
+horizontal (A+=&F1 for count of 1)  or A-=&F (-15)
+
+left wall goes from 0 to left extent
+right wall goes from right extent to 255
+where left extent = 0 there is no wall
+where right extent = 255 there is no wall
+where left extent = right extent there is floor!
+
+looks like wall data is a circular buffer that is kept updated and indexed with an offset
+
+TODOS
+Breakpoint and identify line drawing routine and teleport draw routine - look for unknown_pixel_plot_fn - DONE
+Get rid of _GUESS functions in top tick loop - DONE
+
+Come up with naming convention for Fixed Point value bytes (currently SUB, LO, HIGH, EXT) - TO DO
+Naming convention for BCD bytes (currently A, B, C) - CHECK AUG
+Take a pass on _GUESS and _UNKNOWN variables - TO DO
+Standardise _GUESS, _UNKNOWN and _LABEL variable names - TO DO
+Write a simple description of each variable if not clear from name - TO DO
+Formatting convention, newline before labels - TRIVIAL
+Finish off writing header notes - TRIVIAL
+Make xpos and pos_X consistent etc.
+
+Name every internal label within scoped functions - LET CROWD DO THIS
+More constants identified and removed from immediate load - LET CROWD DO THIS
+Identify what sprite data A and sprite data B correspond to - LET CROWD DO THIS
+Simple description for each function - LET CROWD DO THIS (verbose names are a good start)
+
+Tractor beam for fuel is drawn as two lines
+Line between ship & pod must be bresnam alogrithm?
+
+Ponder
+relative_pod_ypos | xpos might actually be ship_position as used to calculate plot_ship_at_ptr
+Or maybe new position - seems to add pod_vector to ship_pos and store in relative_pod
+Also a stray pos_xpos_LO in there matched with relative_ship_xpos_HI?  Makes no sense.
+
+Attempt1 pod_vector -> ship_delta, relative_pod -> ship_new_pos, pod_xpos_LO -> ship_xpos_HI

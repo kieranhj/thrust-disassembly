@@ -1,0 +1,4 @@
+load $1A00 $.thrust3
+save thrust.6502
+symbols labels.txt
+entry $5720
